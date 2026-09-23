@@ -1,0 +1,7 @@
+{
+  "name": "PHIVONEX",
+  "description": "Transparent Node Economy & Digital Ecosystem powered by limited Genesis Nodes, protocol rewards, and live ledger verification.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+

@@ -1,0 +1,78 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" fill="none" width="100%" height="100%">
+  <defs>
+    <!-- Background Gradient for Squircle Container -->
+    <linearGradient id="pxFaviconBg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0E1E38" />
+      <stop offset="50%" stop-color="#07101D" />
+      <stop offset="100%" stop-color="#04060A" />
+    </linearGradient>
+
+    <!-- Cyan Rim Glow Gradient -->
+    <linearGradient id="pxFaviconBorder" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#00CFFF" stop-opacity="0.9" />
+      <stop offset="40%" stop-color="#168BFF" stop-opacity="0.6" />
+      <stop offset="80%" stop-color="#7057FF" stop-opacity="0.5" />
+      <stop offset="100%" stop-color="#00CFFF" stop-opacity="0.3" />
+    </linearGradient>
+
+    <!-- Ribbon Gradients for Favicon Scale -->
+    <linearGradient id="pxFavTop" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#80EAFF" /><stop offset="40%" stop-color="#00CFFF" /><stop offset="100%" stop-color="#168BFF" />
+    </linearGradient>
+    <linearGradient id="pxFavStem" x1="0%" y1="100%" x2="0%" y2="0%">
+      <stop offset="0%" stop-color="#7057FF" /><stop offset="60%" stop-color="#168BFF" /><stop offset="100%" stop-color="#00CFFF" />
+    </linearGradient>
+    <linearGradient id="pxFavReturn" x1="100%" y1="100%" x2="0%" y2="0%">
+      <stop offset="0%" stop-color="#00CFFF" /><stop offset="50%" stop-color="#168BFF" /><stop offset="100%" stop-color="#0A1E4A" />
+    </linearGradient>
+  </defs>
+
+  <!-- Squircle Base -->
+  <rect x="3" y="3" width="122" height="122" rx="30" fill="url(#pxFaviconBg)" />
+  <rect x="3" y="3" width="122" height="122" rx="30" stroke="url(#pxFaviconBorder)" stroke-width="2" />
+
+  <!-- Ambient Glow in Center -->
+  <circle cx="64" cy="62" r="42" fill="#00CFFF" fill-opacity="0.15" />
+
+  <!-- Central Scaled Symbol -->
+  <g transform="translate(19, 14) scale(0.56)">
+    <!-- Back Depth -->
+    <path d="M 126 96 L 196 66 L 246 112 L 246 172 L 204 208 L 132 168 Z" fill="#050A18" />
+
+    <!-- Constellation Lines -->
+    <g stroke="#00CFFF" stroke-width="2.5" stroke-linecap="round">
+      <line x1="124" y1="142" x2="164" y2="114" />
+      <line x1="164" y1="114" x2="208" y2="182" />
+      <line x1="124" y1="142" x2="208" y2="182" />
+    </g>
+
+    <!-- Stem -->
+    <path d="M 88 126 L 126 96 L 126 238 L 88 206 Z" fill="#8B5CF6" opacity="0.9" />
+    <path d="M 88 126 L 126 96 L 126 142 L 108 204 L 88 206 Z" fill="url(#pxFavStem)" />
+    <path d="M 108 142 L 132 168 L 132 238 L 108 204 Z" fill="url(#pxFavStem)" />
+
+    <!-- Top Ribbon -->
+    <path d="M 88 126 L 160 62 L 196 66 L 126 96 Z" fill="url(#pxFavTop)" />
+    <path d="M 160 62 L 232 94 L 196 66 Z" fill="url(#pxFavTop)" />
+    <path d="M 232 94 L 254 118 L 246 112 L 196 66 Z" fill="#168BFF" />
+
+    <!-- Right Return -->
+    <path d="M 254 118 L 254 168 L 246 172 L 246 112 Z" fill="#168BFF" />
+    <path d="M 254 168 L 216 204 L 204 208 L 246 172 Z" fill="url(#pxFavReturn)" />
+    <path d="M 216 204 L 152 236 L 132 238 L 204 208 Z" fill="url(#pxFavReturn)" />
+    <path d="M 152 236 L 152 202 L 132 168 L 132 238 Z" fill="url(#pxFavTop)" />
+
+    <!-- Top Specular Highlight -->
+    <path d="M 88 126 L 160 62 L 232 94 L 254 118" stroke="#FFFFFF" stroke-width="2.8" stroke-linecap="round" />
+
+    <!-- 3 Glowing Constellation Nodes -->
+    <circle cx="124" cy="142" r="11" fill="#00CFFF" />
+    <circle cx="124" cy="142" r="6" fill="#FFFFFF" />
+
+    <circle cx="164" cy="114" r="12" fill="#00CFFF" />
+    <circle cx="164" cy="114" r="6.5" fill="#FFFFFF" />
+
+    <circle cx="208" cy="182" r="13" fill="#00CFFF" />
+    <circle cx="208" cy="182" r="7" fill="#FFFFFF" />
+  </g>
+</svg>
