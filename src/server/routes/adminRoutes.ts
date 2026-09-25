@@ -1,5 +1,6 @@
 import { Router, Response } from 'express';
 import { requireAdmin, AuthRequest } from '../middleware/authMiddleware';
+import { adminFinancialLimiter } from '../middleware/rateLimiter';
 import {
   getAdminSummaryMetrics,
   getAdminUsersList,
@@ -11,6 +12,11 @@ import {
   logAdminAction,
 } from '../services/adminService';
 import { settleWithdrawalAction } from '../services/withdrawalService';
+import {
+  runFinancialReconciliation,
+  getLatestReconciliationRun,
+  getReconciliationIssues,
+} from '../services/reconciliationService';
 
 export const adminRouter = Router();
 
@@ -221,3 +227,89 @@ adminRouter.get('/audit-logs', async (req: AuthRequest, res: Response) => {
     });
   }
 });
+
+// ============================================================================
+// TASK #21: FINANCIAL RECONCILIATION & AUDIT ENDPOINTS
+// ============================================================================
+
+/**
+ * POST /api/admin/reconciliation/run
+ * Initiates an authoritative, server-side read-only financial reconciliation run.
+ */
+adminRouter.post('/reconciliation/run', adminFinancialLimiter, async (req: AuthRequest, res: Response) => {
+  try {
+    const adminUserId = req.user?.id || null;
+    const adminPublicId = req.user?.public_id || 'ADMIN';
+
+    const result = await runFinancialReconciliation({
+      adminUserId,
+      adminPublicId,
+    });
+
+    return res.status(200).json({
+      success: true,
+      run: result,
+    });
+  } catch (err: any) {
+    console.error('[Admin API] Error running financial reconciliation:', err);
+    return res.status(500).json({
+      error: 'SERVER_ERROR',
+      message: err.message || 'Failed to execute financial reconciliation run.',
+    });
+  }
+});
+
+/**
+ * GET /api/admin/reconciliation/latest
+ * Retrieves the latest completed or running financial reconciliation run.
+ */
+adminRouter.get('/reconciliation/latest', async (req: AuthRequest, res: Response) => {
+  try {
+    const latest = await getLatestReconciliationRun();
+    return res.status(200).json({
+      success: true,
+      run: latest,
+    });
+  } catch (err: any) {
+    console.error('[Admin API] Error retrieving latest reconciliation run:', err);
+    return res.status(500).json({
+      error: 'SERVER_ERROR',
+      message: 'Failed to retrieve latest reconciliation run.',
+    });
+  }
+});
+
+/**
+ * GET /api/admin/reconciliation/issues
+ * Retrieves paginated reconciliation issues with optional filtering.
+ */
+adminRouter.get('/reconciliation/issues', async (req: AuthRequest, res: Response) => {
+  try {
+    const runId = (req.query.runId as string) || undefined;
+    const issueType = (req.query.issueType as string) || undefined;
+    const asset = (req.query.asset as string) || undefined;
+    const limit = parseInt(req.query.limit as string, 10) || 50;
+    const offset = parseInt(req.query.offset as string, 10) || 0;
+
+    const data = await getReconciliationIssues({
+      runId,
+      issueType,
+      asset,
+      limit,
+      offset,
+    });
+
+    return res.status(200).json({
+      success: true,
+      issues: data.issues,
+      total: data.total,
+    });
+  } catch (err: any) {
+    console.error('[Admin API] Error retrieving reconciliation issues:', err);
+    return res.status(500).json({
+      error: 'SERVER_ERROR',
+      message: 'Failed to retrieve reconciliation issues.',
+    });
+  }
+});
+

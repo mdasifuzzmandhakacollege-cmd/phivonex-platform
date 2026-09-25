@@ -475,6 +475,13 @@ async function initSchema(client: DatabaseClient) {
       // Columns may already exist
     }
 
+    // Ensure security_events allows NULL user_id for unauthenticated/failed login security tracking
+    try {
+      await client.exec(`ALTER TABLE security_events ALTER COLUMN user_id DROP NOT NULL;`);
+    } catch {
+      // Column constraint may already be relaxed
+    }
+
     // 2. Create indexes
     await client.exec(`
       CREATE UNIQUE INDEX IF NOT EXISTS idx_users_public_id ON users (public_id);
@@ -816,6 +823,57 @@ async function initSchema(client: DatabaseClient) {
       `);
     } catch (task20Err) {
       console.warn('[DB Migration] Task #20 Notifications schema migration warning:', task20Err);
+    }
+
+    // Task #21: Financial Reconciliation Tables
+    try {
+      await client.exec(`
+        CREATE TABLE IF NOT EXISTS financial_reconciliation_runs (
+          id UUID PRIMARY KEY,
+          public_run_id VARCHAR(50) UNIQUE NOT NULL,
+          started_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          completed_at TIMESTAMP WITH TIME ZONE NULL,
+          status VARCHAR(20) NOT NULL DEFAULT 'RUNNING',
+          issues_found INTEGER NOT NULL DEFAULT 0,
+          created_by UUID NULL REFERENCES users(id) ON DELETE SET NULL,
+          created_by_public_id VARCHAR(50) NULL,
+          phivo_integrity VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+          usdt_integrity VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+          ledger_integrity VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+          withdrawal_integrity VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+          swap_integrity VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+          summary TEXT NULL,
+          error_message TEXT NULL,
+          CONSTRAINT chk_frr_status CHECK (status IN ('RUNNING', 'COMPLETED', 'FAILED'))
+        );
+
+        CREATE TABLE IF NOT EXISTS financial_reconciliation_issues (
+          id UUID PRIMARY KEY,
+          run_id UUID NOT NULL REFERENCES financial_reconciliation_runs(id) ON DELETE CASCADE,
+          issue_type VARCHAR(100) NOT NULL,
+          source_type VARCHAR(100) NOT NULL,
+          source_reference VARCHAR(100) NOT NULL,
+          asset VARCHAR(20) NOT NULL,
+          expected_amount NUMERIC(28, 6) NOT NULL DEFAULT 0,
+          actual_amount NUMERIC(28, 6) NOT NULL DEFAULT 0,
+          status VARCHAR(20) NOT NULL DEFAULT 'DETECTED',
+          user_id UUID NULL REFERENCES users(id) ON DELETE SET NULL,
+          description TEXT NOT NULL,
+          created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          CONSTRAINT chk_fri_status CHECK (status IN ('DETECTED', 'RESOLVED', 'IGNORED'))
+        );
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_frr_public_id ON financial_reconciliation_runs (public_run_id);
+        CREATE INDEX IF NOT EXISTS idx_frr_status ON financial_reconciliation_runs (status);
+        CREATE INDEX IF NOT EXISTS idx_frr_started ON financial_reconciliation_runs (started_at DESC);
+
+        CREATE INDEX IF NOT EXISTS idx_fri_run_id ON financial_reconciliation_issues (run_id);
+        CREATE INDEX IF NOT EXISTS idx_fri_issue_type ON financial_reconciliation_issues (issue_type);
+        CREATE INDEX IF NOT EXISTS idx_fri_asset ON financial_reconciliation_issues (asset);
+        CREATE INDEX IF NOT EXISTS idx_fri_created ON financial_reconciliation_issues (created_at DESC);
+      `);
+    } catch (task21Err) {
+      console.warn('[DB Migration] Task #21 Financial Reconciliation schema migration warning:', task21Err);
     }
 
     // 3. Backfill existing users with missing public_id, user_referrals, and binary_placements

@@ -1,5 +1,11 @@
 import React, { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react';
 import { useAuth } from './AuthContext';
+import {
+  getAudioAlertsEnabled,
+  setAudioAlertsEnabled,
+  playSubtleChime,
+  isHighPriorityNotification,
+} from '../utils/audioAlert';
 
 export interface AppNotification {
   id: string; // public_notification_id (NTF-XXXXXX)
@@ -28,6 +34,8 @@ interface NotificationContextType {
   error: string | null;
   filterType: string;
   unreadOnly: boolean;
+  audioEnabled: boolean;
+  toggleAudio: () => void;
   setFilterType: (type: string) => void;
   setUnreadOnly: (unreadOnly: boolean) => void;
   refreshNotifications: () => Promise<void>;
@@ -49,8 +57,23 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
   const [error, setError] = useState<string | null>(null);
   const [filterType, setFilterType] = useState<string>('ALL');
   const [unreadOnly, setUnreadOnly] = useState<boolean>(false);
+  const [audioEnabled, setAudioEnabled] = useState<boolean>(() => getAudioAlertsEnabled());
 
   const eventSourceRef = useRef<EventSource | null>(null);
+  const initialLoadCompletedRef = useRef(false);
+  const knownNotificationIdsRef = useRef<Set<string>>(new Set());
+
+  const toggleAudio = useCallback(() => {
+    setAudioEnabled((prev) => {
+      const next = !prev;
+      setAudioAlertsEnabled(next);
+      if (next) {
+        // Play subtle preview chime so user can verify audio & unlock browser AudioContext policy
+        playSubtleChime(true);
+      }
+      return next;
+    });
+  }, []);
 
   // Fetch unread count alone (lightweight)
   const fetchUnreadCount = useCallback(async () => {
@@ -83,7 +106,25 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
         const res = await fetch(`/api/notifications?${params.toString()}`);
         if (res.ok) {
           const data = await res.json();
-          setNotifications(data.notifications || []);
+          const freshList: AppNotification[] = data.notifications || [];
+
+          // Audio awareness trigger:
+          // Check if new unread high-priority notifications arrived after initial load
+          if (initialLoadCompletedRef.current && audioEnabled) {
+            const hasNewHighPriority = freshList.some(
+              (n) => !n.readAt && !knownNotificationIdsRef.current.has(n.id) && isHighPriorityNotification(n.type)
+            );
+            if (hasNewHighPriority) {
+              playSubtleChime();
+            }
+          } else {
+            initialLoadCompletedRef.current = true;
+          }
+
+          // Register all current IDs into known set
+          freshList.forEach((n) => knownNotificationIdsRef.current.add(n.id));
+
+          setNotifications(freshList);
           setTotalCount(data.total || 0);
           setUnreadCount(data.unreadCount || 0);
         } else {
@@ -97,7 +138,7 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
         setRefreshing(false);
       }
     },
-    [user, filterType, unreadOnly]
+    [user, filterType, unreadOnly, audioEnabled]
   );
 
   // Initial fetch and dependency trigger
@@ -108,6 +149,8 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
       setNotifications([]);
       setUnreadCount(0);
       setTotalCount(0);
+      knownNotificationIdsRef.current.clear();
+      initialLoadCompletedRef.current = false;
     }
   }, [user, fetchNotifications]);
 
@@ -268,6 +311,8 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
         error,
         filterType,
         unreadOnly,
+        audioEnabled,
+        toggleAudio,
         setFilterType,
         setUnreadOnly,
         refreshNotifications: () => fetchNotifications(true),

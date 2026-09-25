@@ -118,6 +118,13 @@ export function generateNotificationPublicId(): string {
 }
 
 /**
+ * Generate a Public Reconciliation Run ID (e.g. REC-9A2K4F)
+ */
+export function generateReconciliationPublicId(): string {
+  return `REC-${getRandomCode(6)}`;
+}
+
+/**
  * Format privacy-safe display name (e.g., "John Doe" -> "John D.")
  */
 export function formatSafeDisplayName(fullName: string): string {

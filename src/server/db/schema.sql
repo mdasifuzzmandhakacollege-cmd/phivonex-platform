@@ -442,3 +442,49 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_notifications_public_id ON notifications (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_notifications_idempotency ON notifications (user_id, source_type, source_id, type) WHERE source_type IS NOT NULL AND source_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_notifications_user_unread ON notifications (user_id, read_at, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_notifications_user_created ON notifications (user_id, created_at DESC);
+
+-- Task #21: Financial Reconciliation Tables
+CREATE TABLE IF NOT EXISTS financial_reconciliation_runs (
+  id UUID PRIMARY KEY,
+  public_run_id VARCHAR(50) UNIQUE NOT NULL,
+  started_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  completed_at TIMESTAMP WITH TIME ZONE NULL,
+  status VARCHAR(20) NOT NULL DEFAULT 'RUNNING',
+  issues_found INTEGER NOT NULL DEFAULT 0,
+  created_by UUID NULL REFERENCES users(id) ON DELETE SET NULL,
+  created_by_public_id VARCHAR(50) NULL,
+  phivo_integrity VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+  usdt_integrity VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+  ledger_integrity VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+  withdrawal_integrity VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+  swap_integrity VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+  summary TEXT NULL,
+  error_message TEXT NULL,
+  CONSTRAINT chk_frr_status CHECK (status IN ('RUNNING', 'COMPLETED', 'FAILED'))
+);
+
+CREATE TABLE IF NOT EXISTS financial_reconciliation_issues (
+  id UUID PRIMARY KEY,
+  run_id UUID NOT NULL REFERENCES financial_reconciliation_runs(id) ON DELETE CASCADE,
+  issue_type VARCHAR(100) NOT NULL,
+  source_type VARCHAR(100) NOT NULL,
+  source_reference VARCHAR(100) NOT NULL,
+  asset VARCHAR(20) NOT NULL,
+  expected_amount NUMERIC(28, 6) NOT NULL DEFAULT 0,
+  actual_amount NUMERIC(28, 6) NOT NULL DEFAULT 0,
+  status VARCHAR(20) NOT NULL DEFAULT 'DETECTED',
+  user_id UUID NULL REFERENCES users(id) ON DELETE SET NULL,
+  description TEXT NOT NULL,
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT chk_fri_status CHECK (status IN ('DETECTED', 'RESOLVED', 'IGNORED'))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_frr_public_id ON financial_reconciliation_runs (public_run_id);
+CREATE INDEX IF NOT EXISTS idx_frr_status ON financial_reconciliation_runs (status);
+CREATE INDEX IF NOT EXISTS idx_frr_started ON financial_reconciliation_runs (started_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_fri_run_id ON financial_reconciliation_issues (run_id);
+CREATE INDEX IF NOT EXISTS idx_fri_issue_type ON financial_reconciliation_issues (issue_type);
+CREATE INDEX IF NOT EXISTS idx_fri_asset ON financial_reconciliation_issues (asset);
+CREATE INDEX IF NOT EXISTS idx_fri_created ON financial_reconciliation_issues (created_at DESC);
+

@@ -1,5 +1,6 @@
 import { Router, Response } from 'express';
 import { requireAuth, AuthRequest } from '../middleware/authMiddleware';
+import { swapLimiter } from '../middleware/rateLimiter';
 import {
   getSwapQuote,
   executeCoinToUsdtSwap,
@@ -93,16 +94,16 @@ swapRouter.get('/history', requireAuth, async (req: AuthRequest, res: Response):
  * POST /api/swap/coin-to-usdt
  * Authoritative swap execution: debits user's coin balance and credits USDT ledger balance.
  */
-swapRouter.post('/coin-to-usdt', requireAuth, async (req: AuthRequest, res: Response): Promise<void> => {
+swapRouter.post('/coin-to-usdt', requireAuth, swapLimiter, async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const user = req.user!;
     const { coinAmount, idempotencyKey } = req.body;
 
     const parsedAmount = typeof coinAmount === 'number' ? coinAmount : parseFloat(coinAmount);
-    if (isNaN(parsedAmount) || parsedAmount <= 0) {
+    if (isNaN(parsedAmount) || !isFinite(parsedAmount) || parsedAmount <= 0) {
       res.status(400).json({
         error: 'INVALID_AMOUNT',
-        message: 'Coin amount must be a positive number.',
+        message: 'Coin amount must be a positive number greater than 0.',
       });
       return;
     }

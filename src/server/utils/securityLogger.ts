@@ -37,17 +37,32 @@ export function parseUserAgentSummary(uaStr?: string): string {
   return `${browser} on ${os}`;
 }
 
+export function sanitizeLogString(str: string): string {
+  if (!str) return str;
+  return str
+    .replace(/(password|passwd|pwd|token|secret|privatekey|seed|key)=([^\s&]+)/gi, '$1=[REDACTED]')
+    .replace(/("password"|"token"|"secret"|"privateKey"|"seedPhrase"|"mnemonic")\s*:\s*"[^"]+"/gi, '$1:"[REDACTED]"');
+}
+
 export interface SecurityEventParams {
-  userId: string;
+  userId: string | null;
   eventType:
     | 'LOGIN_SUCCESS'
+    | 'FAILED_LOGIN'
     | 'PASSWORD_CHANGED'
     | 'PROFILE_UPDATED'
     | 'SESSION_REVOKED'
     | 'SESSIONS_REVOKED_ALL_OTHERS'
     | 'EMAIL_VERIFIED'
     | 'EMAIL_VERIFICATION_SENT'
-    | 'ACCOUNT_REGISTERED';
+    | 'ACCOUNT_REGISTERED'
+    | 'ADMIN_ACCESS'
+    | 'ECONOMIC_CONFIG_CHANGE'
+    | 'WITHDRAWAL_SETTLEMENT'
+    | 'SUSPICIOUS_FINANCIAL_REQUEST'
+    | 'RATE_LIMIT_EXCEEDED'
+    | 'CSRF_REJECTED'
+    | 'INVALID_INPUT_ATTEMPT';
   description: string;
   userAgent?: string;
 }
@@ -58,10 +73,11 @@ export async function logSecurityEvent(
 ): Promise<void> {
   try {
     const summary = parseUserAgentSummary(params.userAgent);
+    const safeDescription = sanitizeLogString(params.description);
     await db.query(
       `INSERT INTO security_events (id, user_id, event_type, description, user_agent_summary, created_at)
        VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)`,
-      [uuidv4(), params.userId, params.eventType, params.description, summary]
+      [uuidv4(), params.userId, params.eventType, safeDescription, summary]
     );
   } catch (err) {
     console.warn('[SecurityLogger] Failed to record security event:', err);

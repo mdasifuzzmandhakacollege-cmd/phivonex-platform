@@ -4,7 +4,7 @@ import { getDb } from '../db/db';
 import { hashPassword, verifyPassword, generateRandomToken, hashToken } from '../utils/crypto';
 import { generatePublicId, generateReferralCode, normalizeReferralCode } from '../utils/idGenerator';
 import { requireAuth, AuthRequest } from '../middleware/authMiddleware';
-import { authLimiter, passwordResetLimiter } from '../middleware/rateLimiter';
+import { authLimiter, loginLimiter, registrationLimiter, passwordResetLimiter } from '../middleware/rateLimiter';
 import { logSecurityEvent, parseUserAgentSummary } from '../utils/securityLogger';
 
 const router = Router();
@@ -64,7 +64,7 @@ async function getUniqueReferralCode(db: any): Promise<string> {
  * POST /api/auth/register
  * User registration with Argon2id hashing, unique public_id, referral code generation, and sponsor resolution.
  */
-router.post('/register', authLimiter, async (req: Request, res: Response): Promise<void> => {
+router.post('/register', registrationLimiter, async (req: Request, res: Response): Promise<void> => {
   try {
     const { fullName, email, phone, country, password, referralCode } = req.body;
 
@@ -216,7 +216,7 @@ router.post('/register', authLimiter, async (req: Request, res: Response): Promi
  * POST /api/auth/login
  * User login supporting email or phone identifier, Argon2id verification, session creation.
  */
-router.post('/login', authLimiter, async (req: Request, res: Response): Promise<void> => {
+router.post('/login', loginLimiter, async (req: Request, res: Response): Promise<void> => {
   try {
     const { identifier, password, rememberMe = true } = req.body;
 
@@ -252,6 +252,13 @@ router.post('/login', authLimiter, async (req: Request, res: Response): Promise<
     );
 
     if (result.rowCount === 0) {
+      await logSecurityEvent(db, {
+        userId: null,
+        eventType: 'FAILED_LOGIN',
+        description: `Failed login attempt for identifier '${cleanIdentifier}' (user not found).`,
+        userAgent: req.headers['user-agent'],
+      });
+
       res.status(401).json({
         error: 'INVALID_CREDENTIALS',
         message: 'Invalid email/phone or password.',
@@ -273,6 +280,13 @@ router.post('/login', authLimiter, async (req: Request, res: Response): Promise<
     // Verify Argon2id password hash
     const isValid = await verifyPassword(user.password_hash, password);
     if (!isValid) {
+      await logSecurityEvent(db, {
+        userId: user.id,
+        eventType: 'FAILED_LOGIN',
+        description: `Failed login attempt for user ${user.public_id} (incorrect password).`,
+        userAgent: req.headers['user-agent'],
+      });
+
       res.status(401).json({
         error: 'INVALID_CREDENTIALS',
         message: 'Invalid email/phone or password.',

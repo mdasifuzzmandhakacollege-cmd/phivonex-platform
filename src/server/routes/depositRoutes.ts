@@ -1,5 +1,6 @@
 import { Router, Response } from 'express';
 import { requireAuth, AuthRequest } from '../middleware/authMiddleware';
+import { depositLimiter } from '../middleware/rateLimiter';
 import { getOrCreateUserDepositAddress } from '../services/bscKeyService';
 import { getUserDeposits, processBlockchainDepositEvent } from '../services/bscDepositService';
 import { rescanUserDepositStatus } from '../services/bscListenerService';
@@ -11,7 +12,7 @@ export const depositRouter = Router();
  * GET /api/deposits/address
  * Returns the authenticated user's unique BNB Smart Chain deposit address.
  */
-depositRouter.get('/address', requireAuth, async (req: AuthRequest, res: Response): Promise<void> => {
+depositRouter.get('/address', requireAuth, depositLimiter, async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const userId = req.user!.id;
     const addressRecord = await getOrCreateUserDepositAddress(userId);
@@ -70,7 +71,7 @@ depositRouter.get('/me', requireAuth, async (req: AuthRequest, res: Response): P
  * POST /api/deposits/rescan
  * Triggers an on-demand check/rescan of pending transactions for the authenticated user.
  */
-depositRouter.post('/rescan', requireAuth, async (req: AuthRequest, res: Response): Promise<void> => {
+depositRouter.post('/rescan', requireAuth, depositLimiter, async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const userId = req.user!.id;
     const result = await rescanUserDepositStatus(userId);

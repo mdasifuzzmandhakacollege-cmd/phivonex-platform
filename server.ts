@@ -22,6 +22,11 @@ import { swapRouter } from './src/server/routes/swapRoutes';
 import { notificationRouter } from './src/server/routes/notificationRoutes';
 import { getDb } from './src/server/db/db';
 import { startMatchingScheduler } from './src/server/services/binaryMatchingScheduler';
+import {
+  securityHeadersMiddleware,
+  csrfOriginProtection,
+  sanitizeProductionErrors,
+} from './src/server/middleware/securityMiddleware';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -31,9 +36,15 @@ async function startServer() {
   const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
   const isProd = process.env.NODE_ENV === 'production';
 
-  // Body and cookie parsing
-  app.use(express.json());
+  // 1. Security Headers (CSP, X-Content-Type-Options, Frame Protection)
+  app.use(securityHeadersMiddleware);
+
+  // 2. Body and cookie parsing with payload limit
+  app.use(express.json({ limit: '1mb' }));
   app.use(cookieParser());
+
+  // 3. CSRF & untrusted origin protection for state-changing operations
+  app.use('/api', csrfOriginProtection);
 
   // Initialize Database Schema prior to accepting traffic
   try {
@@ -87,6 +98,9 @@ async function startServer() {
   app.get('/api/health', (req, res) => {
     res.json({ status: 'ok', time: new Date().toISOString() });
   });
+
+  // Centralized Error Sanitization Middleware for API routes
+  app.use('/api', sanitizeProductionErrors);
 
   // Vite middleware in dev, static files in production
   if (!isProd) {

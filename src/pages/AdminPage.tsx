@@ -28,6 +28,7 @@ import {
 import { PhivonexLogo } from '../components/brand/PhivonexLogo';
 import { WithdrawalManagement } from '../components/admin/WithdrawalManagement';
 import { EconomicControls } from '../components/admin/EconomicControls';
+import { FinancialReconciliationView } from '../components/admin/FinancialReconciliationView';
 
 interface AdminPageProps {
   onNavigate: (route: string) => void;
@@ -36,6 +37,7 @@ interface AdminPageProps {
 
 export type AdminTab =
   | 'overview'
+  | 'reconciliation'
   | 'economics'
   | 'users'
   | 'nodes'
@@ -50,6 +52,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onNavigate, currentPath = 
 
   const getTabFromPath = (path: string): AdminTab => {
     const clean = path.toLowerCase().split('?')[0];
+    if (clean.includes('/reconciliation')) return 'reconciliation';
     if (clean.includes('/economics')) return 'economics';
     if (clean.includes('/users')) return 'users';
     if (clean.includes('/nodes')) return 'nodes';
@@ -204,6 +207,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onNavigate, currentPath = 
 
   const NAV_ITEMS = [
     { id: 'overview' as AdminTab, label: 'Overview', icon: LayoutDashboard },
+    { id: 'reconciliation' as AdminTab, label: 'Financial Reconciliation', icon: ShieldCheck },
     { id: 'economics' as AdminTab, label: 'Economic Controls', icon: Sliders },
     { id: 'users' as AdminTab, label: 'Users', icon: Users },
     { id: 'nodes' as AdminTab, label: 'Nodes Inventory', icon: Server },
@@ -362,6 +366,9 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onNavigate, currentPath = 
               </div>
             </div>
           )}
+
+          {/* TAB: FINANCIAL RECONCILIATION */}
+          {activeTab === 'reconciliation' && <FinancialReconciliationView />}
 
           {/* TAB 2: ECONOMIC CONTROLS */}
           {activeTab === 'economics' && <EconomicControls />}

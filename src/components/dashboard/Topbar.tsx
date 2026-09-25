@@ -12,7 +12,9 @@ import {
   Bell,
   CheckCheck,
   Clock,
-  ArrowRight
+  ArrowRight,
+  Volume2,
+  VolumeX
 } from 'lucide-react';
 import { PhivonexLogo } from '../brand/PhivonexLogo';
 import { PhivonexSymbol } from '../brand/PhivonexSymbol';
@@ -53,6 +55,8 @@ export const Topbar: React.FC<TopbarProps> = ({
     unreadCount,
     notifications,
     loading: loadingNotifs,
+    audioEnabled,
+    toggleAudio,
     markAsRead,
     markAllAsRead,
     refreshNotifications,
@@ -222,15 +226,34 @@ export const Topbar: React.FC<TopbarProps> = ({
                     </span>
                   )}
                 </div>
-                {unreadCount > 0 && (
+                <div className="flex items-center gap-2">
+                  {/* Subtle Audio Alert Awareness Toggle */}
                   <button
-                    onClick={handleMarkAllRead}
-                    className="text-[11px] text-[#00CFFF] hover:text-[#00CFFF]/80 font-medium flex items-center gap-1 cursor-pointer transition-colors"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      toggleAudio();
+                    }}
+                    className={`p-1 rounded-md text-xs transition-colors cursor-pointer flex items-center gap-1 ${
+                      audioEnabled
+                        ? 'text-[#00CFFF] bg-[#00CFFF]/10 hover:bg-[#00CFFF]/20'
+                        : 'text-[#98A2B3] hover:text-white bg-white/[0.04] hover:bg-white/[0.08]'
+                    }`}
+                    title={audioEnabled ? 'Audio alerts: Active (Click to Mute)' : 'Audio alerts: Muted (Click to Enable)'}
+                    aria-label="Toggle audio alerts"
                   >
-                    <CheckCheck className="w-3.5 h-3.5" />
-                    <span>Mark all read</span>
+                    {audioEnabled ? <Volume2 className="w-3.5 h-3.5" /> : <VolumeX className="w-3.5 h-3.5" />}
                   </button>
-                )}
+
+                  {unreadCount > 0 && (
+                    <button
+                      onClick={handleMarkAllRead}
+                      className="text-[11px] text-[#00CFFF] hover:text-[#00CFFF]/80 font-medium flex items-center gap-1 cursor-pointer transition-colors"
+                    >
+                      <CheckCheck className="w-3.5 h-3.5" />
+                      <span>Mark all read</span>
+                    </button>
+                  )}
+                </div>
               </div>
 
               {/* Notification preview list */}

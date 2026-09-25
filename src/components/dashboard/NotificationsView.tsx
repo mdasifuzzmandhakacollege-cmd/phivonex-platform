@@ -16,7 +16,9 @@ import {
   RefreshCw,
   Inbox,
   AlertCircle,
-  Trash2
+  Trash2,
+  Volume2,
+  VolumeX
 } from 'lucide-react';
 import { UserProfile } from '../../context/AuthContext';
 import { useNotifications, AppNotification } from '../../context/NotificationContext';
@@ -37,6 +39,8 @@ export const NotificationsView: React.FC<NotificationsViewProps> = ({ user, onNa
     error,
     filterType,
     unreadOnly,
+    audioEnabled,
+    toggleAudio,
     setFilterType,
     setUnreadOnly,
     refreshNotifications,
@@ -205,6 +209,21 @@ export const NotificationsView: React.FC<NotificationsViewProps> = ({ user, onNa
         </div>
 
         <div className="flex items-center gap-2 self-start sm:self-center">
+          {/* Subtle Audio Alert Awareness Toggle */}
+          <button
+            onClick={() => toggleAudio()}
+            className={`py-2 px-3 rounded-xl border text-xs font-medium flex items-center gap-2 transition-colors cursor-pointer min-h-[40px] ${
+              audioEnabled
+                ? 'bg-[#00CFFF]/10 border-[#00CFFF]/30 text-[#00CFFF] hover:bg-[#00CFFF]/20'
+                : 'bg-white/[0.04] border-white/[0.08] text-[#98A2B3] hover:text-white hover:bg-white/[0.08]'
+            }`}
+            title={audioEnabled ? 'Audio alerts: Active (Click to Mute)' : 'Audio alerts: Muted (Click to Enable)'}
+            aria-label="Toggle audio alerts"
+          >
+            {audioEnabled ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
+            <span className="hidden sm:inline">{audioEnabled ? 'Audio: On' : 'Audio: Muted'}</span>
+          </button>
+
           <button
             onClick={() => refreshNotifications()}
             disabled={refreshing}

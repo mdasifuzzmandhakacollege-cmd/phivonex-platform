@@ -136,15 +136,26 @@ export async function requireAuth(req: AuthRequest, res: Response, next: NextFun
 /**
  * requireAdmin
  * Strict administrative authorization middleware.
- * Ensures normal authenticated users CANNOT execute administrative endpoints
- * such as epoch creation or settlement.
+ * Ensures normal authenticated users CANNOT execute administrative endpoints.
  */
 export async function requireAdmin(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
   const adminKey = req.headers['x-admin-key'];
-  const expectedKey = process.env.ADMIN_API_KEY || 'phivonex-admin-key-secure';
+  const expectedKey = process.env.ADMIN_API_KEY;
 
-  if (adminKey && adminKey === expectedKey) {
+  if (adminKey && expectedKey && adminKey === expectedKey) {
     return next();
+  }
+
+  // If already authenticated by preceding auth middleware
+  if (req.user) {
+    if (req.user.role === 'ADMIN') {
+      return next();
+    }
+    res.status(403).json({
+      error: 'FORBIDDEN',
+      message: 'Access denied. Administrative privileges required.',
+    });
+    return;
   }
 
   // Otherwise, enforce session auth and verify ADMIN role
@@ -155,7 +166,7 @@ export async function requireAdmin(req: AuthRequest, res: Response, next: NextFu
 
     res.status(403).json({
       error: 'FORBIDDEN',
-      message: 'Access denied. Administrative privileges required to manage reward epochs.',
+      message: 'Access denied. Administrative privileges required.',
     });
   });
 }

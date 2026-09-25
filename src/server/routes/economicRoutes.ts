@@ -1,5 +1,6 @@
 import { Router, Response } from 'express';
 import { requireAdmin, AuthRequest } from '../middleware/authMiddleware';
+import { adminFinancialLimiter } from '../middleware/rateLimiter';
 import {
   getAllEconomicConfigs,
   getEconomicConfigByKey,
@@ -58,7 +59,7 @@ economicRouter.get('/configs/:key', async (req: AuthRequest, res: Response) => {
  * PUT /api/admin/economics/configs/:key
  * Update an economic configuration parameter with versioning, immutability check, and audit trail.
  */
-economicRouter.put('/configs/:key', async (req: AuthRequest, res: Response) => {
+economicRouter.put('/configs/:key', adminFinancialLimiter, async (req: AuthRequest, res: Response) => {
   try {
     const { key } = req.params;
     const { value, status, effectiveFrom, reason } = req.body;

@@ -1,5 +1,7 @@
 import { Router, Response } from 'express';
 import { requireAuth, requireAdmin, AuthRequest } from '../middleware/authMiddleware';
+import { withdrawalLimiter, adminFinancialLimiter } from '../middleware/rateLimiter';
+import { validateEvmAddress } from '../middleware/securityMiddleware';
 import {
   createWithdrawalRequest,
   getUserWithdrawals,
@@ -15,24 +17,35 @@ export const withdrawalRouter = Router();
  * POST /api/withdrawals
  * Create a new withdrawal request from eligible available balance.
  */
-withdrawalRouter.post('/', requireAuth, async (req: AuthRequest, res: Response) => {
+withdrawalRouter.post('/', requireAuth, withdrawalLimiter, async (req: AuthRequest, res: Response) => {
   try {
     const userId = req.user!.id;
     const { amount, destinationType, destinationReference, idempotencyKey } = req.body;
 
     const numAmount = parseFloat(amount);
-    if (isNaN(numAmount) || numAmount <= 0) {
+    if (isNaN(numAmount) || !isFinite(numAmount) || numAmount <= 0) {
       return res.status(400).json({
         error: 'INVALID_AMOUNT',
         message: 'Withdrawal amount must be a positive number greater than 0.',
       });
     }
 
+    const destType = String(destinationType || 'BEP20').toUpperCase();
+    if (destType === 'BEP20' || destType === 'BNB') {
+      const addrCheck = validateEvmAddress(destinationReference);
+      if (!addrCheck.valid) {
+        return res.status(400).json({
+          error: 'INVALID_DESTINATION_ADDRESS',
+          message: addrCheck.error || 'Invalid destination wallet address.',
+        });
+      }
+    }
+
     const withdrawal = await createWithdrawalRequest({
       userId,
       amount: numAmount,
-      destinationType: String(destinationType || ''),
-      destinationReference: String(destinationReference || ''),
+      destinationType: destType,
+      destinationReference: String(destinationReference || '').trim(),
       idempotencyKey: idempotencyKey ? String(idempotencyKey) : undefined,
     });
 
@@ -140,7 +153,7 @@ withdrawalRouter.post('/:publicId/cancel', requireAuth, async (req: AuthRequest,
  * POST /api/withdrawals/admin/settle
  * Admin-only settlement state machine trigger (APPROVE, COMPLETE, REJECT, FAIL).
  */
-withdrawalRouter.post('/admin/settle', requireAdmin, async (req: AuthRequest, res: Response) => {
+withdrawalRouter.post('/admin/settle', requireAdmin, adminFinancialLimiter, async (req: AuthRequest, res: Response) => {
   try {
     const { publicId, action, rejectionReason } = req.body;
 
@@ -175,7 +188,7 @@ withdrawalRouter.post('/admin/settle', requireAdmin, async (req: AuthRequest, re
  * POST /api/withdrawals/admin/broadcast-bsc
  * Admin-only on-chain broadcast trigger for BNB Smart Chain withdrawal settlement.
  */
-withdrawalRouter.post('/admin/broadcast-bsc', requireAdmin, async (req: AuthRequest, res: Response) => {
+withdrawalRouter.post('/admin/broadcast-bsc', requireAdmin, adminFinancialLimiter, async (req: AuthRequest, res: Response) => {
   try {
     const { publicId } = req.body;
 
