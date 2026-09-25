@@ -33,6 +33,7 @@ import { AdminPage } from './pages/AdminPage';
 import { LedgerReceiptModal } from './components/modals/LedgerReceiptModal';
 import { LaunchAppModal } from './components/modals/LaunchAppModal';
 import { LegalModal } from './components/modals/LegalModal';
+import { PWAInstallPrompt } from './components/PWAInstallPrompt';
 
 import { INITIAL_NETWORK_SUMMARY } from './data/networkData';
 import { LedgerEvent } from './types/network';
@@ -314,6 +315,9 @@ function AppContent() {
         title={legalModalTitle}
         onClose={() => setLegalModalTitle(null)}
       />
+
+      {/* PWA Install Prompt (Add to Home Screen) */}
+      <PWAInstallPrompt />
 
     </div>
   );

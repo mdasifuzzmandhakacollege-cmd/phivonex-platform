@@ -1,6 +1,6 @@
 import { getDb, DatabaseClient } from '../db/db';
 import { v4 as uuidv4 } from 'uuid';
-import { generateOrderPublicId } from '../utils/idGenerator';
+import { generateOrderPublicId, generateLedgerTransactionPublicId } from '../utils/idGenerator';
 import {
   NODE_BASE_PRICE_USD,
   RESERVATION_EXPIRY_MINUTES,
@@ -15,6 +15,7 @@ import { getNodeBasePrice, isNodeSalesEnabled } from './economicService';
 import { notifyNodeActivated } from './notificationService';
 
 export interface SafeNodeOrder {
+  id?: string;
   publicOrderId: string;
   publicNodeId: string;
   nodeNumber: number;
@@ -215,6 +216,7 @@ export async function createNodeReservation(
 
     return {
       order: {
+        id: row.id,
         publicOrderId: row.public_order_id,
         publicNodeId: row.public_node_id,
         nodeNumber: row.node_number,
@@ -342,6 +344,7 @@ export async function createNodeReservation(
 
     return {
       order: {
+        id: insertedOrder.id,
         publicOrderId: insertedOrder.public_order_id,
         publicNodeId: candidateNode.public_node_id,
         nodeNumber: insertedOrder.node_number,
@@ -860,5 +863,115 @@ export async function getUserOrderById(userId: string, orderIdentifier: string):
     cancelledAt: row.cancelled_at ? row.cancelled_at.toISOString() : null,
     createdAt: row.created_at.toISOString(),
     secondsRemaining,
+  };
+}
+
+/**
+ * Purchase and activate a Genesis Node using the user's credited deposit balance (USDT/BNB).
+ * Deducts the $1,000 USD node price from deposit balance and settles node activation atomically.
+ */
+export async function purchaseNodeWithDepositBalance(
+  userId: string,
+  preferredAsset: 'USDT' | 'BNB' = 'USDT'
+): Promise<{
+  order: SafeNodeOrder;
+  node: { publicNodeId: string; nodeNumber: number; status: string; activatedAt: string };
+  depositDeducted: number;
+  remainingDepositBalance: number;
+}> {
+  const db = await getDb();
+
+  // 1. Get Node Price
+  const nodePrice = await getNodeBasePrice(); // Default $1,000
+
+  // 2. Compute User's Total Credited Deposit Balance
+  const depositRes = await db.query<{ total_credited: string | number }>(
+    `
+    SELECT COALESCE(SUM(amount), 0) AS total_credited
+    FROM blockchain_deposits
+    WHERE user_id = $1 AND status = 'CREDITED'
+    `,
+    [userId]
+  );
+  const totalCreditedDeposits = Number(depositRes.rows[0]?.total_credited || 0);
+
+  // Compute previous node purchase debits
+  const debitsRes = await db.query<{ total_debits: string | number }>(
+    `
+    SELECT COALESCE(SUM(amount), 0) AS total_debits
+    FROM financial_ledger_entries
+    WHERE user_id = $1 AND entry_type = 'DEBIT' AND source_type = 'NODE_PURCHASE'
+    `,
+    [userId]
+  );
+  const totalNodeDebits = Number(debitsRes.rows[0]?.total_debits || 0);
+
+  const availableDepositBalance = Math.max(0, totalCreditedDeposits - totalNodeDebits);
+
+  if (availableDepositBalance < nodePrice) {
+    const error: any = new Error(
+      `Your current deposited balance is $${availableDepositBalance.toFixed(2)} USD. You need $${nodePrice.toFixed(2)} USD to activate a Genesis Node. Please deposit funds first.`
+    );
+    error.code = 'INSUFFICIENT_DEPOSIT_BALANCE';
+    error.statusCode = 400;
+    error.currentBalance = availableDepositBalance;
+    error.requiredAmount = nodePrice;
+    error.redirectToDeposit = true;
+    throw error;
+  }
+
+  // 3. Create or find active reservation
+  let reservation: { order: SafeNodeOrder; isExisting: boolean };
+  try {
+    reservation = await createNodeReservation(userId, `dep_node_${userId}_${Date.now()}`, `DEPOSIT_${preferredAsset}`);
+  } catch (err: any) {
+    // If existing active pending order exists, fetch it
+    const existingOrders = await getUserOrders(userId);
+    const pending = existingOrders.find((o) => o.status === 'PENDING' && o.secondsRemaining > 0);
+    if (pending) {
+      reservation = { order: pending, isExisting: true };
+    } else {
+      throw err;
+    }
+  }
+
+  // 4. Record DEBIT in financial_ledger_entries for node purchase
+  const debitTxnId = uuidv4();
+  const publicTxnId = generateLedgerTransactionPublicId();
+
+  await db.query(
+    `
+    INSERT INTO financial_ledger_entries (
+      id, public_txn_id, user_id, entry_type, source_type, source_id,
+      source_ref, description, amount, currency, status, created_at
+    )
+    VALUES ($1, $2, $3, 'DEBIT', 'NODE_PURCHASE', $4, $5, $6, $7, $8, 'SETTLED', CURRENT_TIMESTAMP)
+    `,
+    [
+      debitTxnId,
+      publicTxnId,
+      userId,
+      reservation.order.publicOrderId,
+      reservation.order.publicNodeId,
+      `Genesis Node ${reservation.order.publicNodeId} purchase paid via ${preferredAsset} deposit balance`,
+      nodePrice,
+      preferredAsset,
+    ]
+  );
+
+  // 5. Settle the reserved order to activate node
+  const settlement = await settleNodeOrder(
+    userId,
+    reservation.order.publicOrderId,
+    `DEPOSIT_BAL_PAYMENT_${preferredAsset}_${publicTxnId}`
+  );
+
+  const newRemainingBalance = Math.max(0, availableDepositBalance - nodePrice);
+
+  return {
+    order: settlement.order,
+    node: settlement.node,
+    depositDeducted: nodePrice,
+    remainingDepositBalance: newRemainingBalance,
   };
 }

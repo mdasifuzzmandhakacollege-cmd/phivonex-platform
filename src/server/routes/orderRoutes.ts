@@ -5,8 +5,13 @@ import {
   settleNodeOrder,
   cancelNodeOrder,
   getUserOrders,
-  getUserOrderById
+  getUserOrderById,
+  purchaseNodeWithDepositBalance
 } from '../services/nodeOrderService';
+import {
+  validateUserNodePurchaseBalances,
+  processNodePurchaseWithAssetBalance
+} from '../services/nodePurchaseBalanceService';
 
 const router = Router();
 
@@ -230,6 +235,107 @@ router.post('/dev/simulate-settlement', requireAuth, async (req: AuthRequest, re
     res.status(500).json({
       error: 'SERVER_ERROR',
       message: 'Dev settlement simulator failed.',
+    });
+  }
+});
+
+/**
+ * GET /api/node-orders/balance-validation
+ * Validates the authenticated user's internal deposit balances (BNB & USDT)
+ * specifically for Node purchase contract eligibility.
+ */
+router.get('/balance-validation', requireAuth, async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const user = req.user!;
+    const validation = await validateUserNodePurchaseBalances(user.id);
+
+    res.status(200).json({
+      success: true,
+      validation,
+    });
+  } catch (err: any) {
+    console.error('[Order API] Error validating node purchase balances:', err);
+    res.status(500).json({
+      error: 'SERVER_ERROR',
+      message: 'Failed to validate node purchase balances.',
+    });
+  }
+});
+
+/**
+ * POST /api/node-orders/activate-with-asset
+ * Validates and triggers Node activation using the user's selected internal asset balance (BNB or USDT).
+ */
+router.post('/activate-with-asset', requireAuth, async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const user = req.user!;
+    const asset = ((req.body?.asset as string) || 'USDT').toUpperCase() === 'BNB' ? 'BNB' : 'USDT';
+
+    const result = await processNodePurchaseWithAssetBalance(user.id, asset);
+
+    res.status(200).json({
+      success: true,
+      message: `Genesis Node ${result.node.publicNodeId} successfully activated using your ${result.assetUsed} deposit balance!`,
+      result,
+    });
+  } catch (err: any) {
+    if (err.statusCode) {
+      res.status(err.statusCode).json({
+        error: err.code || 'ASSET_PURCHASE_ERROR',
+        message: err.message,
+        selectedAsset: err.selectedAsset,
+        availableBalance: err.availableBalance,
+        requiredAmount: err.requiredAmount,
+        missingAmount: err.missingAmount,
+        redirectToDeposit: err.redirectToDeposit || false,
+      });
+      return;
+    }
+
+    console.error('[Order API] Error activating node with asset balance:', err);
+    res.status(500).json({
+      error: 'SERVER_ERROR',
+      message: 'Failed to process node purchase with asset balance.',
+    });
+  }
+});
+
+/**
+ * POST /api/node-orders/activate-with-deposit
+ * Purchases and activates a Genesis Node directly using the user's credited deposit balance.
+ * Deducts $1,000 USD from deposit balance and activates the node.
+ */
+router.post('/activate-with-deposit', requireAuth, async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const user = req.user!;
+    const preferredAsset = ((req.body?.asset as string) || 'USDT').toUpperCase() === 'BNB' ? 'BNB' : 'USDT';
+
+    const result = await purchaseNodeWithDepositBalance(user.id, preferredAsset);
+
+    res.status(200).json({
+      success: true,
+      message: `Genesis Node ${result.node.publicNodeId} successfully activated using your ${preferredAsset} deposit balance!`,
+      order: result.order,
+      node: result.node,
+      depositDeducted: result.depositDeducted,
+      remainingDepositBalance: result.remainingDepositBalance,
+    });
+  } catch (err: any) {
+    if (err.statusCode) {
+      res.status(err.statusCode).json({
+        error: err.code || 'DEPOSIT_PURCHASE_ERROR',
+        message: err.message,
+        currentBalance: err.currentBalance,
+        requiredAmount: err.requiredAmount,
+        redirectToDeposit: err.redirectToDeposit || false,
+      });
+      return;
+    }
+
+    console.error('[Order API] Error in activate-with-deposit:', err);
+    res.status(500).json({
+      error: 'SERVER_ERROR',
+      message: 'Failed to activate Genesis Node using deposit balance.',
     });
   }
 });

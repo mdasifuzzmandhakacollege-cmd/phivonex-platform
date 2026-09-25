@@ -717,3 +717,152 @@ export async function getAdminAuditLogs(
     },
   };
 }
+
+/**
+ * Fetch unified audit feed combining node activations, financial ledger entries, and admin actions.
+ */
+export async function getUnifiedAuditFeed(
+  limit = 50,
+  categoryFilter?: string,
+  searchQuery?: string
+): Promise<{ events: any[]; stats: any }> {
+  const db = await getDb();
+
+  // 1. Fetch Node Activations
+  const nodesRes = await db.query<any>(`
+    SELECT 
+      n.id,
+      n.public_node_id,
+      n.status,
+      1000.00 AS pricing_tier_usd,
+      n.activated_at,
+      n.updated_at,
+      u.public_id AS owner_public_id,
+      u.full_name AS owner_name
+    FROM nodes n
+    JOIN users u ON n.owner_user_id = u.id
+    WHERE n.status = 'ACTIVE'
+    ORDER BY n.updated_at DESC
+    LIMIT 30
+  `);
+
+  // 2. Fetch Financial Ledger Entries
+  const ledgerRes = await db.query<any>(`
+    SELECT 
+      f.id,
+      f.public_txn_id,
+      f.entry_type,
+      f.source_type,
+      f.source_id,
+      f.amount,
+      f.currency,
+      f.description,
+      f.created_at,
+      u.public_id AS user_public_id
+    FROM financial_ledger_entries f
+    LEFT JOIN users u ON f.user_id = u.id
+    ORDER BY f.created_at DESC
+    LIMIT 30
+  `);
+
+  // 3. Fetch Admin Audit Logs
+  const adminRes = await db.query<any>(`
+    SELECT * FROM admin_audit_logs
+    ORDER BY created_at DESC
+    LIMIT 30
+  `);
+
+  // 4. Map into unified audit stream
+  const nodeEvents = nodesRes.rows.map((n) => ({
+    id: `audit-node-${n.id}`,
+    category: 'NODE_ACTIVATION',
+    action: 'NODE_ACTIVATION_COMPLETED',
+    actorPublicId: n.owner_public_id || 'PHX-USER',
+    targetType: 'NODE',
+    targetId: n.public_node_id,
+    amountUsd: Number(n.pricing_tier_usd || 1000),
+    currency: 'USD',
+    details: `Genesis Node ${n.public_node_id} activated and allocated to operator ${n.owner_public_id || 'PHX-USER'} ($${Number(n.pricing_tier_usd || 1000).toFixed(2)} stage tier).`,
+    metadata: {
+      publicNodeId: n.public_node_id,
+      pricingTierUsd: Number(n.pricing_tier_usd || 1000),
+      activatedAt: n.activated_at,
+      ownerName: n.owner_name,
+    },
+    ipAddress: null,
+    createdAt: n.activated_at ? new Date(n.activated_at).toISOString() : new Date(n.updated_at).toISOString(),
+  }));
+
+  const finEvents = ledgerRes.rows.map((f) => ({
+    id: `audit-fin-${f.id}`,
+    category: 'FINANCIAL',
+    action: `FINANCIAL_${f.source_type}_${f.entry_type}`,
+    actorPublicId: f.user_public_id || 'SYSTEM_ADMIN',
+    targetType: 'LEDGER_ENTRY',
+    targetId: f.public_txn_id,
+    amountUsd: Number(f.amount),
+    currency: f.currency,
+    details: `${f.description || `${f.entry_type} entry for ${f.source_type}`}`,
+    metadata: {
+      publicTxnId: f.public_txn_id,
+      entryType: f.entry_type,
+      sourceType: f.source_type,
+      sourceId: f.source_id,
+      amount: Number(f.amount),
+      currency: f.currency,
+    },
+    ipAddress: null,
+    createdAt: new Date(f.created_at).toISOString(),
+  }));
+
+  const adminEvents = adminRes.rows.map((a) => ({
+    id: `audit-admin-${a.id}`,
+    category: 'ADMIN_ACTION',
+    action: a.action,
+    actorPublicId: a.admin_public_id || 'SYSTEM_ADMIN',
+    targetType: a.target_type,
+    targetId: a.target_id,
+    amountUsd: null,
+    currency: null,
+    details: a.details,
+    metadata: a.metadata ? JSON.parse(a.metadata) : null,
+    ipAddress: a.ip_address || null,
+    createdAt: new Date(a.created_at).toISOString(),
+  }));
+
+  // Combine and sort chronologically
+  let combined = [...nodeEvents, ...finEvents, ...adminEvents].sort(
+    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+  );
+
+  // Filter category
+  if (categoryFilter && categoryFilter !== 'ALL' && categoryFilter !== 'all') {
+    combined = combined.filter((e) => e.category === categoryFilter.toUpperCase());
+  }
+
+  // Filter search
+  if (searchQuery && searchQuery.trim()) {
+    const q = searchQuery.toLowerCase().trim();
+    combined = combined.filter(
+      (e) =>
+        e.action.toLowerCase().includes(q) ||
+        e.actorPublicId.toLowerCase().includes(q) ||
+        e.targetId.toLowerCase().includes(q) ||
+        e.details.toLowerCase().includes(q)
+    );
+  }
+
+  const finalEvents = combined.slice(0, limit);
+
+  return {
+    events: finalEvents,
+    stats: {
+      totalEvents: combined.length,
+      nodeActivationsCount: nodeEvents.length,
+      financialTransactionsCount: finEvents.length,
+      adminActionsCount: adminEvents.length,
+      securityEventsCount: 0,
+      lastReconciliationAt: new Date().toISOString(),
+    },
+  };
+}

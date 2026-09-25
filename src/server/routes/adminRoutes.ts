@@ -9,6 +9,7 @@ import {
   getAdminWithdrawalsList,
   getAdminTransactionsList,
   getAdminAuditLogs,
+  getUnifiedAuditFeed,
   logAdminAction,
 } from '../services/adminService';
 import { settleWithdrawalAction } from '../services/withdrawalService';
@@ -203,6 +204,27 @@ adminRouter.get('/transactions', async (req: AuthRequest, res: Response) => {
     return res.status(500).json({
       error: 'SERVER_ERROR',
       message: 'Failed to fetch ledger transactions.',
+    });
+  }
+});
+
+/**
+ * GET /api/admin/audit-logs/feed
+ * Unified audit feed combining real-time node activations, financial transactions, and admin actions.
+ */
+adminRouter.get('/audit-logs/feed', async (req: AuthRequest, res: Response) => {
+  try {
+    const limit = parseInt(req.query.limit as string, 10) || 50;
+    const category = (req.query.category as string) || undefined;
+    const search = (req.query.search as string) || undefined;
+
+    const data = await getUnifiedAuditFeed(limit, category, search);
+    return res.status(200).json(data);
+  } catch (err: any) {
+    console.error('[Admin API] Error fetching unified audit feed:', err);
+    return res.status(500).json({
+      error: 'SERVER_ERROR',
+      message: 'Failed to fetch unified audit feed.',
     });
   }
 });

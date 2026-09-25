@@ -38,20 +38,26 @@ export function deriveUserBnbAddress(userId: string): { address: string; derivat
 }
 
 /**
- * Get or provision a user's unique BNB deposit address.
+ * Get or provision a user's unique deposit address for BNB or USDT.
  * Idempotent: Subsequent calls return the existing database record.
  */
-export async function getOrCreateUserDepositAddress(userId: string): Promise<UserDepositAddressRecord> {
+export async function getOrCreateUserDepositAddress(
+  userId: string,
+  requestedAsset: string = 'BNB'
+): Promise<UserDepositAddressRecord> {
   const db = await getDb();
+  const assetName = requestedAsset.toUpperCase() === 'USDT' ? 'USDT' : 'BNB';
 
   // 1. Check existing
   const existing = await db.query<any>(
     `
     SELECT id, user_id, chain_id, asset, address, derivation_reference, created_at
     FROM user_deposit_addresses
-    WHERE user_id = $1 AND chain_id = $2 AND asset = $3
+    WHERE user_id = $1 AND chain_id = $2 AND (asset = $3 OR address IS NOT NULL)
+    ORDER BY CASE WHEN asset = $3 THEN 1 ELSE 2 END
+    LIMIT 1
     `,
-    [userId, BSC_CONFIG.CHAIN_ID, BSC_CONFIG.ASSET]
+    [userId, BSC_CONFIG.CHAIN_ID, assetName]
   );
 
   if (existing.rows.length > 0) {
@@ -60,7 +66,7 @@ export async function getOrCreateUserDepositAddress(userId: string): Promise<Use
       id: row.id,
       userId: row.user_id,
       chainId: row.chain_id,
-      asset: row.asset,
+      asset: assetName,
       address: row.address,
       derivationReference: row.derivation_reference,
       createdAt: new Date(row.created_at).toISOString(),
@@ -82,7 +88,7 @@ export async function getOrCreateUserDepositAddress(userId: string): Promise<Use
       SET address = EXCLUDED.address
     RETURNING id, user_id, chain_id, asset, address, derivation_reference, created_at
     `,
-    [id, userId, BSC_CONFIG.CHAIN_ID, BSC_CONFIG.ASSET, address, derivationReference]
+    [id, userId, BSC_CONFIG.CHAIN_ID, assetName, address, derivationReference]
   );
 
   const row = insertRes.rows[0];
@@ -108,9 +114,9 @@ export async function findUserByDepositAddress(address: string, chainId = BSC_CO
     `
     SELECT user_id 
     FROM user_deposit_addresses 
-    WHERE LOWER(address) = LOWER($1) AND chain_id = $2 AND asset = $3
+    WHERE LOWER(address) = LOWER($1) AND chain_id = $2
     `,
-    [normalized, chainId, BSC_CONFIG.ASSET]
+    [normalized, chainId]
   );
 
   if (res.rows.length === 0) return null;

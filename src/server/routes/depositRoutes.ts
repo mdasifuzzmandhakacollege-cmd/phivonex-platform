@@ -10,24 +10,34 @@ export const depositRouter = Router();
 
 /**
  * GET /api/deposits/address
- * Returns the authenticated user's unique BNB Smart Chain deposit address.
+ * Returns the authenticated user's unique deposit address for BNB or USDT on BNB Smart Chain.
  */
 depositRouter.get('/address', requireAuth, depositLimiter, async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const userId = req.user!.id;
-    const addressRecord = await getOrCreateUserDepositAddress(userId);
+    const requestedAsset = ((req.query.asset as string) || 'BNB').toUpperCase();
+    const targetAsset = requestedAsset === 'USDT' ? 'USDT' : 'BNB';
+
+    const addressRecord = await getOrCreateUserDepositAddress(userId, targetAsset);
+
+    const isUsdt = targetAsset === 'USDT';
+    const networkDisplayName = isUsdt ? 'BNB Smart Chain (BEP-20)' : BSC_CONFIG.NETWORK_NAME;
+    const assetWarning = isUsdt
+      ? `Send USDT (BEP-20) on BNB Smart Chain (Chain ID: ${BSC_CONFIG.CHAIN_ID}) only. Do not send USDT via ERC-20, TRC-20, or other networks.`
+      : `Send native BNB on ${BSC_CONFIG.NETWORK_NAME} (Chain ID: ${BSC_CONFIG.CHAIN_ID}) only. Do not send other assets to this address.`;
 
     res.status(200).json({
       success: true,
       data: {
         address: addressRecord.address,
         chainId: addressRecord.chainId,
-        asset: addressRecord.asset,
-        networkName: BSC_CONFIG.NETWORK_NAME,
+        asset: targetAsset,
+        networkName: networkDisplayName,
         requiredConfirmations: BSC_CONFIG.REQUIRED_CONFIRMATIONS,
         explorerUrl: `${BSC_CONFIG.EXPLORER_ADDRESS_URL}${addressRecord.address}`,
         derivationReference: addressRecord.derivationReference,
-        warning: `Send native BNB on ${BSC_CONFIG.NETWORK_NAME} (Chain ID: ${BSC_CONFIG.CHAIN_ID}) only. Do not send other assets or tokens to this address.`,
+        warning: assetWarning,
+        note: `BNB and USDT deposit balances are tracked separately in your financial ledger. Both BNB and USDT balances can be used directly to purchase & activate Genesis Nodes.`,
       },
     });
   } catch (err: any) {
@@ -104,9 +114,10 @@ depositRouter.post('/rescan', requireAuth, depositLimiter, async (req: AuthReque
 depositRouter.post('/simulate-test-deposit', requireAuth, async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const userId = req.user!.id;
-    const { amount, txHash, fromAddress, confirmations, blockNumber, currentBlockNumber } = req.body;
+    const { amount, txHash, fromAddress, confirmations, blockNumber, currentBlockNumber, asset } = req.body;
+    const targetAsset = (asset || 'BNB').toUpperCase() === 'USDT' ? 'USDT' : 'BNB';
 
-    const userAddress = await getOrCreateUserDepositAddress(userId);
+    const userAddress = await getOrCreateUserDepositAddress(userId, targetAsset);
     const simulatedBlock = blockNumber || 38291000;
     const confs = confirmations !== undefined ? Number(confirmations) : BSC_CONFIG.REQUIRED_CONFIRMATIONS;
     const currentBlock = currentBlockNumber || (simulatedBlock + confs - 1);
@@ -115,6 +126,7 @@ depositRouter.post('/simulate-test-deposit', requireAuth, async (req: AuthReques
 
     const deposit = await processBlockchainDepositEvent({
       chainId: BSC_CONFIG.CHAIN_ID,
+      asset: targetAsset,
       txHash: hash,
       fromAddress: from,
       toAddress: userAddress.address,
@@ -125,7 +137,7 @@ depositRouter.post('/simulate-test-deposit', requireAuth, async (req: AuthReques
 
     res.status(200).json({
       success: true,
-      message: 'Simulated deposit event processed',
+      message: `Simulated ${targetAsset} deposit event processed`,
       data: deposit,
     });
   } catch (err: any) {

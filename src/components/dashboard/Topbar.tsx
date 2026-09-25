@@ -21,6 +21,7 @@ import { PhivonexSymbol } from '../brand/PhivonexSymbol';
 import { UserProfile } from '../../context/AuthContext';
 import { useNotifications } from '../../context/NotificationContext';
 import { DashboardTab } from './Sidebar';
+import { PWAInstallHeaderButton } from '../PWAInstallPrompt';
 
 interface TopbarProps {
   user: UserProfile | null;
@@ -114,7 +115,7 @@ export const Topbar: React.FC<TopbarProps> = ({
       case 'swap':
         return 'Internal Coin Swap';
       case 'deposit':
-        return 'BNB Chain Deposit';
+        return 'BNB & USDT Deposit Portal';
       case 'withdrawals':
         return 'Asset Withdrawals';
       case 'notifications':
@@ -176,8 +177,10 @@ export const Topbar: React.FC<TopbarProps> = ({
         </div>
       </div>
 
-      {/* Right Area: Public Portal Link + Network Status + User Menu */}
+      {/* Right Area: Public Portal Link + PWA Install + Network Status + User Menu */}
       <div className="flex items-center gap-2 sm:gap-4">
+        <PWAInstallHeaderButton />
+
         {/* Public Portal link */}
         <button
           onClick={() => onNavigate('/')}

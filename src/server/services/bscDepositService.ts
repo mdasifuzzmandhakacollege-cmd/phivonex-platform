@@ -99,6 +99,7 @@ function withDepositLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
  */
 export async function processBlockchainDepositEvent(params: {
   chainId?: number;
+  asset?: string;
   txHash: string;
   fromAddress: string;
   toAddress: string;
@@ -107,6 +108,7 @@ export async function processBlockchainDepositEvent(params: {
   currentBlockNumber: number;
 }): Promise<BlockchainDepositRecord | null> {
   const chainId = params.chainId || BSC_CONFIG.CHAIN_ID;
+  const assetName = (params.asset || 'BNB').toUpperCase() === 'USDT' ? 'USDT' : 'BNB';
   const cleanTxHash = params.txHash.toLowerCase().trim();
   const cleanFromAddress = params.fromAddress.toLowerCase().trim();
   const cleanToAddress = params.toAddress.toLowerCase().trim();
@@ -161,7 +163,7 @@ export async function processBlockchainDepositEvent(params: {
           tx_hash, from_address, to_address, amount, block_number,
           confirmations, status, detected_at, confirmed_at, created_at, updated_at
         )
-        VALUES ($1, $2, $3, $4, 'BNB', $5, $6, $7, $8, $9, $10, $11, $12, $13, $12, $12)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $13, $13)
         ON CONFLICT (chain_id, tx_hash, to_address) DO UPDATE
           SET confirmations = EXCLUDED.confirmations,
               updated_at = CURRENT_TIMESTAMP
@@ -172,6 +174,7 @@ export async function processBlockchainDepositEvent(params: {
           publicDepositId,
           userId,
           chainId,
+          assetName,
           cleanTxHash,
           cleanFromAddress,
           cleanToAddress,

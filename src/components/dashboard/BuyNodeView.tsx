@@ -59,8 +59,21 @@ export const BuyNodeView: React.FC<BuyNodeViewProps> = ({ user, onNavigateTab })
   const [stats, setStats] = useState<NodeStats | null>(null);
   const [activeOrder, setActiveOrder] = useState<NodeOrder | null>(null);
   const [pastOrders, setPastOrders] = useState<NodeOrder[]>([]);
+  const [depositBalance, setDepositBalance] = useState<number>(0);
+  const [balanceValidation, setBalanceValidation] = useState<{
+    nodePriceUsd: number;
+    bnbPriceUsd: number;
+    bnbRequired: number;
+    usdtRequired: number;
+    usdtBalance: { available: number; sufficient: boolean; missing: number };
+    bnbBalance: { available: number; sufficient: boolean; missing: number };
+    canActivateWithUsdt: boolean;
+    canActivateWithBnb: boolean;
+  } | null>(null);
+  const [selectedAssetForNode, setSelectedAssetForNode] = useState<'USDT' | 'BNB'>('USDT');
   const [loading, setLoading] = useState(true);
   const [reserving, setReserving] = useState(false);
+  const [activatingDeposit, setActivatingDeposit] = useState(false);
   const [devSettling, setDevSettling] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [selectedMethod, setSelectedMethod] = useState<'CRYPTO_USDT' | 'BANK_WIRE'>('CRYPTO_USDT');
@@ -85,14 +98,34 @@ export const BuyNodeView: React.FC<BuyNodeViewProps> = ({ user, onNavigateTab })
   const loadData = async (isBackground = false) => {
     if (!isBackground) setErrorMsg(null);
     try {
-      const [statsRes, ordersRes] = await Promise.all([
+      const [statsRes, ordersRes, depRes, valRes] = await Promise.all([
         fetch('/api/nodes/stats'),
         fetch('/api/node-orders/me', { credentials: 'include' }),
+        fetch('/api/deposits/me?page=1&limit=10', { credentials: 'include' }),
+        fetch('/api/node-orders/balance-validation', { credentials: 'include' }),
       ]);
 
       if (statsRes.ok) {
         const statsData = await statsRes.json();
         setStats(statsData);
+      }
+
+      if (valRes.ok) {
+        const valData = await valRes.json();
+        if (valData.success && valData.validation) {
+          setBalanceValidation(valData.validation);
+        }
+      }
+
+      if (depRes.ok) {
+        const depData = await depRes.json();
+        if (depData.success && depData.data?.summary) {
+          const totalCredited = Number(depData.data.summary.totalCreditedBnb || 0);
+          // Check credited deposits
+          const creditedDeposits = (depData.data.deposits || []).filter((d: any) => d.status === 'CREDITED');
+          const sumCredited = creditedDeposits.reduce((acc: number, d: any) => acc + Number(d.amount || 0), 0);
+          setDepositBalance(sumCredited > 0 ? sumCredited : totalCredited);
+        }
       }
 
       if (ordersRes.ok) {
@@ -172,6 +205,44 @@ export const BuyNodeView: React.FC<BuyNodeViewProps> = ({ user, onNavigateTab })
       if (timerRef.current) clearInterval(timerRef.current);
     };
   }, [activeOrder?.publicOrderId, secondsLeft > 0]);
+
+  // Handle Activate Node directly with Deposit Balance (BNB or USDT)
+  const handleActivateWithAsset = async (asset: 'BNB' | 'USDT') => {
+    setActivatingDeposit(true);
+    setErrorMsg(null);
+    setSuccessMsg(null);
+    setActivatedNode(null);
+
+    try {
+      const res = await fetch('/api/node-orders/activate-with-asset', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ asset }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        setErrorMsg(data.message || `Failed to activate Genesis Node using ${asset} balance.`);
+        return;
+      }
+
+      setActivatedNode({
+        publicNodeId: data.result.node.publicNodeId,
+        nodeNumber: data.result.node.nodeNumber,
+      });
+      setSuccessMsg(`Genesis Node ${data.result.node.publicNodeId} successfully activated using your ${data.result.assetUsed} deposit balance!`);
+      setActiveOrder(null);
+      setSecondsLeft(0);
+      loadData();
+    } catch (err: any) {
+      console.error('Error activating node with asset balance:', err);
+      setErrorMsg('Network error while processing node activation.');
+    } finally {
+      setActivatingDeposit(false);
+    }
+  };
 
   // Handle Reserve Action
   const handleReserveNode = async () => {
@@ -601,7 +672,133 @@ export const BuyNodeView: React.FC<BuyNodeViewProps> = ({ user, onNavigateTab })
 
       {/* NEW RESERVATION PURCHASE CARD (When no active order) */}
       {!activeOrder && !activatedNode && (
-        <div className="p-6 sm:p-8 rounded-2xl bg-[#07101D] border border-white/[0.08] shadow-xl space-y-6">
+        <div className="space-y-6">
+          {/* DEPOSIT BALANCE ACTIVATION DIRECT FLOW WITH ASSET SELECTOR */}
+          <div className="p-6 rounded-2xl border border-[#00CFFF]/40 bg-gradient-to-r from-[#07101D] via-[#0D1C33] to-[#07101D] shadow-2xl space-y-6">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-white/[0.08] pb-4">
+              <div>
+                <div className="flex items-center gap-2">
+                  <Coins className="w-5 h-5 text-[#00CFFF]" />
+                  <h3 className="text-base font-bold text-white">Internal Account Balance Node Activation</h3>
+                </div>
+                <p className="text-xs text-[#98A2B3] mt-0.5">
+                  Select either your <strong className="text-emerald-300">USDT</strong> or <strong className="text-amber-300">BNB</strong> deposit balance to fund and activate your Genesis Node.
+                </p>
+              </div>
+
+              <span className="px-3 py-1 rounded-full text-xs font-mono font-bold bg-[#00CFFF]/10 border border-[#00CFFF]/30 text-[#00CFFF]">
+                Direct Smart Contract Activation
+              </span>
+            </div>
+
+            {/* Asset Selection Grid */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              {/* USDT Balance Card */}
+              <button
+                type="button"
+                onClick={() => setSelectedAssetForNode('USDT')}
+                className={`p-4 rounded-xl border text-left transition-all cursor-pointer relative overflow-hidden ${
+                  selectedAssetForNode === 'USDT'
+                    ? 'bg-emerald-500/[0.12] border-emerald-400 ring-1 ring-emerald-400/50'
+                    : 'bg-[#05070B] border-white/[0.08] hover:border-white/[0.2]'
+                }`}
+              >
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs font-bold text-white flex items-center gap-1.5">
+                    <span className="w-2.5 h-2.5 rounded-full bg-emerald-400" />
+                    USDT Balance
+                  </span>
+                  <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold ${
+                    balanceValidation?.canActivateWithUsdt
+                      ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                      : 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
+                  }`}>
+                    {balanceValidation?.canActivateWithUsdt ? 'Sufficient' : 'Insufficient'}
+                  </span>
+                </div>
+
+                <div className="text-xl font-bold font-mono text-emerald-300">
+                  ${balanceValidation?.usdtBalance.available.toFixed(2) || depositBalance.toFixed(2)} USDT
+                </div>
+                <p className="text-[11px] text-[#98A2B3] mt-1">
+                  Required: <span className="font-mono text-white">$1,000.00 USDT</span>
+                </p>
+              </button>
+
+              {/* BNB Balance Card */}
+              <button
+                type="button"
+                onClick={() => setSelectedAssetForNode('BNB')}
+                className={`p-4 rounded-xl border text-left transition-all cursor-pointer relative overflow-hidden ${
+                  selectedAssetForNode === 'BNB'
+                    ? 'bg-amber-500/[0.12] border-amber-400 ring-1 ring-amber-400/50'
+                    : 'bg-[#05070B] border-white/[0.08] hover:border-white/[0.2]'
+                }`}
+              >
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs font-bold text-white flex items-center gap-1.5">
+                    <span className="w-2.5 h-2.5 rounded-full bg-amber-400" />
+                    BNB Balance
+                  </span>
+                  <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold ${
+                    balanceValidation?.canActivateWithBnb
+                      ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                      : 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
+                  }`}>
+                    {balanceValidation?.canActivateWithBnb ? 'Sufficient' : 'Insufficient'}
+                  </span>
+                </div>
+
+                <div className="text-xl font-bold font-mono text-amber-300">
+                  {balanceValidation?.bnbBalance.available.toFixed(4) || '0.0000'} BNB
+                </div>
+                <p className="text-[11px] text-[#98A2B3] mt-1">
+                  Required: <span className="font-mono text-white">~{balanceValidation?.bnbRequired || '2.2222'} BNB</span> ($1,000 USD equivalent)
+                </p>
+              </button>
+            </div>
+
+            {/* Action Trigger */}
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-4 pt-2">
+              <div className="text-xs text-[#98A2B3]">
+                Selected Method: <strong className="text-white font-mono">{selectedAssetForNode} Internal Balance</strong>
+              </div>
+
+              {(selectedAssetForNode === 'USDT' && balanceValidation?.canActivateWithUsdt) ||
+              (selectedAssetForNode === 'BNB' && balanceValidation?.canActivateWithBnb) ? (
+                <button
+                  type="button"
+                  onClick={() => handleActivateWithAsset(selectedAssetForNode)}
+                  disabled={activatingDeposit || isSoldOut}
+                  className="w-full sm:w-auto py-3 px-6 rounded-xl bg-gradient-to-r from-emerald-400 to-emerald-500 hover:brightness-110 text-slate-950 font-bold text-xs flex items-center justify-center gap-2 transition-all cursor-pointer shadow-lg shadow-emerald-500/20 disabled:opacity-50 min-h-[44px]"
+                >
+                  {activatingDeposit ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin text-slate-950" />
+                      <span>Processing Contract Activation...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Zap className="w-4 h-4 fill-slate-950" />
+                      <span>Activate Node with {selectedAssetForNode} Balance</span>
+                    </>
+                  )}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => onNavigateTab('deposit')}
+                  className="w-full sm:w-auto py-3 px-6 rounded-xl bg-gradient-to-r from-[#00CFFF] to-[#0088FF] hover:brightness-110 text-slate-950 font-bold text-xs flex items-center justify-center gap-2 transition-all cursor-pointer shadow-lg shadow-[#00CFFF]/20 min-h-[44px]"
+                >
+                  <Coins className="w-4 h-4" />
+                  <span>Deposit {selectedAssetForNode} to Activate Node</span>
+                  <ArrowRight className="w-4 h-4" />
+                </button>
+              )}
+            </div>
+          </div>
+
+          <div className="p-6 sm:p-8 rounded-2xl bg-[#07101D] border border-white/[0.08] shadow-xl space-y-6">
           <div className="flex items-center justify-between border-b border-white/[0.08] pb-4">
             <div className="space-y-1">
               <h2 className="text-base font-bold text-white flex items-center gap-2">
@@ -718,6 +915,7 @@ export const BuyNodeView: React.FC<BuyNodeViewProps> = ({ user, onNavigateTab })
             </button>
           </div>
         </div>
+      </div>
       )}
 
       {/* PURCHASE & RESERVATION HISTORY */}

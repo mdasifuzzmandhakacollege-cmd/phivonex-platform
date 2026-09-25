@@ -378,7 +378,7 @@ async function initSchema(client: DatabaseClient) {
         status VARCHAR(20) NOT NULL DEFAULT 'SETTLED',
         created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
         CONSTRAINT chk_fle_entry_type CHECK (entry_type IN ('CREDIT', 'DEBIT', 'REVERSAL')),
-        CONSTRAINT chk_fle_source_type CHECK (source_type IN ('REFERRAL_COMMISSION', 'MATCHING_BONUS', 'PROMOTION_BONUS', 'NODE_REWARD')),
+        CONSTRAINT chk_fle_source_type CHECK (source_type IN ('REFERRAL_COMMISSION', 'MATCHING_BONUS', 'PROMOTION_BONUS', 'NODE_REWARD', 'WITHDRAWAL', 'NODE_PURCHASE', 'USDT_DEPOSIT', 'BNB_DEPOSIT', 'COIN_SWAP', 'BLOCKCHAIN_DEPOSIT', 'DEPOSIT_CREDIT')),
         CONSTRAINT chk_fle_status CHECK (status IN ('SETTLED', 'REVERSED', 'PENDING')),
         CONSTRAINT chk_fle_amount CHECK (amount > 0),
         CONSTRAINT uq_fle_source_entry_type UNIQUE (source_type, source_id, entry_type)
@@ -581,7 +581,7 @@ async function initSchema(client: DatabaseClient) {
     try {
       await client.exec(`
         ALTER TABLE financial_ledger_entries DROP CONSTRAINT IF EXISTS chk_fle_source_type;
-        ALTER TABLE financial_ledger_entries ADD CONSTRAINT chk_fle_source_type CHECK (source_type IN ('REFERRAL_COMMISSION', 'MATCHING_BONUS', 'PROMOTION_BONUS', 'NODE_REWARD', 'WITHDRAWAL'));
+        ALTER TABLE financial_ledger_entries ADD CONSTRAINT chk_fle_source_type CHECK (source_type IN ('REFERRAL_COMMISSION', 'MATCHING_BONUS', 'PROMOTION_BONUS', 'NODE_REWARD', 'WITHDRAWAL', 'NODE_PURCHASE', 'USDT_DEPOSIT', 'BNB_DEPOSIT', 'COIN_SWAP', 'BLOCKCHAIN_DEPOSIT', 'DEPOSIT_CREDIT'));
       `);
     } catch {
       // Constraint update ignored if already applied or table structure matches
@@ -691,10 +691,10 @@ async function initSchema(client: DatabaseClient) {
         CREATE INDEX IF NOT EXISTS idx_bcw_chain_nonce ON blockchain_withdrawals (chain_id, from_address, nonce);
       `);
 
-      // Update financial_ledger_entries constraint to support BLOCKCHAIN_DEPOSIT & COIN_SWAP
+      // Update financial_ledger_entries constraint to support BLOCKCHAIN_DEPOSIT & COIN_SWAP & NODE_PURCHASE
       await client.exec(`
         ALTER TABLE financial_ledger_entries DROP CONSTRAINT IF EXISTS chk_fle_source_type;
-        ALTER TABLE financial_ledger_entries ADD CONSTRAINT chk_fle_source_type CHECK (source_type IN ('REFERRAL_COMMISSION', 'MATCHING_BONUS', 'PROMOTION_BONUS', 'NODE_REWARD', 'WITHDRAWAL', 'BLOCKCHAIN_DEPOSIT', 'COIN_SWAP'));
+        ALTER TABLE financial_ledger_entries ADD CONSTRAINT chk_fle_source_type CHECK (source_type IN ('REFERRAL_COMMISSION', 'MATCHING_BONUS', 'PROMOTION_BONUS', 'NODE_REWARD', 'WITHDRAWAL', 'BLOCKCHAIN_DEPOSIT', 'COIN_SWAP', 'NODE_PURCHASE', 'USDT_DEPOSIT', 'BNB_DEPOSIT', 'DEPOSIT_CREDIT'));
       `);
     } catch (task171Err) {
       console.warn('[DB Migration] Task #17.1 BSC schema migration warning:', task171Err);
@@ -783,7 +783,7 @@ async function initSchema(client: DatabaseClient) {
 
         -- Update financial_ledger_entries constraint to support COIN_SWAP
         ALTER TABLE financial_ledger_entries DROP CONSTRAINT IF EXISTS chk_fle_source_type;
-        ALTER TABLE financial_ledger_entries ADD CONSTRAINT chk_fle_source_type CHECK (source_type IN ('REFERRAL_COMMISSION', 'MATCHING_BONUS', 'PROMOTION_BONUS', 'NODE_REWARD', 'WITHDRAWAL', 'BLOCKCHAIN_DEPOSIT', 'COIN_SWAP'));
+        ALTER TABLE financial_ledger_entries ADD CONSTRAINT chk_fle_source_type CHECK (source_type IN ('REFERRAL_COMMISSION', 'MATCHING_BONUS', 'PROMOTION_BONUS', 'NODE_REWARD', 'WITHDRAWAL', 'BLOCKCHAIN_DEPOSIT', 'COIN_SWAP', 'NODE_PURCHASE', 'USDT_DEPOSIT', 'BNB_DEPOSIT', 'DEPOSIT_CREDIT'));
       `);
     } catch (task191Err) {
       console.warn('[DB Migration] Task #19.1 Swap Transactions schema migration warning:', task191Err);

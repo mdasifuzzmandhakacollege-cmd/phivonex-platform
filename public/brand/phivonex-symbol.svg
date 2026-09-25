@@ -1,71 +1,43 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 320" fill="none" width="100%" height="100%">
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
   <defs>
-    <!-- Background Radial Aura for Symbol Glow -->
-    <radialGradient id="pxSymbolAura" cx="50%" cy="50%" r="50%">
-      <stop offset="0%" stop-color="#00CFFF" stop-opacity="0.25" />
-      <stop offset="60%" stop-color="#168BFF" stop-opacity="0.08" />
-      <stop offset="100%" stop-color="#7057FF" stop-opacity="0" />
+    <radialGradient id="aura" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#00CFFF" stop-opacity="0.45" />
+      <stop offset="60%" stop-color="#0088FF" stop-opacity="0.2" />
+      <stop offset="100%" stop-color="#0044AA" stop-opacity="0" />
     </radialGradient>
-
-    <!-- Ribbon Facet Gradients matching the official visual reference -->
-    <!-- Top Outer Ribbon: Vibrant Cyan to Electric Sky Blue -->
-    <linearGradient id="pxGradTopRibbon" x1="0%" y1="0%" x2="100%" y2="100%">
+    <linearGradient id="tileBg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0B1C38" />
+      <stop offset="40%" stop-color="#060E1E" />
+      <stop offset="100%" stop-color="#02050B" />
+    </linearGradient>
+    <linearGradient id="borderGrad" x1="0%" y1="0%" x2="100%" y2="100%">
       <stop offset="0%" stop-color="#80EAFF" />
-      <stop offset="35%" stop-color="#00CFFF" />
-      <stop offset="80%" stop-color="#168BFF" />
-      <stop offset="100%" stop-color="#1760E8" />
-    </linearGradient>
-
-    <!-- Top-Right Bevel Fold -->
-    <linearGradient id="pxGradRightBevel" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#00CFFF" />
-      <stop offset="40%" stop-color="#168BFF" />
-      <stop offset="100%" stop-color="#0D47A1" />
-    </linearGradient>
-
-    <!-- Vertical Stem / Left Pillar: Violet to Cyan -->
-    <linearGradient id="pxGradStem" x1="0%" y1="100%" x2="0%" y2="0%">
-      <stop offset="0%" stop-color="#7057FF" />
-      <stop offset="35%" stop-color="#4F46E5" />
-      <stop offset="70%" stop-color="#168BFF" />
+      <stop offset="30%" stop-color="#00CFFF" />
+      <stop offset="70%" stop-color="#0066FF" />
       <stop offset="100%" stop-color="#00CFFF" />
     </linearGradient>
-
-    <!-- Left Inner Facet: Translucent Purple-Indigo -->
-    <linearGradient id="pxGradLeftInner" x1="0%" y1="100%" x2="100%" y2="0%">
-      <stop offset="0%" stop-color="#8B5CF6" stop-opacity="0.9" />
-      <stop offset="60%" stop-color="#6366F1" stop-opacity="0.75" />
-      <stop offset="100%" stop-color="#00CFFF" stop-opacity="0.4" />
+    <linearGradient id="outerArch" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#80EAFF" />
+      <stop offset="35%" stop-color="#00CFFF" />
+      <stop offset="70%" stop-color="#0088FF" />
+      <stop offset="100%" stop-color="#0044CC" />
     </linearGradient>
-
-    <!-- Internal Loop Fold / Return: Deep Space Indigo to Azure -->
-    <linearGradient id="pxGradInnerReturn" x1="100%" y1="100%" x2="0%" y2="0%">
+    <linearGradient id="stemGrad" x1="0%" y1="0%" x2="100%" y2="100%">
       <stop offset="0%" stop-color="#00CFFF" />
-      <stop offset="45%" stop-color="#168BFF" />
-      <stop offset="85%" stop-color="#0A1E4A" />
-      <stop offset="100%" stop-color="#060E24" />
+      <stop offset="50%" stop-color="#0077FF" />
+      <stop offset="100%" stop-color="#003399" />
     </linearGradient>
-
-    <!-- Inner Cavity Back Wall / Shading -->
-    <linearGradient id="pxGradBackdrop" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#09142E" stop-opacity="0.95" />
-      <stop offset="100%" stop-color="#050A18" stop-opacity="0.8" />
+    <linearGradient id="chevronGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#B3F4FF" />
+      <stop offset="50%" stop-color="#00CFFF" />
+      <stop offset="100%" stop-color="#0088FF" />
     </linearGradient>
-
-    <!-- Node Glow Filter -->
-    <filter id="pxNodeGlow" x="-50%" y="-50%" width="200%" height="200%">
-      <feGaussianBlur stdDeviation="3.5" result="blur1" />
-      <feGaussianBlur stdDeviation="1.5" result="blur2" />
-      <feMerge>
-        <feMergeNode in="blur1" />
-        <feMergeNode in="blur2" />
-        <feMergeNode in="SourceGraphic" />
-      </feMerge>
-    </filter>
-
-    <!-- Specular Highlight Filter -->
-    <filter id="pxNeonShine" x="-30%" y="-30%" width="160%" height="160%">
-      <feGaussianBlur stdDeviation="2" result="blur" />
+    <linearGradient id="foldShadow" x1="100%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#002b66" stop-opacity="0.9" />
+      <stop offset="100%" stop-color="#001133" stop-opacity="0.4" />
+    </linearGradient>
+    <filter id="neonGlow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="8" result="blur" />
       <feMerge>
         <feMergeNode in="blur" />
         <feMergeNode in="SourceGraphic" />
@@ -73,77 +45,27 @@
     </filter>
   </defs>
 
-  <!-- Ambient Light Backing -->
-  <circle cx="160" cy="155" r="130" fill="url(#pxSymbolAura)" />
+  <rect x="16" y="16" width="480" height="480" rx="108" fill="url(#aura)" />
+  <rect x="32" y="32" width="448" height="448" rx="96" fill="url(#tileBg)" stroke="url(#borderGrad)" stroke-width="6" filter="url(#neonGlow)" />
+  <path d="M 64 68 C 160 40, 352 40, 448 68" stroke="#80EAFF" stroke-width="3" stroke-linecap="round" opacity="0.6" />
 
-  <!-- 1. Geometric Facet: Back Cavity Depth -->
-  <path d="M 126 96 L 196 66 L 246 112 L 246 172 L 204 208 L 132 168 Z" fill="url(#pxGradBackdrop)" />
+  <g transform="translate(15, 12)">
+    <!-- STEM -->
+    <path d="M 130 100 L 190 100 L 190 320 L 130 400 L 130 100 Z" fill="url(#stemGrad)" />
+    <path d="M 130 400 L 190 320 L 190 230 L 130 230 Z" fill="url(#foldShadow)" />
 
-  <!-- 2. Network Constellation Interior Lines -->
-  <g stroke="#00CFFF" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" opacity="0.85">
-    <!-- Links between 3 internal constellation nodes -->
-    <line x1="124" y1="142" x2="164" y2="114" />
-    <line x1="164" y1="114" x2="208" y2="182" />
-    <line x1="124" y1="142" x2="208" y2="182" />
-    <!-- Fine links to structural vertex facets -->
-    <line x1="124" y1="142" x2="108" y2="204" stroke-opacity="0.45" stroke-dasharray="2 3" />
-    <line x1="164" y1="114" x2="228" y2="118" stroke-opacity="0.45" stroke-dasharray="2 3" />
-    <line x1="208" y1="182" x2="152" y2="236" stroke-opacity="0.45" stroke-dasharray="2 3" />
+    <!-- OUTER ARCH LOOP -->
+    <path d="M 190 100 L 250 100 C 330 100, 390 140, 390 200 C 390 260, 320 300, 240 300 L 190 300 L 250 240 C 290 240, 330 220, 330 190 C 330 160, 290 145, 240 145 L 190 145 Z" fill="url(#outerArch)" />
+
+    <!-- INNER CHEVRON ARROW -->
+    <path d="M 210 145 L 290 200 L 210 255 L 250 255 L 330 200 L 250 145 Z" fill="url(#chevronGrad)" />
+
+    <!-- LOWER RETURN FOLD -->
+    <path d="M 190 300 L 240 300 C 300 300, 340 270, 360 235 L 315 210 C 295 230, 260 245, 220 245 L 190 245 Z" fill="url(#outerArch)" opacity="0.9" />
+
+    <!-- SPECULAR RIM LINES -->
+    <path d="M 130 100 L 190 100 L 250 100 C 330 100, 390 140, 390 200" stroke="#FFFFFF" stroke-width="4" stroke-linecap="round" opacity="0.8" />
+    <path d="M 210 145 L 290 200 L 210 255" stroke="#FFFFFF" stroke-width="3" stroke-linecap="round" opacity="0.95" />
+    <path d="M 130 100 L 130 400" stroke="#80EAFF" stroke-width="3" stroke-linecap="round" opacity="0.75" />
   </g>
-
-  <!-- 3. Geometric Facet: Left Vertical Stem & Bottom-Left Violet Wing -->
-  <path d="M 88 126 L 126 96 L 126 238 L 88 206 Z" fill="url(#pxGradLeftInner)" opacity="0.85" />
-  <path d="M 88 126 L 126 96 L 126 142 L 108 204 L 88 206 Z" fill="url(#pxGradStem)" />
-  <path d="M 108 142 L 132 168 L 132 238 L 108 204 Z" fill="url(#pxGradStem)" />
-
-  <!-- 4. Geometric Facet: Top Hexagonal Arch Ribbon (Folds Over to Right) -->
-  <path d="M 88 126 L 160 62 L 196 66 L 126 96 Z" fill="url(#pxGradTopRibbon)" />
-  <path d="M 160 62 L 232 94 L 196 66 Z" fill="url(#pxGradTopRibbon)" />
-  <path d="M 232 94 L 254 118 L 246 112 L 196 66 Z" fill="url(#pxGradRightBevel)" />
-
-  <!-- 5. Geometric Facet: Right Outer Facet & Inward Loop (Forms the 'P') -->
-  <path d="M 254 118 L 254 168 L 246 172 L 246 112 Z" fill="url(#pxGradRightBevel)" />
-  <path d="M 254 168 L 216 204 L 204 208 L 246 172 Z" fill="url(#pxGradInnerReturn)" />
-  
-  <!-- 6. Inner Fold Ribbon Returning to Stem Base (Diagonal P Leg) -->
-  <path d="M 216 204 L 152 236 L 132 238 L 204 208 Z" fill="url(#pxGradInnerReturn)" />
-  <path d="M 152 236 L 152 202 L 132 168 L 132 238 Z" fill="url(#pxGradTopRibbon)" />
-
-  <!-- 7. Specular Edge Neon Highlights -->
-  <!-- Outer Top Left Edge -->
-  <path d="M 88 126 L 160 62 L 232 94 L 254 118" stroke="#FFFFFF" stroke-width="1.8" stroke-linecap="round" opacity="0.9" filter="url(#pxNeonShine)" />
-  <!-- Left Vertical Edge -->
-  <path d="M 88 126 L 88 206" stroke="#80EAFF" stroke-width="1.5" stroke-linecap="round" opacity="0.75" />
-  <!-- Inner Dynamic Ridge -->
-  <path d="M 126 96 L 196 66 L 246 112 L 246 172 L 204 208 L 132 238" stroke="#00CFFF" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" opacity="0.6" />
-  <!-- Lower Edge Accent -->
-  <path d="M 132 238 L 152 236 L 216 204" stroke="#80EAFF" stroke-width="1.5" stroke-linecap="round" opacity="0.85" />
-
-  <!-- 8. Three Luminous Connected Constellation Nodes -->
-  <!-- Node 1: Left Interior Node (x: 124, y: 142) -->
-  <g transform="translate(124, 142)" filter="url(#pxNodeGlow)">
-    <circle cx="0" cy="0" r="11" fill="#00CFFF" fill-opacity="0.3" />
-    <circle cx="0" cy="0" r="7.5" fill="#168BFF" />
-    <circle cx="0" cy="0" r="5.5" fill="#80EAFF" />
-    <circle cx="-1.5" cy="-1.5" r="2.2" fill="#FFFFFF" />
-  </g>
-
-  <!-- Node 2: Top-Right Interior Node (x: 164, y: 114) -->
-  <g transform="translate(164, 114)" filter="url(#pxNodeGlow)">
-    <circle cx="0" cy="0" r="12" fill="#00CFFF" fill-opacity="0.35" />
-    <circle cx="0" cy="0" r="8" fill="#168BFF" />
-    <circle cx="0" cy="0" r="6" fill="#80EAFF" />
-    <circle cx="-1.5" cy="-1.5" r="2.5" fill="#FFFFFF" />
-  </g>
-
-  <!-- Node 3: Bottom-Right Interior Node (x: 208, y: 182) -->
-  <g transform="translate(208, 182)" filter="url(#pxNodeGlow)">
-    <circle cx="0" cy="0" r="13" fill="#00CFFF" fill-opacity="0.4" />
-    <circle cx="0" cy="0" r="9" fill="#168BFF" />
-    <circle cx="0" cy="0" r="6.5" fill="#80EAFF" />
-    <circle cx="-2" cy="-2" r="2.8" fill="#FFFFFF" />
-  </g>
-
-  <!-- Ground Specular Reflection Flare -->
-  <ellipse cx="160" cy="274" rx="42" ry="4" fill="#00CFFF" fill-opacity="0.45" filter="url(#pxNodeGlow)" />
 </svg>

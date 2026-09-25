@@ -58,7 +58,7 @@ const NAV_ITEMS: NavItem[] = [
   { id: 'referrals', label: 'Direct Referrals', icon: Users },
   { id: 'wallet', label: 'Wallet & Ledger', icon: Wallet },
   { id: 'swap', label: 'Coin Swap', icon: ArrowLeftRight },
-  { id: 'deposit', label: 'BNB Deposit', icon: ArrowDownLeft },
+  { id: 'deposit', label: 'Deposit (BNB/USDT)', icon: ArrowDownLeft },
   { id: 'withdrawals', label: 'Withdrawals', icon: ArrowUpRight },
   { id: 'notifications', label: 'Notifications', icon: Bell },
   { id: 'rewards', label: 'Rewards', icon: Coins, comingSoon: true },

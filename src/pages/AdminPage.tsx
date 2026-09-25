@@ -29,6 +29,7 @@ import { PhivonexLogo } from '../components/brand/PhivonexLogo';
 import { WithdrawalManagement } from '../components/admin/WithdrawalManagement';
 import { EconomicControls } from '../components/admin/EconomicControls';
 import { FinancialReconciliationView } from '../components/admin/FinancialReconciliationView';
+import { AdminAuditLog } from '../components/admin/AdminAuditLog';
 
 interface AdminPageProps {
   onNavigate: (route: string) => void;
@@ -483,35 +484,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onNavigate, currentPath = 
           )}
 
           {/* TAB 5: AUDIT LOGS */}
-          {activeTab === 'audit' && (
-            <div className="p-6 rounded-2xl bg-[#07101D] border border-white/[0.08] space-y-4">
-              <h2 className="text-sm font-bold text-white">Administrative Financial Action Audit Trail</h2>
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-xs">
-                  <thead>
-                    <tr className="text-[#98A2B3] border-b border-white/[0.06] uppercase text-[10px] font-mono">
-                      <th className="py-2.5 px-3">Action</th>
-                      <th className="py-2.5 px-3">Admin</th>
-                      <th className="py-2.5 px-3">Target ID</th>
-                      <th className="py-2.5 px-3">Audit Details</th>
-                      <th className="py-2.5 px-3">Timestamp</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-white/[0.04]">
-                    {auditList.map((a) => (
-                      <tr key={a.id} className="hover:bg-white/[0.02]">
-                        <td className="py-3 px-3 font-mono font-bold text-[#00CFFF]">{a.action}</td>
-                        <td className="py-3 px-3 font-mono text-white">{a.adminPublicId}</td>
-                        <td className="py-3 px-3 font-mono text-[#98A2B3]">{a.targetId}</td>
-                        <td className="py-3 px-3 text-white">{a.details}</td>
-                        <td className="py-3 px-3 text-[#98A2B3] font-mono">{new Date(a.createdAt).toUTCString()}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
+          {activeTab === 'audit' && <AdminAuditLog />}
         </main>
       </div>
     </div>

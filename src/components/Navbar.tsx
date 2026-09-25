@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Menu, X, ArrowUpRight, Activity, LogOut } from 'lucide-react';
 import { PhivonexLogo } from './brand/PhivonexLogo';
 import { useAuth } from '../context/AuthContext';
+import { PWAInstallHeaderButton } from './PWAInstallPrompt';
 
 interface NavbarProps {
   onExploreClick: () => void;
@@ -71,6 +72,8 @@ export const Navbar: React.FC<NavbarProps> = ({ onExploreClick, onLaunchAppClick
             <Activity className="w-3.5 h-3.5 text-[#00CFFF]" />
             <span>Explore Network</span>
           </button>
+
+          <PWAInstallHeaderButton />
 
           {user ? (
             <div className="flex items-center gap-2">
