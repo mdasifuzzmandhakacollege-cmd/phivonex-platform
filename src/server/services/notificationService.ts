@@ -232,6 +232,39 @@ export async function markAllNotificationsAsRead(userId: string): Promise<number
   return res.rows.length;
 }
 
+/**
+ * Deletes a specific notification for an authenticated user with strict user isolation.
+ */
+export async function deleteNotification(userId: string, publicNotificationId: string): Promise<boolean> {
+  if (!userId || !publicNotificationId) return false;
+  const db = await getDb();
+  const res = await db.query<{ id: string }>(
+    `
+    DELETE FROM notifications
+    WHERE public_notification_id = $1 AND user_id = $2
+    RETURNING id
+    `,
+    [publicNotificationId, userId]
+  );
+  return res.rows.length > 0;
+}
+
+/**
+ * Deletes notifications for an authenticated user (all or read-only).
+ */
+export async function deleteAllNotifications(
+  userId: string,
+  options?: { readOnly?: boolean }
+): Promise<number> {
+  if (!userId) return 0;
+  const db = await getDb();
+  const query = options?.readOnly
+    ? `DELETE FROM notifications WHERE user_id = $1 AND read_at IS NOT NULL RETURNING id`
+    : `DELETE FROM notifications WHERE user_id = $1 RETURNING id`;
+  const res = await db.query<{ id: string }>(query, [userId]);
+  return res.rows.length;
+}
+
 // ============================================================================
 // DOMAIN-SPECIFIC NOTIFICATION HELPERS (FOR REAL PHIVONEX EVENTS)
 // ============================================================================

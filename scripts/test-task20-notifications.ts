@@ -30,6 +30,8 @@ import {
   getUnreadNotificationCount,
   markNotificationAsRead,
   markAllNotificationsAsRead,
+  deleteNotification,
+  deleteAllNotifications,
   notifyNodeActivated,
   notifyReferralEarned,
   notifyMatchingEarned,
@@ -44,7 +46,7 @@ import {
 let passed = 0;
 let failed = 0;
 
-function assert(condition: boolean, msg: string) {
+function assert(condition: any, msg: string) {
   if (condition) {
     console.log(`  ✅ PASS: ${msg}`);
     passed++;
@@ -368,6 +370,74 @@ async function runTask20Tests() {
       [user1Id, concurrentSourceId]
     );
     assert(parseInt((dbRows.rows[0] as any).count, 10) === 1, 'Database contains exactly 1 row after concurrent blast');
+  }
+
+  console.log('\n--- TEST GROUP 9: Deleting Notifications (Single & Bulk) ---');
+  {
+    // Create notifications for testing deletion
+    const delNotif1 = await createNotification({
+      userId: user1Id,
+      type: 'SECURITY_ALERT',
+      title: 'Delete Test 1',
+      message: 'To be deleted individually.',
+    });
+    const delNotif2 = await createNotification({
+      userId: user1Id,
+      type: 'SECURITY_ALERT',
+      title: 'Delete Test 2 (Read)',
+      message: 'To be marked read then deleted via bulk readOnly.',
+    });
+    const delNotif3 = await createNotification({
+      userId: user1Id,
+      type: 'SECURITY_ALERT',
+      title: 'Delete Test 3 (Unread)',
+      message: 'To remain unread during bulk readOnly delete.',
+    });
+
+    assert(delNotif1 !== null && delNotif2 !== null && delNotif3 !== null, 'Created 3 test notifications for deletion');
+
+    // 9.1 Single delete
+    const deleteSuccess = await deleteNotification(user1Id, delNotif1!.id);
+    assert(deleteSuccess === true, 'deleteNotification returns true on existing notification');
+
+    // 9.2 Attempt to delete already deleted notification
+    const deleteAgain = await deleteNotification(user1Id, delNotif1!.id);
+    assert(deleteAgain === false, 'deleteNotification returns false on already deleted notification');
+
+    // 9.3 User isolation: User 1 attempts to delete User 2's notification
+    const testU2Notif = await createNotification({
+      userId: user2Id,
+      type: 'SECURITY_ALERT',
+      title: 'User 2 Isolation Test',
+      message: 'Cannot be deleted by User 1.',
+    });
+    assert(testU2Notif !== null, 'Created User 2 notification for delete isolation test');
+
+    const u2DeleteAttempt = await deleteNotification(user1Id, testU2Notif!.id);
+    assert(u2DeleteAttempt === false, 'User 1 cannot delete User 2 notification (isolation enforced)');
+
+    const u2DbCheck = await db.query<{ count: string }>(
+      `SELECT COUNT(*) as count FROM notifications WHERE public_notification_id = $1`,
+      [testU2Notif!.id]
+    );
+    assert(parseInt(u2DbCheck.rows[0].count, 10) === 1, 'User 2 notification remains untouched in database');
+
+    // 9.4 Bulk delete readOnly
+    await markNotificationAsRead(user1Id, delNotif2!.id);
+    const unreadBeforeBulk = await getUnreadNotificationCount(user1Id);
+
+    const clearedCount = await deleteAllNotifications(user1Id, { readOnly: true });
+    assert(clearedCount >= 1, `deleteAllNotifications(readOnly) deleted read notifications (count: ${clearedCount})`);
+
+    const unreadAfterBulk = await getUnreadNotificationCount(user1Id);
+    assert(unreadAfterBulk === unreadBeforeBulk, 'deleteAllNotifications(readOnly) preserved unread notifications');
+
+    // 9.5 Bulk delete all for User 1
+    const totalDeleted = await deleteAllNotifications(user1Id);
+    assert(totalDeleted >= 1, `deleteAllNotifications deleted remaining notifications (count: ${totalDeleted})`);
+
+    const finalUser1Notifs = await getUserNotifications(user1Id);
+    assert(finalUser1Notifs.total === 0, 'User 1 has 0 remaining notifications after full cleanup');
   }
 
   console.log('========================================================');

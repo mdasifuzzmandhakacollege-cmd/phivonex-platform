@@ -15,28 +15,12 @@ import {
   Clock,
   RefreshCw,
   Inbox,
-  AlertCircle
+  AlertCircle,
+  Trash2
 } from 'lucide-react';
 import { UserProfile } from '../../context/AuthContext';
+import { useNotifications, AppNotification } from '../../context/NotificationContext';
 import { DashboardTab } from './Sidebar';
-
-export interface AppNotification {
-  id: string; // public_notification_id (NTF-XXXXXX)
-  type:
-    | 'NODE_ACTIVATED'
-    | 'REFERRAL_EARNED'
-    | 'MATCHING_EARNED'
-    | 'PROMOTION_EARNED'
-    | 'PHIVO_REWARD'
-    | 'PHIVO_SWAP_COMPLETED'
-    | 'USDT_DEPOSIT_CONFIRMED'
-    | 'WITHDRAWAL_STATUS'
-    | 'SECURITY_ALERT';
-  title: string;
-  message: string;
-  readAt: string | null;
-  createdAt: string;
-}
 
 interface NotificationsViewProps {
   user: UserProfile;
@@ -44,88 +28,51 @@ interface NotificationsViewProps {
 }
 
 export const NotificationsView: React.FC<NotificationsViewProps> = ({ user, onNavigateTab }) => {
-  const [notifications, setNotifications] = useState<AppNotification[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [filterType, setFilterType] = useState<string>('ALL');
-  const [unreadOnly, setUnreadOnly] = useState<boolean>(false);
-  const [unreadCount, setUnreadCount] = useState<number>(0);
-  const [totalCount, setTotalCount] = useState<number>(0);
+  const {
+    notifications,
+    unreadCount,
+    totalCount,
+    loading,
+    refreshing,
+    error,
+    filterType,
+    unreadOnly,
+    setFilterType,
+    setUnreadOnly,
+    refreshNotifications,
+    markAsRead,
+    markAllAsRead,
+    deleteNotification,
+    clearReadNotifications,
+  } = useNotifications();
+
   const [markingAllRead, setMarkingAllRead] = useState(false);
+  const [clearingRead, setClearingRead] = useState(false);
 
-  const fetchNotifications = useCallback(async (isRefresh = false) => {
-    if (isRefresh) setRefreshing(true);
-    else setLoading(true);
-    setError(null);
-
-    try {
-      const params = new URLSearchParams();
-      params.append('limit', '50');
-      if (unreadOnly) params.append('unreadOnly', 'true');
-      if (filterType !== 'ALL') params.append('type', filterType);
-
-      const res = await fetch(`/api/notifications?${params.toString()}`);
-      if (!res.ok) {
-        throw new Error(`Server returned ${res.status}`);
-      }
-      const data = await res.json();
-      setNotifications(data.notifications || []);
-      setTotalCount(data.total || 0);
-      setUnreadCount(data.unreadCount || 0);
-    } catch (err: any) {
-      console.error('[NotificationsView] Failed to fetch notifications:', err);
-      setError('Unable to synchronize notification stream. Please check connection.');
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
-  }, [filterType, unreadOnly]);
-
-  useEffect(() => {
-    fetchNotifications();
-  }, [fetchNotifications]);
-
-  const handleMarkAsRead = async (publicNotificationId: string) => {
-    // Optimistic update
-    setNotifications((prev) =>
-      prev.map((n) =>
-        n.id === publicNotificationId ? { ...n, readAt: new Date().toISOString() } : n
-      )
-    );
-    setUnreadCount((prev) => Math.max(0, prev - 1));
-
-    try {
-      const res = await fetch(`/api/notifications/${publicNotificationId}/read`, {
-        method: 'PATCH',
-      });
-      if (!res.ok) {
-        // Revert on error
-        fetchNotifications(true);
-      }
-    } catch {
-      fetchNotifications(true);
-    }
+  const handleMarkAsRead = async (id: string) => {
+    await markAsRead(id);
   };
 
   const handleMarkAllAsRead = async () => {
     if (unreadCount === 0 || markingAllRead) return;
     setMarkingAllRead(true);
-
-    // Optimistic update
-    const nowIso = new Date().toISOString();
-    setNotifications((prev) => prev.map((n) => ({ ...n, readAt: n.readAt || nowIso })));
-    setUnreadCount(0);
-
     try {
-      await fetch('/api/notifications/read-all', {
-        method: 'POST',
-      });
-    } catch (err) {
-      console.warn('[NotificationsView] Error marking all read:', err);
-      fetchNotifications(true);
+      await markAllAsRead();
     } finally {
       setMarkingAllRead(false);
+    }
+  };
+
+  const handleDeleteNotification = async (id: string) => {
+    await deleteNotification(id);
+  };
+
+  const handleClearReadNotifications = async () => {
+    setClearingRead(true);
+    try {
+      await clearReadNotifications();
+    } finally {
+      setClearingRead(false);
     }
   };
 
@@ -259,7 +206,7 @@ export const NotificationsView: React.FC<NotificationsViewProps> = ({ user, onNa
 
         <div className="flex items-center gap-2 self-start sm:self-center">
           <button
-            onClick={() => fetchNotifications(true)}
+            onClick={() => refreshNotifications()}
             disabled={refreshing}
             className="p-2.5 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.08] text-[#98A2B3] hover:text-white transition-colors cursor-pointer min-h-[40px] min-w-[40px] flex items-center justify-center disabled:opacity-50"
             title="Refresh notifications"
@@ -275,6 +222,17 @@ export const NotificationsView: React.FC<NotificationsViewProps> = ({ user, onNa
             >
               <CheckCheck className="w-4 h-4 text-[#00CFFF]" />
               <span>Mark all read</span>
+            </button>
+          )}
+
+          {notifications.some((n) => n.readAt) && (
+            <button
+              onClick={handleClearReadNotifications}
+              className="py-2 px-3 rounded-xl bg-white/[0.02] hover:bg-white/[0.06] border border-white/[0.06] text-xs text-[#98A2B3] hover:text-white font-medium flex items-center gap-1.5 transition-colors cursor-pointer min-h-[40px]"
+              title="Delete all read notifications"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>Clear read</span>
             </button>
           )}
         </div>
@@ -330,7 +288,7 @@ export const NotificationsView: React.FC<NotificationsViewProps> = ({ user, onNa
           <AlertCircle className="w-8 h-8 text-[#F04438]" />
           <p className="text-sm text-white font-medium">{error}</p>
           <button
-            onClick={() => fetchNotifications()}
+            onClick={() => refreshNotifications()}
             className="px-4 py-2 rounded-xl bg-white/[0.08] hover:bg-white/[0.12] text-xs text-white font-medium cursor-pointer"
           >
             Retry Connection
@@ -439,6 +397,14 @@ export const NotificationsView: React.FC<NotificationsViewProps> = ({ user, onNa
                       <span>Mark read</span>
                     </button>
                   )}
+
+                  <button
+                    onClick={() => handleDeleteNotification(notif.id)}
+                    className="p-1.5 rounded-lg bg-white/[0.02] hover:bg-[#F04438]/10 border border-transparent hover:border-[#F04438]/30 text-[#98A2B3] hover:text-[#F04438] transition-colors cursor-pointer"
+                    title="Delete notification"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
                 </div>
               </div>
             );

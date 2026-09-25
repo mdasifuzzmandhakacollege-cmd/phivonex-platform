@@ -17,6 +17,7 @@ import {
 import { PhivonexLogo } from '../brand/PhivonexLogo';
 import { PhivonexSymbol } from '../brand/PhivonexSymbol';
 import { UserProfile } from '../../context/AuthContext';
+import { useNotifications } from '../../context/NotificationContext';
 import { DashboardTab } from './Sidebar';
 
 interface TopbarProps {
@@ -47,53 +48,22 @@ export const Topbar: React.FC<TopbarProps> = ({
 }) => {
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
   const [isNotifOpen, setIsNotifOpen] = useState(false);
-  const [unreadCount, setUnreadCount] = useState<number>(0);
-  const [recentNotifications, setRecentNotifications] = useState<RecentNotification[]>([]);
-  const [loadingNotifs, setLoadingNotifs] = useState(false);
+  
+  const {
+    unreadCount,
+    notifications,
+    loading: loadingNotifs,
+    markAsRead,
+    markAllAsRead,
+    refreshNotifications,
+  } = useNotifications();
 
   const userMenuRef = useRef<HTMLDivElement>(null);
   const notifMenuRef = useRef<HTMLDivElement>(null);
 
-  // Poll unread notification count
-  const fetchUnreadCount = async () => {
-    try {
-      const res = await fetch('/api/notifications/unread-count');
-      if (res.ok) {
-        const data = await res.json();
-        setUnreadCount(data.unreadCount || 0);
-      }
-    } catch {
-      // Ignore background fetch errors
-    }
-  };
-
-  useEffect(() => {
-    if (!user) return;
-    fetchUnreadCount();
-    const interval = setInterval(fetchUnreadCount, 15000);
-    return () => clearInterval(interval);
-  }, [user]);
-
-  // Fetch recent notifications when dropdown opens
-  const fetchRecentNotifications = async () => {
-    setLoadingNotifs(true);
-    try {
-      const res = await fetch('/api/notifications?limit=5');
-      if (res.ok) {
-        const data = await res.json();
-        setRecentNotifications(data.notifications || []);
-        setUnreadCount(data.unreadCount || 0);
-      }
-    } catch (err) {
-      console.warn('[Topbar] Error loading notifications:', err);
-    } finally {
-      setLoadingNotifs(false);
-    }
-  };
-
   const handleToggleNotif = () => {
     if (!isNotifOpen) {
-      fetchRecentNotifications();
+      refreshNotifications();
       setIsUserMenuOpen(false);
     }
     setIsNotifOpen(!isNotifOpen);
@@ -101,28 +71,15 @@ export const Topbar: React.FC<TopbarProps> = ({
 
   const handleMarkAsRead = async (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    try {
-      await fetch(`/api/notifications/${id}/read`, { method: 'PATCH' });
-      setRecentNotifications((prev) =>
-        prev.map((n) => (n.id === id ? { ...n, readAt: new Date().toISOString() } : n))
-      );
-      setUnreadCount((prev) => Math.max(0, prev - 1));
-    } catch {
-      // Ignore error
-    }
+    await markAsRead(id);
   };
 
   const handleMarkAllRead = async () => {
-    try {
-      await fetch('/api/notifications/read-all', { method: 'POST' });
-      setRecentNotifications((prev) =>
-        prev.map((n) => ({ ...n, readAt: n.readAt || new Date().toISOString() }))
-      );
-      setUnreadCount(0);
-    } catch {
-      // Ignore error
-    }
+    await markAllAsRead();
   };
+
+  // Recent 5 notifications for the preview dropdown
+  const recentNotifications = notifications.slice(0, 5);
 
   // Close menus on outside click
   useEffect(() => {
