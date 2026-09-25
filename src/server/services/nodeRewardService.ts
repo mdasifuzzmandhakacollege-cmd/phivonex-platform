@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { generateEpochPublicId, generateRewardPublicId } from '../utils/idGenerator';
 import { getConfiguredRewardPerNode, REWARD_CURRENCY } from '../config/rewardConfig';
 import { postLedgerCredit, postLedgerReversal } from './walletLedgerService';
+import { isNodeRewardsEnabled, getNodeRewardRatePerEpoch } from './economicService';
 
 export interface RewardEpoch {
   id: string;
@@ -183,14 +184,31 @@ export async function closeAndSettleEpoch(
     };
   }
 
-  // 2. Determine authoritative reward rate per node
+  // 2. Check master switch: Rewards Enabled
+  const rewardsEnabled = await isNodeRewardsEnabled();
+  if (!rewardsEnabled) {
+    return {
+      success: false,
+      error: 'NODE_REWARDS_DISABLED',
+      message: 'Node mining reward distributions are currently disabled by administration.',
+      epochId,
+      publicEpochId,
+      epochNumber,
+      rewardPerNode: 0,
+      eligibleNodesCount: 0,
+      rewardsCreated: 0,
+      totalRewardsDistributedUsd: 0,
+    };
+  }
+
+  // 3. Determine authoritative reward rate per node
   let effectiveRate: number | null = null;
   if (options?.configuredRewardPerNode !== undefined) {
     effectiveRate = getConfiguredRewardPerNode(options.configuredRewardPerNode);
   } else if (epoch.reward_per_node !== null && !isNaN(Number(epoch.reward_per_node)) && Number(epoch.reward_per_node) > 0) {
     effectiveRate = getConfiguredRewardPerNode(Number(epoch.reward_per_node));
   } else {
-    effectiveRate = getConfiguredRewardPerNode();
+    effectiveRate = await getNodeRewardRatePerEpoch() || getConfiguredRewardPerNode();
   }
 
   // If reward rate is NOT configured:

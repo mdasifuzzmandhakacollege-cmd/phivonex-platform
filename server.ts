@@ -17,6 +17,7 @@ import { publicNetworkRouter } from './src/server/routes/publicNetworkRoutes';
 import { withdrawalRouter } from './src/server/routes/withdrawalRoutes';
 import { adminRouter } from './src/server/routes/adminRoutes';
 import { depositRouter } from './src/server/routes/depositRoutes';
+import { economicRouter } from './src/server/routes/economicRoutes';
 import { getDb } from './src/server/db/db';
 import { startMatchingScheduler } from './src/server/services/binaryMatchingScheduler';
 
@@ -75,6 +76,7 @@ async function startServer() {
   app.use('/api/public/network', publicNetworkRouter);
   app.use('/api/withdrawals', withdrawalRouter);
   app.use('/api/deposits', depositRouter);
+  app.use('/api/admin/economics', economicRouter);
   app.use('/api/admin', adminRouter);
 
   // Health check

@@ -1,0 +1,151 @@
+import { Router, Response } from 'express';
+import { requireAdmin, AuthRequest } from '../middleware/authMiddleware';
+import {
+  getAllEconomicConfigs,
+  getEconomicConfigByKey,
+  updateEconomicConfig,
+  getEconomicAuditLogs,
+} from '../services/economicService';
+import { logAdminAction } from '../services/adminService';
+
+export const economicRouter = Router();
+
+// Enforce requireAdmin on ALL economic configuration routes
+economicRouter.use(requireAdmin);
+
+/**
+ * GET /api/admin/economics/configs
+ * Retrieve all system economic configurations grouped by category.
+ */
+economicRouter.get('/configs', async (req: AuthRequest, res: Response) => {
+  try {
+    const configs = await getAllEconomicConfigs();
+    return res.status(200).json({ configs });
+  } catch (err: any) {
+    console.error('[Economic API] Error fetching configs:', err);
+    return res.status(500).json({
+      error: 'SERVER_ERROR',
+      message: 'Failed to retrieve system economic configurations.',
+    });
+  }
+});
+
+/**
+ * GET /api/admin/economics/configs/:key
+ * Retrieve single economic parameter.
+ */
+economicRouter.get('/configs/:key', async (req: AuthRequest, res: Response) => {
+  try {
+    const { key } = req.params;
+    const config = await getEconomicConfigByKey(key);
+    if (!config) {
+      return res.status(404).json({
+        error: 'NOT_FOUND',
+        message: `Economic configuration parameter '${key}' was not found.`,
+      });
+    }
+    return res.status(200).json({ config });
+  } catch (err: any) {
+    console.error('[Economic API] Error fetching config by key:', err);
+    return res.status(500).json({
+      error: 'SERVER_ERROR',
+      message: 'Failed to retrieve economic configuration.',
+    });
+  }
+});
+
+/**
+ * PUT /api/admin/economics/configs/:key
+ * Update an economic configuration parameter with versioning, immutability check, and audit trail.
+ */
+economicRouter.put('/configs/:key', async (req: AuthRequest, res: Response) => {
+  try {
+    const { key } = req.params;
+    const { value, status, effectiveFrom, reason } = req.body;
+
+    if (value === undefined) {
+      return res.status(400).json({
+        error: 'BAD_REQUEST',
+        message: 'Missing configuration value parameter.',
+      });
+    }
+
+    const adminUserId = req.user?.id || null;
+    const adminPublicId = req.user?.public_id || 'SYSTEM_ADMIN';
+    const ipAddress = (req.headers['x-forwarded-for'] as string) || req.ip;
+
+    const { config, auditLog } = await updateEconomicConfig({
+      configKey: key,
+      configValue: value,
+      status: status as any,
+      effectiveFrom: effectiveFrom ? String(effectiveFrom) : undefined,
+      reason: reason ? String(reason) : undefined,
+      adminUserId,
+      adminPublicId,
+      ipAddress,
+    });
+
+    // Also log general admin security audit trail
+    await logAdminAction({
+      adminUserId,
+      adminPublicId,
+      action: `ECONOMIC_CONFIG_UPDATED_${key.toUpperCase()}`,
+      targetType: 'ECONOMIC_CONFIG',
+      targetId: key.toUpperCase(),
+      details: `Admin ${adminPublicId} updated ${key.toUpperCase()} to version ${config.version} (Status: ${config.status}).`,
+      metadata: {
+        key: key.toUpperCase(),
+        version: config.version,
+        oldValue: auditLog.oldValue,
+        newValue: auditLog.newValue,
+        effectiveFrom: config.effectiveFrom,
+        reason: auditLog.reason,
+      },
+      ipAddress,
+    });
+
+    return res.status(200).json({
+      success: true,
+      config,
+      auditLog,
+      message: `Economic parameter '${key}' successfully updated to version ${config.version}.`,
+    });
+  } catch (err: any) {
+    console.error('[Economic API] Error updating config:', err);
+    const msg = err.message || 'Failed to update economic configuration.';
+    if (msg.startsWith('IMMUTABLE_PARAMETER_ERROR')) {
+      return res.status(403).json({ error: 'IMMUTABLE_PARAMETER_ERROR', message: msg });
+    }
+    if (msg.startsWith('INVALID_VALUE') || msg.startsWith('BAD_REQUEST')) {
+      return res.status(400).json({ error: 'INVALID_VALUE', message: msg });
+    }
+    if (msg.startsWith('NOT_FOUND')) {
+      return res.status(404).json({ error: 'NOT_FOUND', message: msg });
+    }
+    return res.status(500).json({
+      error: 'SERVER_ERROR',
+      message: msg,
+    });
+  }
+});
+
+/**
+ * GET /api/admin/economics/audit-logs
+ * Retrieve versioned audit history of economic parameter adjustments.
+ */
+economicRouter.get('/audit-logs', async (req: AuthRequest, res: Response) => {
+  try {
+    const page = parseInt(req.query.page as string, 10) || 1;
+    const limit = parseInt(req.query.limit as string, 10) || 20;
+    const configKey = (req.query.configKey as string) || undefined;
+
+    const data = await getEconomicAuditLogs(page, limit, configKey);
+    return res.status(200).json(data);
+  } catch (err: any) {
+    console.error('[Economic API] Error fetching audit logs:', err);
+    return res.status(500).json({
+      error: 'SERVER_ERROR',
+      message: 'Failed to retrieve economic audit trail.',
+    });
+  }
+});

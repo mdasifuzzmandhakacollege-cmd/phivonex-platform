@@ -214,7 +214,7 @@ async function initSchema(client: DatabaseClient) {
         created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
         CONSTRAINT chk_node_order_status CHECK (status IN ('PENDING', 'SETTLING', 'COMPLETED', 'CANCELLED', 'EXPIRED', 'FAILED')),
-        CONSTRAINT chk_node_order_amount CHECK (amount_usd = 1000.00)
+        CONSTRAINT chk_node_order_amount CHECK (amount_usd > 0)
       );
 
       CREATE TABLE IF NOT EXISTS referral_commissions (
@@ -229,7 +229,7 @@ async function initSchema(client: DatabaseClient) {
         earned_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
         reversed_at TIMESTAMP WITH TIME ZONE NULL,
         created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        CONSTRAINT chk_commission_amount CHECK (amount_usd = 50.00),
+        CONSTRAINT chk_commission_amount CHECK (amount_usd >= 0),
         CONSTRAINT chk_commission_status CHECK (status IN ('EARNED', 'REVERSED')),
         CONSTRAINT chk_commission_no_self CHECK (sponsor_user_id != referred_user_id)
       );
@@ -693,11 +693,68 @@ async function initSchema(client: DatabaseClient) {
       console.warn('[DB Migration] Task #17.1 BSC schema migration warning:', task171Err);
     }
 
+    // Task #19: System Economic Configurations & Versioned Audit Trail Tables
+    try {
+      await client.exec(`
+        CREATE TABLE IF NOT EXISTS system_economic_configs (
+          id UUID PRIMARY KEY,
+          config_key VARCHAR(100) UNIQUE NOT NULL,
+          config_value TEXT NOT NULL,
+          category VARCHAR(50) NOT NULL,
+          description TEXT NOT NULL,
+          status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE',
+          version INTEGER NOT NULL DEFAULT 1,
+          effective_from TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_by_admin_id UUID NULL REFERENCES users(id) ON DELETE SET NULL,
+          updated_by_admin_public_id VARCHAR(50) NOT NULL DEFAULT 'SYSTEM_INIT',
+          created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          CONSTRAINT chk_sec_status CHECK (status IN ('ACTIVE', 'PAUSED', 'DISABLED'))
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_sec_config_key ON system_economic_configs (config_key);
+        CREATE INDEX IF NOT EXISTS idx_sec_category ON system_economic_configs (category);
+        CREATE INDEX IF NOT EXISTS idx_sec_status ON system_economic_configs (status);
+
+        CREATE TABLE IF NOT EXISTS economic_config_audit_logs (
+          id UUID PRIMARY KEY,
+          config_key VARCHAR(100) NOT NULL,
+          category VARCHAR(50) NOT NULL,
+          old_value TEXT NOT NULL,
+          new_value TEXT NOT NULL,
+          version INTEGER NOT NULL,
+          admin_user_id UUID NULL REFERENCES users(id) ON DELETE SET NULL,
+          admin_public_id VARCHAR(50) NOT NULL,
+          reason TEXT NULL,
+          effective_from TIMESTAMP WITH TIME ZONE NOT NULL,
+          ip_address VARCHAR(100) NULL,
+          created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_ecal_config_key ON economic_config_audit_logs (config_key);
+        CREATE INDEX IF NOT EXISTS idx_ecal_category ON economic_config_audit_logs (category);
+        CREATE INDEX IF NOT EXISTS idx_ecal_admin ON economic_config_audit_logs (admin_user_id);
+        CREATE INDEX IF NOT EXISTS idx_ecal_created ON economic_config_audit_logs (created_at DESC);
+
+        -- Relax node_orders and referral_commissions amount constraints to support dynamic admin economic controls
+        ALTER TABLE node_orders DROP CONSTRAINT IF EXISTS chk_node_order_amount;
+        ALTER TABLE node_orders ADD CONSTRAINT chk_node_order_amount CHECK (amount_usd > 0);
+
+        ALTER TABLE referral_commissions DROP CONSTRAINT IF EXISTS chk_commission_amount;
+        ALTER TABLE referral_commissions ADD CONSTRAINT chk_commission_amount CHECK (amount_usd >= 0);
+      `);
+    } catch (task19Err) {
+      console.warn('[DB Migration] Task #19 Economic Configs schema migration warning:', task19Err);
+    }
+
     // 3. Backfill existing users with missing public_id, user_referrals, and binary_placements
     await backfillExistingUsers(client);
 
     // 4. Seed Genesis Nodes inventory (10,000 nodes)
     await seedGenesisNodes(client);
+
+    // 5. Seed System Economic Parameters
+    await seedEconomicConfigs(client);
 
     console.log('[DB] PostgreSQL schema & Task #6 Genesis Node migrations initialized successfully.');
   } catch (err) {
@@ -877,6 +934,134 @@ async function seedGenesisNodes(client: DatabaseClient) {
     }
   } catch (err) {
     console.error('[DB Migration] Error during Genesis Nodes seeding:', err);
+  }
+}
+
+/**
+ * Task #19: Seed default system economic configuration parameters.
+ * Idempotently inserts default values if missing without overwriting configured historical values.
+ */
+async function seedEconomicConfigs(client: DatabaseClient) {
+  try {
+    const defaultConfigs = [
+      {
+        key: 'NODE_BASE_PRICE_USD',
+        value: JSON.stringify(1000.00),
+        category: 'NODE',
+        description: 'Base purchase price in USD per Genesis Node',
+      },
+      {
+        key: 'NODE_SALES_ENABLED',
+        value: JSON.stringify(true),
+        category: 'NODE',
+        description: 'Master switch for Genesis Node sales and reservations',
+      },
+      {
+        key: 'GENESIS_NODE_CAP',
+        value: JSON.stringify(GENESIS_NODE_CAP),
+        category: 'NODE',
+        description: 'Maximum Genesis Node issuance limit (Immutable)',
+      },
+      {
+        key: 'DIRECT_REFERRAL_COMMISSION_USD',
+        value: JSON.stringify(50.00),
+        category: 'REFERRAL',
+        description: 'Commission earned by sponsor per activated node purchase (future events only)',
+      },
+      {
+        key: 'MATCHING_TIERS_CONFIG',
+        value: JSON.stringify([
+          { units: 2, rewardUsd: 20 },
+          { units: 4, rewardUsd: 40 },
+          { units: 8, rewardUsd: 80 },
+          { units: 20, rewardUsd: 200 },
+          { units: 50, rewardUsd: 500 },
+          { units: 100, rewardUsd: 1000 },
+        ]),
+        category: 'MATCHING',
+        description: 'Daily binary volume balance matching bonus reward tiers',
+      },
+      {
+        key: 'PROMOTION_MILESTONES_CONFIG',
+        value: JSON.stringify([
+          { milestone: '20_20', units: 20, rewardUsd: 500 },
+          { milestone: '50_50', units: 50, rewardUsd: 1500 },
+          { milestone: '100_100', units: 100, rewardUsd: 3500 },
+        ]),
+        category: 'PROMOTION',
+        description: 'Career promotion volume milestone bonus rewards',
+      },
+      {
+        key: 'NODE_REWARDS_ENABLED',
+        value: JSON.stringify(true),
+        category: 'REWARDS',
+        description: 'Master switch for daily epoch node mining reward distributions',
+      },
+      {
+        key: 'NODE_REWARD_RATE_PER_EPOCH',
+        value: JSON.stringify(null), // Must remain null until explicitly configured by admin
+        category: 'REWARDS',
+        description: 'Authoritative reward payout rate per Active Node per Epoch (USD). Unconfigured by default.',
+      },
+      {
+        key: 'INTERNAL_COIN_PRICE_USDT',
+        value: JSON.stringify({
+          coinSymbol: 'PHX',
+          priceUsdt: 0.10,
+          effectiveFrom: new Date().toISOString(),
+          swapEnabled: true,
+        }),
+        category: 'COIN_PRICE',
+        description: 'PHIVONEX internal coin conversion valuation rate against USDT',
+      },
+      {
+        key: 'INTERNAL_COIN_SWAP_ENABLED',
+        value: JSON.stringify(true),
+        category: 'COIN_PRICE',
+        description: 'Master toggle enabling or disabling user coin-to-USDT swaps',
+      },
+      {
+        key: 'CRYPTO_DEPOSITS_ENABLED',
+        value: JSON.stringify(true),
+        category: 'GATEWAY',
+        description: 'BNB / USDT cryptocurrency blockchain deposit listener master switch',
+      },
+      {
+        key: 'CRYPTO_WITHDRAWALS_ENABLED',
+        value: JSON.stringify(true),
+        category: 'GATEWAY',
+        description: 'Cryptocurrency blockchain on-chain withdrawal broadcast master switch',
+      },
+      {
+        key: 'BSC_REQUIRED_CONFIRMATIONS',
+        value: JSON.stringify(3),
+        category: 'GATEWAY',
+        description: 'Required block confirmations on BNB Smart Chain before crediting deposit',
+      },
+      {
+        key: 'AUTO_WITHDRAWAL_ENABLED',
+        value: JSON.stringify(false),
+        category: 'GATEWAY',
+        description: 'Automated on-chain broadcast for approved withdrawals without manual admin signing',
+      },
+    ];
+
+    for (const cfg of defaultConfigs) {
+      const id = uuidv4();
+      await client.query(
+        `
+        INSERT INTO system_economic_configs (
+          id, config_key, config_value, category, description, status, version, effective_from, updated_by_admin_public_id, created_at, updated_at
+        ) VALUES ($1, $2, $3, $4, $5, 'ACTIVE', 1, CURRENT_TIMESTAMP, 'SYSTEM_INIT', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        ON CONFLICT (config_key) DO NOTHING;
+        `,
+        [id, cfg.key, cfg.value, cfg.category, cfg.description]
+      );
+    }
+
+    console.log('[DB Migration] System Economic configuration parameters initialized.');
+  } catch (err) {
+    console.error('[DB Migration] Error during economic configs seeding:', err);
   }
 }
 

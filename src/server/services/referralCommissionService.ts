@@ -7,6 +7,7 @@ import {
 } from '../../config/referralConfig';
 import { formatSafeDisplayName } from '../utils/idGenerator';
 import { postLedgerCredit, postLedgerReversal } from './walletLedgerService';
+import { getDirectReferralCommissionRate } from './economicService';
 
 export interface SafeReferralCommission {
   publicCommissionId: string;
@@ -141,6 +142,7 @@ export async function processNodeActivationCommission(
   }
 
   const commissionId = uuidv4();
+  const commissionRate = await getDirectReferralCommissionRate();
 
   // 6. Insert Authoritative Commission Record
   const insertRes = await db.query<{
@@ -168,7 +170,7 @@ export async function processNodeActivationCommission(
       buyerUserId,
       nodeId,
       orderId,
-      DIRECT_REFERRAL_COMMISSION_USD.toFixed(2),
+      commissionRate.toFixed(2),
     ]
   );
 

@@ -166,25 +166,24 @@ export const WithdrawalsView: React.FC<WithdrawalsViewProps> = ({ user, onNaviga
 
   // Handle User Cancellation
   const handleCancelRequest = async (publicWithdrawalId: string) => {
-    if (!window.confirm(`Are you sure you want to cancel withdrawal request ${publicWithdrawalId}? Reserved funds will be immediately released back to your available balance.`)) {
-      return;
-    }
-
     try {
       setCancellingId(publicWithdrawalId);
+      setFormError(null);
       const res = await fetch(`/api/withdrawals/${publicWithdrawalId}/cancel`, {
         method: 'POST',
       });
 
       if (!res.ok) {
         const data = await res.json();
-        alert(data.message || 'Failed to cancel withdrawal.');
+        setFormError(data.message || 'Failed to cancel withdrawal.');
         return;
       }
 
+      setFormSuccess(`Withdrawal ${publicWithdrawalId} cancelled successfully. Funds returned to balance.`);
       await fetchData();
     } catch (err) {
       console.error('[WithdrawalsView] Cancel error:', err);
+      setFormError('Failed to cancel withdrawal due to network error.');
     } finally {
       setCancellingId(null);
     }

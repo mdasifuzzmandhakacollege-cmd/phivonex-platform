@@ -22,10 +22,12 @@ import {
   ChevronRight,
   ShieldCheck,
   DollarSign,
-  Info
+  Info,
+  Sliders
 } from 'lucide-react';
 import { PhivonexLogo } from '../components/brand/PhivonexLogo';
 import { WithdrawalManagement } from '../components/admin/WithdrawalManagement';
+import { EconomicControls } from '../components/admin/EconomicControls';
 
 interface AdminPageProps {
   onNavigate: (route: string) => void;
@@ -34,6 +36,7 @@ interface AdminPageProps {
 
 export type AdminTab =
   | 'overview'
+  | 'economics'
   | 'users'
   | 'nodes'
   | 'orders'
@@ -47,6 +50,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onNavigate, currentPath = 
 
   const getTabFromPath = (path: string): AdminTab => {
     const clean = path.toLowerCase().split('?')[0];
+    if (clean.includes('/economics')) return 'economics';
     if (clean.includes('/users')) return 'users';
     if (clean.includes('/nodes')) return 'nodes';
     if (clean.includes('/orders')) return 'orders';
@@ -200,6 +204,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onNavigate, currentPath = 
 
   const NAV_ITEMS = [
     { id: 'overview' as AdminTab, label: 'Overview', icon: LayoutDashboard },
+    { id: 'economics' as AdminTab, label: 'Economic Controls', icon: Sliders },
     { id: 'users' as AdminTab, label: 'Users', icon: Users },
     { id: 'nodes' as AdminTab, label: 'Nodes Inventory', icon: Server },
     { id: 'orders' as AdminTab, label: 'Node Orders', icon: ShoppingBag },
@@ -358,7 +363,10 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onNavigate, currentPath = 
             </div>
           )}
 
-          {/* TAB 2: USERS */}
+          {/* TAB 2: ECONOMIC CONTROLS */}
+          {activeTab === 'economics' && <EconomicControls />}
+
+          {/* TAB 3: USERS */}
           {activeTab === 'users' && (
             <div className="p-6 rounded-2xl bg-[#07101D] border border-white/[0.08] space-y-4">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-white/[0.08]">

@@ -11,6 +11,7 @@ import {
 import { processNodeActivationCommission, SafeReferralCommission } from './referralCommissionService';
 import { propagateNodeSalesVolume } from './binaryVolumeService';
 import { broadcastPublicEvent } from './publicNetworkService';
+import { getNodeBasePrice, isNodeSalesEnabled } from './economicService';
 
 export interface SafeNodeOrder {
   publicOrderId: string;
@@ -98,6 +99,15 @@ export async function createNodeReservation(
   order: SafeNodeOrder;
   isExisting: boolean;
 }> {
+  // 0. Check Master Economic Switch: Node Sales Enabled
+  const salesEnabled = await isNodeSalesEnabled();
+  if (!salesEnabled) {
+    const error: any = new Error('NODE_SALES_PAUSED: Genesis Node sales and reservations are currently paused by administration.');
+    error.code = 'NODE_SALES_PAUSED';
+    error.statusCode = 403;
+    throw error;
+  }
+
   const db = await getDb();
 
   // 1. First sweep expired reservations to ensure accurate availability
@@ -281,6 +291,7 @@ export async function createNodeReservation(
     const cleanIdempotencyKey = idempotencyKey && idempotencyKey.trim().length > 0 ? idempotencyKey.trim() : null;
 
     const expiresAt = new Date(Date.now() + RESERVATION_EXPIRY_MINUTES * 60 * 1000);
+    const nodePrice = await getNodeBasePrice();
 
     const orderInsertRes = await db.query<{
       id: string;
@@ -314,7 +325,7 @@ export async function createNodeReservation(
         userId,
         candidateNode.id,
         candidateNode.node_number,
-        NODE_BASE_PRICE_USD, // Server-authoritative $1,000 USD
+        nodePrice, // Server-authoritative Node Price
         'USD',
         'PENDING',
         paymentMethod,
