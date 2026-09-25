@@ -3,6 +3,7 @@ import { getDb } from '../db/db';
 import { requireAuth, AuthRequest } from '../middleware/authMiddleware';
 import { GENESIS_NODE_CAP, NODE_BASE_PRICE_USD } from '../../config/nodeConfig';
 import { cleanupExpiredReservations } from '../services/nodeOrderService';
+import { getNodeRewardStatsForUser } from '../services/nodeRewardService';
 
 const router = Router();
 
@@ -80,6 +81,7 @@ router.get('/me', requireAuth, async (req: AuthRequest, res: Response): Promise<
     const db = await getDb();
 
     const nodesRes = await db.query<{
+      id: string;
       node_number: number;
       public_node_id: string;
       status: string;
@@ -87,6 +89,7 @@ router.get('/me', requireAuth, async (req: AuthRequest, res: Response): Promise<
     }>(
       `
       SELECT 
+        id,
         node_number,
         public_node_id,
         status,
@@ -98,12 +101,25 @@ router.get('/me', requireAuth, async (req: AuthRequest, res: Response): Promise<
       [user.id]
     );
 
-    const safeNodes = nodesRes.rows.map((n) => ({
-      publicNodeId: n.public_node_id,
-      nodeNumber: n.node_number,
-      status: n.status,
-      activatedAt: n.activated_at ? n.activated_at.toISOString() : null,
-    }));
+    const rewardStats = await getNodeRewardStatsForUser(user.id);
+
+    const safeNodes = nodesRes.rows.map((n) => {
+      const stat = rewardStats[n.id] || {
+        totalRewards: 0,
+        currentRewardState: 'READY' as const,
+        latestRewardEpoch: null,
+      };
+
+      return {
+        publicNodeId: n.public_node_id,
+        nodeNumber: n.node_number,
+        status: n.status,
+        activatedAt: n.activated_at ? n.activated_at.toISOString() : null,
+        totalRewards: stat.totalRewards,
+        currentRewardState: stat.currentRewardState,
+        latestRewardEpoch: stat.latestRewardEpoch,
+      };
+    });
 
     res.status(200).json({
       nodes: safeNodes,

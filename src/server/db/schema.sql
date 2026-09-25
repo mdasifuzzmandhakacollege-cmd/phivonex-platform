@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS users (
   country VARCHAR(100) NOT NULL,
   password_hash TEXT NOT NULL,
   status VARCHAR(50) NOT NULL DEFAULT 'ACTIVE',
+  role VARCHAR(20) NOT NULL DEFAULT 'USER',
   email_verified_at TIMESTAMP WITH TIME ZONE NULL,
   pending_referral_code VARCHAR(50) NULL,
   created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -174,4 +175,217 @@ CREATE TABLE IF NOT EXISTS binary_placements (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_binary_parent_side ON binary_placements (parent_user_id, side) WHERE parent_user_id IS NOT NULL AND side IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_binary_placements_parent ON binary_placements (parent_user_id);
 CREATE INDEX IF NOT EXISTS idx_binary_placements_status ON binary_placements (status);
+
+-- Task #10: Binary Volume Engine Tables
+CREATE TABLE IF NOT EXISTS binary_volume_events (
+  id UUID PRIMARY KEY,
+  public_event_id VARCHAR(50) UNIQUE NOT NULL,
+  beneficiary_user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  source_user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  source_node_id UUID NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+  side VARCHAR(10) NOT NULL,
+  volume_units INTEGER NOT NULL DEFAULT 1,
+  status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE',
+  business_date DATE NOT NULL,
+  occurred_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  reversed_at TIMESTAMP WITH TIME ZONE NULL,
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT uq_bve_beneficiary_node UNIQUE (beneficiary_user_id, source_node_id),
+  CONSTRAINT chk_bve_side CHECK (side IN ('LEFT', 'RIGHT')),
+  CONSTRAINT chk_bve_status CHECK (status IN ('ACTIVE', 'REVERSED')),
+  CONSTRAINT chk_bve_units CHECK (volume_units > 0)
+);
+
+CREATE TABLE IF NOT EXISTS binary_daily_volumes (
+  id UUID PRIMARY KEY,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  business_date DATE NOT NULL,
+  left_units INTEGER NOT NULL DEFAULT 0,
+  right_units INTEGER NOT NULL DEFAULT 0,
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT uq_bdv_user_date UNIQUE (user_id, business_date),
+  CONSTRAINT chk_bdv_left CHECK (left_units >= 0),
+  CONSTRAINT chk_bdv_right CHECK (right_units >= 0)
+);
+
+CREATE TABLE IF NOT EXISTS binary_volume_balances (
+  user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  carry_left_units INTEGER NOT NULL DEFAULT 0,
+  carry_right_units INTEGER NOT NULL DEFAULT 0,
+  last_settled_business_date DATE NULL,
+  updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT chk_bvb_carry_left CHECK (carry_left_units >= 0),
+  CONSTRAINT chk_bvb_carry_right CHECK (carry_right_units >= 0)
+);
+
+-- Task #11: Daily Binary Matching Settlement Engine Tables
+CREATE TABLE IF NOT EXISTS binary_matching_settlements (
+  id UUID PRIMARY KEY,
+  public_settlement_id VARCHAR(50) UNIQUE NOT NULL,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  business_date DATE NOT NULL,
+  available_left_units INTEGER NOT NULL,
+  available_right_units INTEGER NOT NULL,
+  consumed_left_units INTEGER NOT NULL,
+  consumed_right_units INTEGER NOT NULL,
+  carry_left_before INTEGER NOT NULL,
+  carry_right_before INTEGER NOT NULL,
+  carry_left_after INTEGER NOT NULL,
+  carry_right_after INTEGER NOT NULL,
+  total_bonus_usd NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+  status VARCHAR(20) NOT NULL DEFAULT 'COMPLETED',
+  settled_at TIMESTAMP WITH TIME ZONE NOT NULL,
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT uq_bms_user_date UNIQUE (user_id, business_date),
+  CONSTRAINT chk_bms_status CHECK (status IN ('COMPLETED', 'REVERSED')),
+  CONSTRAINT chk_bms_units CHECK (
+    available_left_units >= 0 AND
+    available_right_units >= 0 AND
+    consumed_left_units >= 0 AND
+    consumed_right_units >= 0 AND
+    carry_left_before >= 0 AND
+    carry_right_before >= 0 AND
+    carry_left_after >= 0 AND
+    carry_right_after >= 0 AND
+    total_bonus_usd >= 0
+  )
+);
+
+CREATE TABLE IF NOT EXISTS binary_matching_components (
+  id UUID PRIMARY KEY,
+  settlement_id UUID NOT NULL REFERENCES binary_matching_settlements(id) ON DELETE CASCADE,
+  tier_units INTEGER NOT NULL,
+  left_units INTEGER NOT NULL,
+  right_units INTEGER NOT NULL,
+  bonus_usd NUMERIC(12, 2) NOT NULL,
+  sequence_no INTEGER NOT NULL,
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT chk_bmc_tier CHECK (tier_units >= 2),
+  CONSTRAINT chk_bmc_bonus CHECK (bonus_usd > 0)
+);
+
+CREATE TABLE IF NOT EXISTS binary_settlement_cycles (
+  business_date DATE PRIMARY KEY,
+  status VARCHAR(20) NOT NULL DEFAULT 'RUNNING',
+  total_users_settled INTEGER NOT NULL DEFAULT 0,
+  total_bonus_usd NUMERIC(14, 2) NOT NULL DEFAULT 0.00,
+  started_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  completed_at TIMESTAMP WITH TIME ZONE NULL,
+  error_message TEXT NULL,
+  CONSTRAINT chk_bsc_status CHECK (status IN ('RUNNING', 'COMPLETED', 'FAILED'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_bve_beneficiary ON binary_volume_events (beneficiary_user_id);
+CREATE INDEX IF NOT EXISTS idx_bve_source_user ON binary_volume_events (source_user_id);
+CREATE INDEX IF NOT EXISTS idx_bve_source_node ON binary_volume_events (source_node_id);
+CREATE INDEX IF NOT EXISTS idx_bve_business_date ON binary_volume_events (business_date);
+CREATE INDEX IF NOT EXISTS idx_bve_status ON binary_volume_events (status);
+CREATE INDEX IF NOT EXISTS idx_bve_beneficiary_date ON binary_volume_events (beneficiary_user_id, business_date);
+CREATE INDEX IF NOT EXISTS idx_bdv_user_date ON binary_daily_volumes (user_id, business_date);
+
+CREATE INDEX IF NOT EXISTS idx_bms_user_id ON binary_matching_settlements (user_id);
+CREATE INDEX IF NOT EXISTS idx_bms_business_date ON binary_matching_settlements (business_date);
+CREATE INDEX IF NOT EXISTS idx_bms_status ON binary_matching_settlements (status);
+CREATE INDEX IF NOT EXISTS idx_bms_user_settled_at ON binary_matching_settlements (user_id, settled_at DESC);
+CREATE INDEX IF NOT EXISTS idx_bmc_settlement_id ON binary_matching_components (settlement_id);
+CREATE INDEX IF NOT EXISTS idx_bmc_settlement_seq ON binary_matching_components (settlement_id, sequence_no);
+
+-- Task #12: Promotion Milestone Bonuses Table
+CREATE TABLE IF NOT EXISTS promotion_bonuses (
+  id UUID PRIMARY KEY,
+  public_bonus_id VARCHAR(50) UNIQUE NOT NULL,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  milestone VARCHAR(20) NOT NULL,
+  left_units INTEGER NOT NULL,
+  right_units INTEGER NOT NULL,
+  amount_usd NUMERIC(12, 2) NOT NULL,
+  status VARCHAR(20) NOT NULL DEFAULT 'EARNED',
+  qualified_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT uq_pb_user_milestone UNIQUE (user_id, milestone),
+  CONSTRAINT chk_pb_status CHECK (status IN ('EARNED', 'REVERSED')),
+  CONSTRAINT chk_pb_units CHECK (left_units >= 0 AND right_units >= 0 AND amount_usd > 0)
+);
+
+CREATE INDEX IF NOT EXISTS idx_pb_user_id ON promotion_bonuses (user_id);
+CREATE INDEX IF NOT EXISTS idx_pb_status ON promotion_bonuses (status);
+CREATE INDEX IF NOT EXISTS idx_pb_milestone ON promotion_bonuses (milestone);
+CREATE INDEX IF NOT EXISTS idx_pb_qualified_at ON promotion_bonuses (qualified_at DESC);
+
+-- Task #13: Financial Ledger Entries Table
+CREATE TABLE IF NOT EXISTS financial_ledger_entries (
+  id UUID PRIMARY KEY,
+  public_txn_id VARCHAR(50) UNIQUE NOT NULL,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  entry_type VARCHAR(20) NOT NULL,
+  source_type VARCHAR(50) NOT NULL,
+  source_id UUID NOT NULL,
+  source_ref VARCHAR(100) NOT NULL,
+  description TEXT NOT NULL,
+  amount NUMERIC(12, 2) NOT NULL,
+  currency VARCHAR(10) NOT NULL DEFAULT 'USD',
+  status VARCHAR(20) NOT NULL DEFAULT 'SETTLED',
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT chk_fle_entry_type CHECK (entry_type IN ('CREDIT', 'DEBIT', 'REVERSAL')),
+  CONSTRAINT chk_fle_source_type CHECK (source_type IN ('REFERRAL_COMMISSION', 'MATCHING_BONUS', 'PROMOTION_BONUS', 'NODE_REWARD')),
+  CONSTRAINT chk_fle_status CHECK (status IN ('SETTLED', 'REVERSED', 'PENDING')),
+  CONSTRAINT chk_fle_amount CHECK (amount > 0),
+  CONSTRAINT uq_fle_source_entry_type UNIQUE (source_type, source_id, entry_type)
+);
+
+CREATE INDEX IF NOT EXISTS idx_fle_user_id ON financial_ledger_entries (user_id);
+CREATE INDEX IF NOT EXISTS idx_fle_user_created ON financial_ledger_entries (user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_fle_source ON financial_ledger_entries (source_type, source_id);
+CREATE INDEX IF NOT EXISTS idx_fle_entry_type ON financial_ledger_entries (entry_type);
+CREATE INDEX IF NOT EXISTS idx_fle_status ON financial_ledger_entries (status);
+CREATE INDEX IF NOT EXISTS idx_fle_public_txn_id ON financial_ledger_entries (public_txn_id);
+
+-- Task #14: Genesis Node Mining Reward Epochs
+CREATE TABLE IF NOT EXISTS reward_epochs (
+  id UUID PRIMARY KEY,
+  public_epoch_id VARCHAR(50) UNIQUE NOT NULL,
+  epoch_number INTEGER UNIQUE NOT NULL,
+  start_at TIMESTAMP WITH TIME ZONE NOT NULL,
+  end_at TIMESTAMP WITH TIME ZONE NOT NULL,
+  reward_per_node NUMERIC(14, 4) NULL,
+  currency VARCHAR(10) NOT NULL DEFAULT 'USD',
+  status VARCHAR(20) NOT NULL DEFAULT 'OPEN',
+  settled_at TIMESTAMP WITH TIME ZONE NULL,
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT chk_epoch_status CHECK (status IN ('OPEN', 'COMPLETED')),
+  CONSTRAINT chk_epoch_reward CHECK (reward_per_node IS NULL OR reward_per_node > 0)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_reward_epochs_public_id ON reward_epochs (public_epoch_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_reward_epochs_number ON reward_epochs (epoch_number);
+CREATE INDEX IF NOT EXISTS idx_reward_epochs_status ON reward_epochs (status);
+CREATE INDEX IF NOT EXISTS idx_reward_epochs_dates ON reward_epochs (start_at, end_at);
+
+-- Task #14: Genesis Node Individual Rewards
+CREATE TABLE IF NOT EXISTS node_rewards (
+  id UUID PRIMARY KEY,
+  public_reward_id VARCHAR(50) UNIQUE NOT NULL,
+  epoch_id UUID NOT NULL REFERENCES reward_epochs(id) ON DELETE CASCADE,
+  node_id UUID NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+  owner_user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  amount NUMERIC(14, 4) NOT NULL,
+  currency VARCHAR(10) NOT NULL DEFAULT 'USD',
+  status VARCHAR(20) NOT NULL DEFAULT 'ACCRUED',
+  accrued_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  claimed_at TIMESTAMP WITH TIME ZONE NULL,
+  reversed_at TIMESTAMP WITH TIME ZONE NULL,
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT uq_nr_node_epoch UNIQUE (node_id, epoch_id),
+  CONSTRAINT chk_nr_status CHECK (status IN ('ACCRUED', 'CLAIMED', 'REVERSED')),
+  CONSTRAINT chk_nr_amount CHECK (amount > 0)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_node_rewards_public_id ON node_rewards (public_reward_id);
+CREATE INDEX IF NOT EXISTS idx_node_rewards_owner ON node_rewards (owner_user_id);
+CREATE INDEX IF NOT EXISTS idx_node_rewards_node ON node_rewards (node_id);
+CREATE INDEX IF NOT EXISTS idx_node_rewards_epoch ON node_rewards (epoch_id);
+CREATE INDEX IF NOT EXISTS idx_node_rewards_status ON node_rewards (status);
+CREATE INDEX IF NOT EXISTS idx_node_rewards_accrued_at ON node_rewards (accrued_at DESC);
+
 

@@ -6,6 +6,7 @@ import {
   formatPublicCommissionId
 } from '../../config/referralConfig';
 import { formatSafeDisplayName } from '../utils/idGenerator';
+import { postLedgerCredit, postLedgerReversal } from './walletLedgerService';
 
 export interface SafeReferralCommission {
   publicCommissionId: string;
@@ -173,7 +174,22 @@ export async function processNodeActivationCommission(
 
   const row = insertRes.rows[0];
 
-  // 7. Record security/financial audit event
+  // 7. Post to authoritative financial ledger (Task #13)
+  try {
+    await postLedgerCredit({
+      userId: sponsorUserId,
+      sourceType: 'REFERRAL_COMMISSION',
+      sourceId: row.id,
+      sourceRef: row.public_commission_id,
+      amount: Number(row.amount_usd),
+      description: `Direct Referral Commission - Node ${nodePublicId} Activation`,
+      createdAt: new Date(row.earned_at),
+    });
+  } catch (ledgErr) {
+    console.warn('[WalletLedger] Error posting referral commission to ledger:', ledgErr);
+  }
+
+  // 8. Record security/financial audit event
   try {
     await db.query(
       `
@@ -273,6 +289,21 @@ export async function reverseReferralCommission(
   );
 
   const updated = updateRes.rows[0];
+
+  // Post REVERSAL to authoritative financial ledger (Task #13)
+  try {
+    await postLedgerReversal({
+      userId: commission.sponsor_user_id,
+      sourceType: 'REFERRAL_COMMISSION',
+      sourceId: commission.id,
+      sourceRef: commission.public_commission_id,
+      amount: Number(commission.amount_usd),
+      description: `Direct Referral Commission Reversal - Node ${commission.public_node_id}`,
+      createdAt: updated.reversed_at ? new Date(updated.reversed_at) : new Date(),
+    });
+  } catch (ledgErr) {
+    console.warn('[WalletLedger] Error posting referral commission reversal to ledger:', ledgErr);
+  }
 
   // Record security audit event
   try {

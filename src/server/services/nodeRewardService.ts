@@ -1,0 +1,628 @@
+import { getDb } from '../db/db';
+import { v4 as uuidv4 } from 'uuid';
+import { generateEpochPublicId, generateRewardPublicId } from '../utils/idGenerator';
+import { getConfiguredRewardPerNode, REWARD_CURRENCY } from '../config/rewardConfig';
+import { postLedgerCredit, postLedgerReversal } from './walletLedgerService';
+
+export interface RewardEpoch {
+  id: string;
+  publicEpochId: string;
+  epochNumber: number;
+  startAt: string;
+  endAt: string;
+  rewardPerNode: number | null;
+  currency: string;
+  status: 'OPEN' | 'COMPLETED';
+  settledAt: string | null;
+  createdAt: string;
+}
+
+export interface NodeRewardRecord {
+  id: string;
+  publicRewardId: string;
+  epochId: string;
+  epochNumber?: number;
+  publicEpochId?: string;
+  nodeId: string;
+  publicNodeId?: string;
+  nodeNumber?: number;
+  ownerUserId: string;
+  amount: number;
+  currency: string;
+  status: 'ACCRUED' | 'CLAIMED' | 'REVERSED';
+  accruedAt: string;
+  claimedAt: string | null;
+  reversedAt?: string | null;
+  createdAt: string;
+}
+
+export interface EpochSettlementResult {
+  success: boolean;
+  error?: string;
+  message?: string;
+  epochId: string;
+  publicEpochId: string;
+  epochNumber: number;
+  rewardPerNode: number;
+  eligibleNodesCount: number;
+  rewardsCreated: number;
+  totalRewardsDistributedUsd: number;
+  settledAt?: string;
+}
+
+/**
+ * Creates a new authoritative reward epoch in OPEN state.
+ * Reward per node is server-authoritative and configurable.
+ * If not configured, reward_per_node is stored as NULL until configured.
+ */
+export async function createRewardEpoch(params?: {
+  rewardPerNode?: number;
+  startAt?: Date;
+  endAt?: Date;
+}): Promise<RewardEpoch> {
+  const db = await getDb();
+  const rewardRate = getConfiguredRewardPerNode(params?.rewardPerNode);
+
+  // Compute next sequential epoch number
+  const maxRes = await db.query<{ next_num: string | number }>(
+    `SELECT COALESCE(MAX(epoch_number), 0) + 1 AS next_num FROM reward_epochs`
+  );
+  const epochNumber = Number(maxRes.rows[0]?.next_num || 1);
+  const publicEpochId = generateEpochPublicId(epochNumber);
+
+  const id = uuidv4();
+  const startAt = params?.startAt || new Date();
+  const endAt = params?.endAt || new Date(startAt.getTime() + 24 * 60 * 60 * 1000);
+
+  const res = await db.query<any>(
+    `
+    INSERT INTO reward_epochs (
+      id, public_epoch_id, epoch_number, start_at, end_at, reward_per_node, currency, status, created_at
+    )
+    VALUES ($1, $2, $3, $4, $5, $6, $7, 'OPEN', CURRENT_TIMESTAMP)
+    RETURNING *
+    `,
+    [id, publicEpochId, epochNumber, startAt, endAt, rewardRate, REWARD_CURRENCY]
+  );
+
+  const row = res.rows[0];
+  return {
+    id: row.id,
+    publicEpochId: row.public_epoch_id,
+    epochNumber: Number(row.epoch_number),
+    startAt: new Date(row.start_at).toISOString(),
+    endAt: new Date(row.end_at).toISOString(),
+    rewardPerNode: row.reward_per_node !== null && row.reward_per_node !== undefined ? Number(row.reward_per_node) : null,
+    currency: row.currency,
+    status: row.status,
+    settledAt: row.settled_at ? new Date(row.settled_at).toISOString() : null,
+    createdAt: new Date(row.created_at).toISOString(),
+  };
+}
+
+/**
+ * Retrieves the current open epoch, or creates one if none exists.
+ */
+export async function getOrCreateCurrentOpenEpoch(rewardPerNodeOverride?: number): Promise<RewardEpoch> {
+  const db = await getDb();
+  const openRes = await db.query<any>(
+    `SELECT * FROM reward_epochs WHERE status = 'OPEN' ORDER BY epoch_number DESC LIMIT 1`
+  );
+
+  if (openRes.rows.length > 0) {
+    const row = openRes.rows[0];
+    return {
+      id: row.id,
+      publicEpochId: row.public_epoch_id,
+      epochNumber: Number(row.epoch_number),
+      startAt: new Date(row.start_at).toISOString(),
+      endAt: new Date(row.end_at).toISOString(),
+      rewardPerNode: row.reward_per_node !== null && row.reward_per_node !== undefined ? Number(row.reward_per_node) : null,
+      currency: row.currency,
+      status: row.status,
+      settledAt: row.settled_at ? new Date(row.settled_at).toISOString() : null,
+      createdAt: new Date(row.created_at).toISOString(),
+    };
+  }
+
+  return createRewardEpoch({ rewardPerNode: rewardPerNodeOverride });
+}
+
+/**
+ * Authoritative Epoch Settlement Engine.
+ *
+ * Rules:
+ * 1. Reward rate MUST come from explicit server/admin configuration.
+ *    If reward rate is not configured:
+ *    - epoch settlement must NOT create rewards
+ *    - return a controlled: REWARD_RATE_NOT_CONFIGURED
+ *    - never assume $2.50 or any other amount.
+ * 2. Only Node status: ACTIVE can earn rewards.
+ *    AVAILABLE, RESERVED, RETIRED earn ZERO.
+ * 3. ONE Node + ONE Epoch generates only ONE reward (guarded by UNIQUE(node_id, epoch_id)).
+ * 4. Each reward atomically posts a CREDIT entry to the user's Task #13 financial ledger.
+ * 5. Duplicate scheduler executions are completely idempotent and never double-credit.
+ */
+export async function closeAndSettleEpoch(
+  epochId: string,
+  options?: { configuredRewardPerNode?: number }
+): Promise<EpochSettlementResult> {
+  const db = await getDb();
+
+  // 1. Fetch target epoch
+  const epochRes = await db.query<any>(
+    `SELECT * FROM reward_epochs WHERE id = $1`,
+    [epochId]
+  );
+
+  if (epochRes.rows.length === 0) {
+    throw new Error(`Reward epoch ${epochId} not found`);
+  }
+
+  const epoch = epochRes.rows[0];
+  const publicEpochId = epoch.public_epoch_id;
+  const epochNumber = Number(epoch.epoch_number);
+
+  // If already completed, return idempotent summary
+  if (epoch.status === 'COMPLETED') {
+    const existingRewards = await db.query<{ count: string | number; total: string | number }>(
+      `SELECT COUNT(*) as count, COALESCE(SUM(amount), 0) as total FROM node_rewards WHERE epoch_id = $1`,
+      [epochId]
+    );
+
+    return {
+      success: true,
+      epochId,
+      publicEpochId,
+      epochNumber,
+      rewardPerNode: epoch.reward_per_node ? Number(epoch.reward_per_node) : 0,
+      eligibleNodesCount: Number(existingRewards.rows[0]?.count || 0),
+      rewardsCreated: 0,
+      totalRewardsDistributedUsd: Number(existingRewards.rows[0]?.total || 0),
+      settledAt: epoch.settled_at ? new Date(epoch.settled_at).toISOString() : new Date().toISOString(),
+    };
+  }
+
+  // 2. Determine authoritative reward rate per node
+  let effectiveRate: number | null = null;
+  if (options?.configuredRewardPerNode !== undefined) {
+    effectiveRate = getConfiguredRewardPerNode(options.configuredRewardPerNode);
+  } else if (epoch.reward_per_node !== null && !isNaN(Number(epoch.reward_per_node)) && Number(epoch.reward_per_node) > 0) {
+    effectiveRate = getConfiguredRewardPerNode(Number(epoch.reward_per_node));
+  } else {
+    effectiveRate = getConfiguredRewardPerNode();
+  }
+
+  // If reward rate is NOT configured:
+  // Must NOT create rewards, must return REWARD_RATE_NOT_CONFIGURED.
+  if (effectiveRate === null || effectiveRate <= 0) {
+    return {
+      success: false,
+      error: 'REWARD_RATE_NOT_CONFIGURED',
+      message: 'Node reward rate has not been configured by PHIVONEX management. Epoch settlement cannot proceed without an authoritative reward rate.',
+      epochId,
+      publicEpochId,
+      epochNumber,
+      rewardPerNode: 0,
+      eligibleNodesCount: 0,
+      rewardsCreated: 0,
+      totalRewardsDistributedUsd: 0,
+    };
+  }
+
+  const now = new Date();
+
+  // 3. Mark epoch COMPLETED and persist configured rate
+  await db.query(
+    `UPDATE reward_epochs SET status = 'COMPLETED', reward_per_node = $1, settled_at = $2 WHERE id = $3`,
+    [effectiveRate, now, epochId]
+  );
+
+  // 4. Query all ACTIVE nodes with valid owners
+  // AVAILABLE, RESERVED, RETIRED are strictly excluded
+  const activeNodesRes = await db.query<{
+    id: string;
+    public_node_id: string;
+    node_number: number;
+    owner_user_id: string;
+  }>(
+    `
+    SELECT id, public_node_id, node_number, owner_user_id
+    FROM nodes
+    WHERE status = 'ACTIVE' AND owner_user_id IS NOT NULL
+    ORDER BY node_number ASC
+    `
+  );
+
+  const eligibleNodes = activeNodesRes.rows;
+  let rewardsCreated = 0;
+  let totalDistributed = 0;
+
+  for (const node of eligibleNodes) {
+    const rewardId = uuidv4();
+    const publicRewardId = generateRewardPublicId();
+
+    // Idempotent insertion protected by UNIQUE(node_id, epoch_id)
+    const insRes = await db.query<any>(
+      `
+      INSERT INTO node_rewards (
+        id, public_reward_id, epoch_id, node_id, owner_user_id, amount, currency, status, accrued_at, created_at
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, 'USD', 'ACCRUED', $7, CURRENT_TIMESTAMP)
+      ON CONFLICT (node_id, epoch_id) DO NOTHING
+      RETURNING *
+      `,
+      [rewardId, publicRewardId, epochId, node.id, node.owner_user_id, effectiveRate, now]
+    );
+
+    let actualRewardId: string;
+    let actualPublicRewardId: string;
+    let actualAmount: number;
+
+    if (insRes.rows.length > 0) {
+      actualRewardId = insRes.rows[0].id;
+      actualPublicRewardId = insRes.rows[0].public_reward_id;
+      actualAmount = Number(insRes.rows[0].amount);
+      rewardsCreated++;
+      totalDistributed += actualAmount;
+    } else {
+      // Already existed: fetch existing
+      const existing = await db.query<any>(
+        `SELECT id, public_reward_id, amount FROM node_rewards WHERE node_id = $1 AND epoch_id = $2`,
+        [node.id, epochId]
+      );
+      if (existing.rows.length === 0) continue;
+      actualRewardId = existing.rows[0].id;
+      actualPublicRewardId = existing.rows[0].public_reward_id;
+      actualAmount = Number(existing.rows[0].amount);
+    }
+
+    // 5. Credit user's Task #13 financial ledger (Ledger source type: NODE_REWARD)
+    // Strictly idempotent via UNIQUE(source_type, source_id, entry_type)
+    await postLedgerCredit({
+      userId: node.owner_user_id,
+      sourceType: 'NODE_REWARD',
+      sourceId: actualRewardId,
+      sourceRef: actualPublicRewardId,
+      amount: actualAmount,
+      description: `Genesis Node Mining Reward - ${publicEpochId} (Node ${node.public_node_id})`,
+      createdAt: now,
+    });
+  }
+
+  return {
+    success: true,
+    epochId,
+    publicEpochId,
+    epochNumber,
+    rewardPerNode: effectiveRate,
+    eligibleNodesCount: eligibleNodes.length,
+    rewardsCreated,
+    totalRewardsDistributedUsd: totalDistributed,
+    settledAt: now.toISOString(),
+  };
+}
+
+/**
+ * Reverses a node reward (e.g. audit or administrative rollback).
+ * Never deletes historical records; offsets original earning via a REVERSAL ledger entry.
+ */
+export async function reverseNodeReward(publicRewardId: string, reason?: string): Promise<{
+  success: boolean;
+  rewardId: string;
+  amount: number;
+}> {
+  const db = await getDb();
+
+  const res = await db.query<any>(
+    `SELECT * FROM node_rewards WHERE public_reward_id = $1`,
+    [publicRewardId]
+  );
+
+  if (res.rows.length === 0) {
+    throw new Error(`Node reward ${publicRewardId} not found`);
+  }
+
+  const reward = res.rows[0];
+  if (reward.status === 'REVERSED') {
+    return {
+      success: true,
+      rewardId: reward.id,
+      amount: Number(reward.amount),
+    };
+  }
+
+  const now = new Date();
+  await db.query(
+    `UPDATE node_rewards SET status = 'REVERSED', reversed_at = $1 WHERE id = $2`,
+    [now, reward.id]
+  );
+
+  // Post REVERSAL in financial ledger
+  await postLedgerReversal({
+    userId: reward.owner_user_id,
+    sourceType: 'NODE_REWARD',
+    sourceId: reward.id,
+    sourceRef: reward.public_reward_id,
+    amount: Number(reward.amount),
+    description: reason || `Genesis Node Mining Reward Reversal - ${publicRewardId}`,
+    createdAt: now,
+  });
+
+  return {
+    success: true,
+    rewardId: reward.id,
+    amount: Number(reward.amount),
+  };
+}
+
+/**
+ * Claim Foundation: Transitions ACCRUED rewards to CLAIMED.
+ *
+ * IMPORTANT:
+ * - Claim must NOT create money twice.
+ * - All earnings are already authoritatively tracked in the financial ledger.
+ * - This safely updates the reward state without duplicating credits.
+ */
+export async function claimUserRewards(userId: string): Promise<{
+  claimedCount: number;
+  totalClaimedAmount: number;
+}> {
+  const db = await getDb();
+
+  const now = new Date();
+  const updRes = await db.query<any>(
+    `
+    UPDATE node_rewards
+    SET status = 'CLAIMED', claimed_at = $1
+    WHERE owner_user_id = $2 AND status = 'ACCRUED'
+    RETURNING id, amount
+    `,
+    [now, userId]
+  );
+
+  let totalAmount = 0;
+  for (const row of updRes.rows) {
+    totalAmount += Number(row.amount);
+  }
+
+  return {
+    claimedCount: updRes.rows.length,
+    totalClaimedAmount: totalAmount,
+  };
+}
+
+/**
+ * Returns authenticated user's complete reward telemetry:
+ * - totalAccrued
+ * - totalClaimed
+ * - latestEpoch
+ * - reward history
+ */
+export async function getUserRewards(userId: string): Promise<{
+  totalAccrued: number;
+  totalClaimed: number;
+  totalRewards: number;
+  latestEpoch: {
+    id: string;
+    publicEpochId: string;
+    epochNumber: number;
+    rewardPerNode: number | null;
+    status: string;
+    settledAt: string | null;
+  } | null;
+  history: NodeRewardRecord[];
+}> {
+  const db = await getDb();
+
+  // Query user reward records joined with epoch and node information
+  const res = await db.query<any>(
+    `
+    SELECT 
+      nr.id,
+      nr.public_reward_id,
+      nr.epoch_id,
+      nr.node_id,
+      nr.owner_user_id,
+      nr.amount,
+      nr.currency,
+      nr.status,
+      nr.accrued_at,
+      nr.claimed_at,
+      nr.reversed_at,
+      nr.created_at,
+      re.public_epoch_id,
+      re.epoch_number,
+      n.public_node_id,
+      n.node_number
+    FROM node_rewards nr
+    JOIN reward_epochs re ON nr.epoch_id = re.id
+    JOIN nodes n ON nr.node_id = n.id
+    WHERE nr.owner_user_id = $1
+    ORDER BY nr.accrued_at DESC
+    `,
+    [userId]
+  );
+
+  let totalAccrued = 0;
+  let totalClaimed = 0;
+  let totalRewards = 0;
+
+  const history: NodeRewardRecord[] = res.rows.map((r: any) => {
+    const amt = Number(r.amount);
+    if (r.status === 'ACCRUED') {
+      totalAccrued += amt;
+      totalRewards += amt;
+    } else if (r.status === 'CLAIMED') {
+      totalClaimed += amt;
+      totalRewards += amt;
+    }
+
+    return {
+      id: r.id,
+      publicRewardId: r.public_reward_id,
+      epochId: r.epoch_id,
+      epochNumber: Number(r.epoch_number),
+      publicEpochId: r.public_epoch_id,
+      nodeId: r.node_id,
+      publicNodeId: r.public_node_id,
+      nodeNumber: Number(r.node_number),
+      ownerUserId: r.owner_user_id,
+      amount: amt,
+      currency: r.currency,
+      status: r.status,
+      accruedAt: new Date(r.accrued_at).toISOString(),
+      claimedAt: r.claimed_at ? new Date(r.claimed_at).toISOString() : null,
+      reversedAt: r.reversed_at ? new Date(r.reversed_at).toISOString() : null,
+      createdAt: new Date(r.created_at).toISOString(),
+    };
+  });
+
+  // Latest settled or open epoch in the protocol
+  const latestEpochRes = await db.query<any>(
+    `SELECT * FROM reward_epochs ORDER BY epoch_number DESC LIMIT 1`
+  );
+
+  let latestEpoch = null;
+  if (latestEpochRes.rows.length > 0) {
+    const row = latestEpochRes.rows[0];
+    latestEpoch = {
+      id: row.id,
+      publicEpochId: row.public_epoch_id,
+      epochNumber: Number(row.epoch_number),
+      rewardPerNode: row.reward_per_node !== null && row.reward_per_node !== undefined ? Number(row.reward_per_node) : null,
+      status: row.status,
+      settledAt: row.settled_at ? new Date(row.settled_at).toISOString() : null,
+    };
+  }
+
+  return {
+    totalAccrued,
+    totalClaimed,
+    totalRewards,
+    latestEpoch,
+    history,
+  };
+}
+
+/**
+ * Returns authenticated user's real reward summary metrics.
+ */
+export async function getUserRewardsSummary(userId: string): Promise<{
+  totalRewardsEarned: number;
+  totalAccrued: number;
+  totalClaimed: number;
+  activeNodesCount: number;
+  latestEpochNumber: number;
+  latestSettlementTime: string | null;
+}> {
+  const db = await getDb();
+
+  // Active nodes count for this user
+  const activeNodesRes = await db.query<{ count: string | number }>(
+    `SELECT COUNT(*) as count FROM nodes WHERE owner_user_id = $1 AND status = 'ACTIVE'`,
+    [userId]
+  );
+  const activeNodesCount = Number(activeNodesRes.rows[0]?.count || 0);
+
+  // Aggregated rewards
+  const aggRes = await db.query<{
+    status: string;
+    total: string | number;
+  }>(
+    `
+    SELECT status, COALESCE(SUM(amount), 0) as total
+    FROM node_rewards
+    WHERE owner_user_id = $1
+    GROUP BY status
+    `,
+    [userId]
+  );
+
+  let totalAccrued = 0;
+  let totalClaimed = 0;
+
+  for (const row of aggRes.rows) {
+    const amt = Number(row.total);
+    if (row.status === 'ACCRUED') totalAccrued += amt;
+    else if (row.status === 'CLAIMED') totalClaimed += amt;
+  }
+
+  const totalRewardsEarned = totalAccrued + totalClaimed;
+
+  // Latest epoch in protocol
+  const epochRes = await db.query<any>(
+    `SELECT epoch_number, settled_at FROM reward_epochs ORDER BY epoch_number DESC LIMIT 1`
+  );
+
+  const latestEpochNumber = epochRes.rows.length > 0 ? Number(epochRes.rows[0].epoch_number) : 0;
+  const latestSettlementTime = epochRes.rows.length > 0 && epochRes.rows[0].settled_at
+    ? new Date(epochRes.rows[0].settled_at).toISOString()
+    : null;
+
+  return {
+    totalRewardsEarned,
+    totalAccrued,
+    totalClaimed,
+    activeNodesCount,
+    latestEpochNumber,
+    latestSettlementTime,
+  };
+}
+
+/**
+ * Returns mapping of reward statistics per active node for a specific user.
+ * Used to enrich the My Nodes UI.
+ */
+export async function getNodeRewardStatsForUser(userId: string): Promise<Record<string, {
+  totalRewards: number;
+  currentRewardState: 'ACCRUED' | 'CLAIMED' | 'READY';
+  latestRewardEpoch: string | null;
+}>> {
+  const db = await getDb();
+
+  const res = await db.query<any>(
+    `
+    SELECT 
+      nr.node_id,
+      re.public_epoch_id,
+      nr.amount,
+      nr.status,
+      nr.accrued_at
+    FROM node_rewards nr
+    JOIN reward_epochs re ON nr.epoch_id = re.id
+    WHERE nr.owner_user_id = $1 AND nr.status != 'REVERSED'
+    ORDER BY nr.accrued_at DESC
+    `,
+    [userId]
+  );
+
+  const stats: Record<string, {
+    totalRewards: number;
+    currentRewardState: 'ACCRUED' | 'CLAIMED' | 'READY';
+    latestRewardEpoch: string | null;
+  }> = {};
+
+  for (const row of res.rows) {
+    const nodeId = row.node_id;
+    const amt = Number(row.amount);
+    const status = row.status as 'ACCRUED' | 'CLAIMED';
+    const publicEpoch = row.public_epoch_id;
+
+    if (!stats[nodeId]) {
+      stats[nodeId] = {
+        totalRewards: amt,
+        currentRewardState: status,
+        latestRewardEpoch: publicEpoch,
+      };
+    } else {
+      stats[nodeId].totalRewards += amt;
+      // If any reward is ACCRUED, current state reflects ACCRUED
+      if (status === 'ACCRUED') {
+        stats[nodeId].currentRewardState = 'ACCRUED';
+      }
+    }
+  }
+
+  return stats;
+}

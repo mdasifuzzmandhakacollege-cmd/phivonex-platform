@@ -25,6 +25,8 @@ import { Footer } from './components/Footer';
 import { RegisterPage } from './pages/RegisterPage';
 import { LoginPage } from './pages/LoginPage';
 import { DashboardPage } from './pages/DashboardPage';
+import { NetworkPublicPage } from './pages/NetworkPublicPage';
+import { AdminPage } from './pages/AdminPage';
 
 // Modals
 import { LedgerReceiptModal } from './components/modals/LedgerReceiptModal';
@@ -33,9 +35,12 @@ import { LegalModal } from './components/modals/LegalModal';
 
 import { INITIAL_NETWORK_SUMMARY } from './data/networkData';
 import { LedgerEvent } from './types/network';
+import { usePublicNetwork } from './hooks/usePublicNetwork';
 
 function AppContent() {
   const { user, loading } = useAuth();
+  const publicNet = usePublicNetwork();
+
   const [currentPath, setCurrentPath] = useState<string>(() => {
     try {
       return window.location.pathname || '/';
@@ -44,40 +49,9 @@ function AppContent() {
     }
   });
 
-  const [networkSummary, setNetworkSummary] = useState(INITIAL_NETWORK_SUMMARY);
   const [inspectedEvent, setInspectedEvent] = useState<LedgerEvent | null>(null);
   const [isLaunchAppOpen, setIsLaunchAppOpen] = useState(false);
   const [legalModalTitle, setLegalModalTitle] = useState<string | null>(null);
-
-  // Connect landing page stats to real /api/nodes/stats endpoint
-  useEffect(() => {
-    let isMounted = true;
-    const fetchStats = async () => {
-      try {
-        const res = await fetch('/api/nodes/stats');
-        if (res.ok) {
-          const stats = await res.json();
-          if (isMounted && stats) {
-            setNetworkSummary((prev) => ({
-              ...prev,
-              genesisNodeCap: stats.genesisCap ?? 10000,
-              availableNodes: stats.available ?? 10000,
-              allocatedNodes: stats.allocated ?? 0,
-              activeNodes: stats.active ?? 0,
-              allocationPercent: stats.genesisCap > 0 ? (stats.allocated / stats.genesisCap) * 100 : 0,
-              nodesUntilNextStage: stats.available ?? 10000,
-            }));
-          }
-        }
-      } catch (err) {
-        console.warn('Could not fetch node stats for landing metrics:', err);
-      }
-    };
-    fetchStats();
-    return () => {
-      isMounted = false;
-    };
-  }, []);
 
   // Synchronize history state for routing
   useEffect(() => {
@@ -148,13 +122,41 @@ function AppContent() {
     });
   };
 
+  // ROUTE: /network (Public Network & Telemetry Page)
+  if (currentPath === '/network' || currentPath.startsWith('/network/')) {
+    return <NetworkPublicPage onNavigate={navigate} />;
+  }
+
   // ROUTE: /app (Authenticated Protocol Dashboard)
   if (currentPath === '/app' || currentPath.startsWith('/app/')) {
     if (!loading && !user) {
-      // Redirect to login if not authenticated
       return <LoginPage onNavigate={navigate} />;
     }
     return <DashboardPage onNavigate={navigate} currentPath={currentPath} />;
+  }
+
+  // ROUTE: /withdrawals (Alias for /app/withdrawals)
+  if (currentPath === '/withdrawals' || currentPath.startsWith('/withdrawals/')) {
+    if (!loading && !user) {
+      return <LoginPage onNavigate={navigate} />;
+    }
+    return <DashboardPage onNavigate={navigate} currentPath="/app/withdrawals" />;
+  }
+
+  // ROUTE: /deposit (Alias for /app/deposit)
+  if (currentPath === '/deposit' || currentPath.startsWith('/deposit/')) {
+    if (!loading && !user) {
+      return <LoginPage onNavigate={navigate} />;
+    }
+    return <DashboardPage onNavigate={navigate} currentPath="/app/deposit" />;
+  }
+
+  // ROUTE: /admin (Protected Admin Control Plane)
+  if (currentPath === '/admin' || currentPath.startsWith('/admin/')) {
+    if (!loading && !user) {
+      return <LoginPage onNavigate={navigate} />;
+    }
+    return <AdminPage onNavigate={navigate} currentPath={currentPath} />;
   }
 
   // ROUTE: /register
@@ -188,13 +190,27 @@ function AppContent() {
     );
   }
 
+  // Derived real landing page summary
+  const landingSummary = {
+    ...INITIAL_NETWORK_SUMMARY,
+    genesisNodeCap: publicNet.summary.genesisNodeCap || 10000,
+    activeNodes: publicNet.summary.activeNodes,
+    allocatedNodes: publicNet.summary.activeNodes + publicNet.summary.reservedNodes,
+    availableNodes: publicNet.summary.availableNodes,
+    allocationPercent: publicNet.summary.allocationPercent,
+    currentRewardEpoch: publicNet.summary.currentRewardEpoch,
+    networkTransactions: publicNet.summary.totalNetworkTransactions,
+    networkStatus: publicNet.summary.networkStatus.toLowerCase() as any,
+    updatedAt: publicNet.summary.updatedAt,
+  };
+
   // DEFAULT ROUTE: Public Landing Page
   return (
     <div className="min-h-screen bg-[#05070B] text-[#F7FAFC] font-sans selection:bg-[#00CFFF]/20 selection:text-[#00CFFF]">
       
       {/* 1. NAVBAR */}
       <Navbar
-        onExploreClick={() => scrollToSection('live-network')}
+        onExploreClick={() => navigate('/network')}
         onLaunchAppClick={() => navigate(user ? '/app' : '/login')}
       />
 
@@ -202,15 +218,15 @@ function AppContent() {
         {/* 2. HERO SECTION */}
         <Hero
           onExploreClick={() => scrollToSection('ecosystem')}
-          onViewLiveNetwork={() => scrollToSection('live-network')}
+          onViewLiveNetwork={() => navigate('/network')}
           onInspectNode={handleInspectNode}
         />
 
         {/* 3. KEY NETWORK METRICS */}
         <NetworkMetricBar
-          metrics={networkSummary}
-          onViewLedger={() => scrollToSection('live-network')}
-          isApiConnected={false}
+          metrics={landingSummary}
+          onViewLedger={() => navigate('/network')}
+          isApiConnected={publicNet.isConnected}
         />
 
         {/* 4. WHAT IS PHIVONEX */}
@@ -227,8 +243,8 @@ function AppContent() {
 
         {/* 8. NODE SUPPLY VISUALIZATION */}
         <NodeSupplyVisualization
-          summary={networkSummary}
-          isLiveApiConnected={false}
+          summary={landingSummary}
+          isLiveApiConnected={publicNet.isConnected}
         />
 
         {/* 9. NODE REWARD / MINING CONCEPT */}
@@ -236,13 +252,14 @@ function AppContent() {
 
         {/* 10. LIVE NETWORK / LEDGER */}
         <LiveNetworkSection
+          liveEvents={publicNet.events}
           onInspectEvent={handleInspectEvent}
         />
 
         {/* 11. SECURITY & TRANSPARENCY */}
         <SecurityTransparencySection
           onOpenWhitepaper={() => setLegalModalTitle('Technical Whitepaper')}
-          onExploreExplorer={() => scrollToSection('live-network')}
+          onExploreExplorer={() => navigate('/network')}
         />
 
         {/* 12. ROADMAP */}
@@ -254,7 +271,7 @@ function AppContent() {
         {/* 14. FINAL CTA */}
         <FinalCTA
           onLaunchApp={() => navigate(user ? '/app' : '/register')}
-          onExploreNetwork={() => scrollToSection('live-network')}
+          onExploreNetwork={() => navigate('/network')}
           onReadDocs={() => setLegalModalTitle('Technical Whitepaper')}
         />
       </main>
@@ -262,7 +279,7 @@ function AppContent() {
       {/* 15. FOOTER */}
       <Footer
         onOpenLegal={(title) => setLegalModalTitle(title)}
-        onExploreClick={() => scrollToSection('live-network')}
+        onExploreClick={() => navigate('/network')}
       />
 
       {/* Interactive Modals */}

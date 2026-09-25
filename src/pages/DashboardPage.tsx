@@ -9,6 +9,9 @@ import { MyNodesView } from '../components/dashboard/MyNodesView';
 import { BuyNodeView } from '../components/dashboard/BuyNodeView';
 import { DirectReferralsView } from '../components/dashboard/DirectReferralsView';
 import { NetworkView } from '../components/dashboard/NetworkView';
+import { WalletView } from '../components/dashboard/WalletView';
+import { WithdrawalsView } from '../components/dashboard/WithdrawalsView';
+import { DepositView } from '../components/dashboard/DepositView';
 import { PlaceholderView } from '../components/dashboard/PlaceholderView';
 import { Loader2, AlertCircle, LogIn } from 'lucide-react';
 import { PhivonexLogo } from '../components/brand/PhivonexLogo';
@@ -29,6 +32,9 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onNavigate, curren
     if (cleanPath === '/app/nodes' || cleanPath.startsWith('/app/nodes/')) return 'nodes';
     if (cleanPath === '/app/network' || cleanPath.startsWith('/app/network/')) return 'network';
     if (cleanPath === '/app/referrals' || cleanPath.startsWith('/app/referrals/')) return 'referrals';
+    if (cleanPath === '/app/wallet' || cleanPath.startsWith('/app/wallet/')) return 'wallet';
+    if (cleanPath === '/app/deposit' || cleanPath.startsWith('/app/deposit/')) return 'deposit';
+    if (cleanPath === '/app/withdrawals' || cleanPath.startsWith('/app/withdrawals/')) return 'withdrawals';
     if (cleanPath === '/app/rewards' || cleanPath.startsWith('/app/rewards/')) return 'rewards';
     if (cleanPath === '/app/transactions' || cleanPath.startsWith('/app/transactions/')) return 'transactions';
     return 'overview';
@@ -158,6 +164,13 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onNavigate, curren
         );
       case 'network':
         return <NetworkView />;
+      case 'wallet':
+      case 'transactions':
+        return <WalletView user={user} onNavigateTab={(tab) => handleSelectTab(tab as DashboardTab)} />;
+      case 'deposit':
+        return <DepositView user={user} onNavigateTab={(tab) => handleSelectTab(tab as DashboardTab)} />;
+      case 'withdrawals':
+        return <WithdrawalsView user={user} onNavigateTab={(tab) => handleSelectTab(tab as DashboardTab)} />;
       case 'referrals':
         return (
           <DirectReferralsView

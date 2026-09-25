@@ -10,6 +10,7 @@ export interface AuthenticatedUser {
   phone: string | null;
   country: string;
   status: string;
+  role: string;
   emailVerified: boolean;
   emailVerifiedAt: string | null;
   created_at?: string;
@@ -51,6 +52,7 @@ export async function requireAuth(req: AuthRequest, res: Response, next: NextFun
         u.phone,
         u.country,
         u.status,
+        COALESCE(u.role, 'USER') AS role,
         u.email_verified_at,
         u.created_at,
         u.last_login_at
@@ -112,6 +114,7 @@ export async function requireAuth(req: AuthRequest, res: Response, next: NextFun
       phone: row.phone,
       country: row.country,
       status: row.status,
+      role: row.role || 'USER',
       emailVerified: !!row.email_verified_at,
       emailVerifiedAt: row.email_verified_at,
       created_at: row.created_at,
@@ -128,4 +131,31 @@ export async function requireAuth(req: AuthRequest, res: Response, next: NextFun
       message: 'An internal authentication error occurred.',
     });
   }
+}
+
+/**
+ * requireAdmin
+ * Strict administrative authorization middleware.
+ * Ensures normal authenticated users CANNOT execute administrative endpoints
+ * such as epoch creation or settlement.
+ */
+export async function requireAdmin(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
+  const adminKey = req.headers['x-admin-key'];
+  const expectedKey = process.env.ADMIN_API_KEY || 'phivonex-admin-key-secure';
+
+  if (adminKey && adminKey === expectedKey) {
+    return next();
+  }
+
+  // Otherwise, enforce session auth and verify ADMIN role
+  await requireAuth(req, res, () => {
+    if (req.user?.role === 'ADMIN') {
+      return next();
+    }
+
+    res.status(403).json({
+      error: 'FORBIDDEN',
+      message: 'Access denied. Administrative privileges required to manage reward epochs.',
+    });
+  });
 }

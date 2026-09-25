@@ -10,6 +10,7 @@ import {
 } from '../../config/nodeConfig';
 import { processNodeActivationCommission, SafeReferralCommission } from './referralCommissionService';
 import { propagateNodeSalesVolume } from './binaryVolumeService';
+import { broadcastPublicEvent } from './publicNetworkService';
 
 export interface SafeNodeOrder {
   publicOrderId: string;
@@ -599,6 +600,20 @@ export async function settleNodeOrder(
     );
   } catch (secErr) {
     console.warn('[SecurityEvent] Could not log purchase event:', secErr);
+  }
+
+  // Broadcast live public event to SSE stream
+  try {
+    broadcastPublicEvent({
+      id: `evt-node-${finalNode.public_node_id}`,
+      type: 'node.activated',
+      title: `${finalNode.public_node_id} Activated`,
+      description: `Genesis validator node ${finalNode.public_node_id} successfully activated on-chain.`,
+      timestamp: new Date().toISOString(),
+      publicId: finalNode.public_node_id,
+    });
+  } catch (pubErr) {
+    console.warn('[PublicEvent] Could not broadcast public node activation event:', pubErr);
   }
 
   return {

@@ -34,14 +34,16 @@ async function runLiveHttpTests() {
 
   // 2. Auth Flow (Register & Session Cookie)
   console.log('\n--- 2. Auth Flow & Session Verification ---');
-  const testEmail = `operator_http_${Date.now()}@phivonex.test`;
+  const runId = Date.now().toString().slice(-6);
+  const testEmail = `operator_http_${Date.now()}_${Math.floor(Math.random()*10000)}@phivonex.test`;
+  const testPhone = `+1${Math.floor(2000000000 + Math.random() * 7000000000)}`;
   const regRes = await fetch(`${baseUrl}/api/auth/register`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       fullName: 'Alice Operator',
       email: testEmail,
-      phone: '+14155550199',
+      phone: testPhone,
       country: 'United States',
       password: 'StrongPassword123!',
       confirmPassword: 'StrongPassword123!',
@@ -128,6 +130,75 @@ async function runLiveHttpTests() {
   const volHistoryData = await volHistoryRes.json();
   assert(Array.isArray(volHistoryData.history), 'Volume history returns an array');
   assert(typeof volHistoryData.pagination?.page === 'number', 'Volume history returns pagination object');
+
+  // Task #11: Matching Summary
+  const matchSummaryRes = await fetch(`${baseUrl}/api/matching/summary`, {
+    headers: { Cookie: cookieHeader },
+  });
+  assert(matchSummaryRes.status === 200, 'GET /api/matching/summary returns HTTP 200');
+  const matchSummaryData = await matchSummaryRes.json();
+  assert(typeof matchSummaryData.todayVolume?.left === 'number', 'Matching summary returns todayVolume.left');
+  assert(typeof matchSummaryData.todayVolume?.right === 'number', 'Matching summary returns todayVolume.right');
+  assert(typeof matchSummaryData.carry?.left === 'number', 'Matching summary returns carry.left');
+  assert(typeof matchSummaryData.carry?.right === 'number', 'Matching summary returns carry.right');
+  assert(typeof matchSummaryData.totalMatchingEarnedUsd === 'number', 'Matching summary returns totalMatchingEarnedUsd');
+  assert(typeof matchSummaryData.nextSettlement?.scheduledTime === 'string', 'Matching summary returns nextSettlement.scheduledTime');
+
+  // Task #11: Matching History
+  const matchHistoryRes = await fetch(`${baseUrl}/api/matching/history?page=1&limit=10`, {
+    headers: { Cookie: cookieHeader },
+  });
+  assert(matchHistoryRes.status === 200, 'GET /api/matching/history returns HTTP 200');
+  const matchHistoryData = await matchHistoryRes.json();
+  assert(Array.isArray(matchHistoryData.history), 'Matching history returns history array');
+  assert(typeof matchHistoryData.pagination?.page === 'number', 'Matching history returns pagination object');
+
+  // Task #12: Promotion Bonuses
+  const promoRes = await fetch(`${baseUrl}/api/promotions/me`, {
+    headers: { Cookie: cookieHeader },
+  });
+  assert(promoRes.status === 200, 'GET /api/promotions/me returns HTTP 200');
+  const promoData = await promoRes.json();
+  assert(typeof promoData.currentProgress?.leftUnits === 'number', 'Promotion API returns currentProgress.leftUnits');
+  assert(typeof promoData.currentProgress?.rightUnits === 'number', 'Promotion API returns currentProgress.rightUnits');
+  assert(Array.isArray(promoData.achievedMilestones), 'Promotion API returns achievedMilestones array');
+  assert(typeof promoData.totalPromotionBonusEarned === 'number', 'Promotion API returns totalPromotionBonusEarned');
+  assert(Array.isArray(promoData.milestones), 'Promotion API returns milestones array');
+  assert(promoData.milestones.length === 3, 'Promotion API returns all 3 official milestones (20/20, 50/50, 100/100)');
+
+  // Task #13: Wallet Summary & Transactions
+  const walletMeRes = await fetch(`${baseUrl}/api/wallet/me`, {
+    headers: { Cookie: cookieHeader },
+  });
+  assert(walletMeRes.status === 200, 'GET /api/wallet/me returns HTTP 200');
+  const walletSummary = await walletMeRes.json();
+  assert(typeof walletSummary.totalEarned === 'number', 'Wallet summary returns numeric totalEarned');
+  assert(typeof walletSummary.totalReversed === 'number', 'Wallet summary returns numeric totalReversed');
+  assert(typeof walletSummary.ledgerBalance === 'number', 'Wallet summary returns numeric ledgerBalance');
+  assert(typeof walletSummary.transactionCount === 'number', 'Wallet summary returns numeric transactionCount');
+  assert(typeof walletSummary.breakdown?.referral === 'number', 'Wallet breakdown has referral');
+  assert(typeof walletSummary.breakdown?.matching === 'number', 'Wallet breakdown has matching');
+  assert(typeof walletSummary.breakdown?.promotion === 'number', 'Wallet breakdown has promotion');
+
+  const walletTxRes = await fetch(`${baseUrl}/api/wallet/transactions?page=1&limit=10`, {
+    headers: { Cookie: cookieHeader },
+  });
+  assert(walletTxRes.status === 200, 'GET /api/wallet/transactions returns HTTP 200');
+  const walletTxData = await walletTxRes.json();
+  assert(Array.isArray(walletTxData.transactions), 'Wallet transactions returns transactions array');
+  assert(typeof walletTxData.pagination?.page === 'number', 'Wallet transactions returns pagination object');
+
+  // Verify unauthorized access protection
+  const unauthWalletRes = await fetch(`${baseUrl}/api/wallet/me`);
+  assert(unauthWalletRes.status === 401, 'Unauthenticated GET /api/wallet/me returns HTTP 401');
+
+  // Verify financial writes from client are rejected (server-authoritative only)
+  const clientWriteRes = await fetch(`${baseUrl}/api/wallet/me`, {
+    method: 'POST',
+    headers: { Cookie: cookieHeader, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ amount: 1000 }),
+  });
+  assert(clientWriteRes.status === 404 || clientWriteRes.status === 405, 'Client cannot POST /api/wallet/me (HTTP 404/405)');
 
   console.log('\n====================================================');
   console.log(`LIVE HTTP VERIFICATION: ${passed} PASSED | ${failed} FAILED`);

@@ -23,6 +23,7 @@ import {
   Cpu
 } from 'lucide-react';
 import { UserProfile } from '../../context/AuthContext';
+import { WalletSection } from './WalletSection';
 
 interface ReferralMeResponse {
   publicId: string;
@@ -413,6 +414,9 @@ export const OverviewView: React.FC<OverviewViewProps> = ({ user }) => {
           </div>
         )}
       </div>
+
+      {/* Task #13: FINANCIAL LEDGER & WALLET SECTION */}
+      <WalletSection />
 
       {/* 4. USER PROFILE SUMMARY (Full Verified Account Details) */}
       <div className="p-6 sm:p-8 rounded-2xl bg-[#07101D] border border-white/[0.08] shadow-xl space-y-6">

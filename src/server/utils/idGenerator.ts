@@ -51,6 +51,59 @@ export function generateVolumeEventPublicId(): string {
 }
 
 /**
+ * Generate a Public Matching Settlement ID (e.g. BMS-9A2K4F)
+ */
+export function generateSettlementPublicId(): string {
+  return `BMS-${getRandomCode(6)}`;
+}
+
+/**
+ * Generate a Public Promotion Bonus ID (e.g. PRM-9A2K4F)
+ */
+export function generatePromotionBonusPublicId(): string {
+  return `PRM-${getRandomCode(6)}`;
+}
+
+/**
+ * Generate a Public Financial Ledger Transaction ID (e.g. TXN-9A2K4F)
+ */
+export function generateLedgerTransactionPublicId(): string {
+  return `TXN-${getRandomCode(6)}`;
+}
+
+/**
+ * Generate a Public Reward Epoch ID (e.g. EPOCH-0001 or EPOCH-9A2K4F)
+ */
+export function generateEpochPublicId(epochNumber?: number): string {
+  if (typeof epochNumber === 'number' && epochNumber > 0) {
+    const padded = String(epochNumber).padStart(4, '0');
+    return `EPOCH-${padded}`;
+  }
+  return `EPOCH-${getRandomCode(6)}`;
+}
+
+/**
+ * Generate a Public Node Reward ID (e.g. NRW-9A2K4F)
+ */
+export function generateRewardPublicId(): string {
+  return `NRW-${getRandomCode(6)}`;
+}
+
+/**
+ * Generate a Public Withdrawal ID (e.g. PHX-WDR-9A2K4F)
+ */
+export function generateWithdrawalPublicId(): string {
+  return `PHX-WDR-${getRandomCode(6)}`;
+}
+
+/**
+ * Generate a Public Blockchain Deposit ID (e.g. PHX-DEP-9A2K4F)
+ */
+export function generateDepositPublicId(): string {
+  return `PHX-DEP-${getRandomCode(6)}`;
+}
+
+/**
  * Format privacy-safe display name (e.g., "John Doe" -> "John D.")
  */
 export function formatSafeDisplayName(fullName: string): string {

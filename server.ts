@@ -9,7 +9,16 @@ import nodeRouter from './src/server/routes/nodeRoutes';
 import orderRouter from './src/server/routes/orderRoutes';
 import commissionRouter from './src/server/routes/commissionRoutes';
 import networkRouter from './src/server/routes/networkRoutes';
+import matchingRouter from './src/server/routes/matchingRoutes';
+import { promotionRouter } from './src/server/routes/promotionRoutes';
+import { walletRouter } from './src/server/routes/walletRoutes';
+import { rewardRouter } from './src/server/routes/rewardRoutes';
+import { publicNetworkRouter } from './src/server/routes/publicNetworkRoutes';
+import { withdrawalRouter } from './src/server/routes/withdrawalRoutes';
+import { adminRouter } from './src/server/routes/adminRoutes';
+import { depositRouter } from './src/server/routes/depositRoutes';
 import { getDb } from './src/server/db/db';
+import { startMatchingScheduler } from './src/server/services/binaryMatchingScheduler';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -27,6 +36,7 @@ async function startServer() {
   try {
     await getDb();
     console.log('[Server] Database and referral migrations initialized.');
+    startMatchingScheduler();
   } catch (err) {
     console.error('[Server] Failed to initialize database on startup:', err);
   }
@@ -58,6 +68,14 @@ async function startServer() {
   app.use('/api/node-orders', orderRouter);
   app.use('/api/referral-commissions', commissionRouter);
   app.use('/api/network', networkRouter);
+  app.use('/api/matching', matchingRouter);
+  app.use('/api/promotions', promotionRouter);
+  app.use('/api/wallet', walletRouter);
+  app.use('/api/rewards', rewardRouter);
+  app.use('/api/public/network', publicNetworkRouter);
+  app.use('/api/withdrawals', withdrawalRouter);
+  app.use('/api/deposits', depositRouter);
+  app.use('/api/admin', adminRouter);
 
   // Health check
   app.get('/api/health', (req, res) => {

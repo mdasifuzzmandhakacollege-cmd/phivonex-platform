@@ -12,6 +12,9 @@ import {
   Radio,
   Users,
   GitFork,
+  Wallet,
+  ArrowUpRight,
+  ArrowDownLeft,
   X
 } from 'lucide-react';
 import { PhivonexLogo } from '../brand/PhivonexLogo';
@@ -22,6 +25,9 @@ export type DashboardTab =
   | 'nodes'
   | 'network'
   | 'referrals'
+  | 'wallet'
+  | 'deposit'
+  | 'withdrawals'
   | 'rewards'
   | 'transactions'
   | 'profile'
@@ -47,8 +53,11 @@ const NAV_ITEMS: NavItem[] = [
   { id: 'nodes', label: 'My Nodes', icon: Server },
   { id: 'network', label: 'Network', icon: GitFork },
   { id: 'referrals', label: 'Direct Referrals', icon: Users },
+  { id: 'wallet', label: 'Wallet & Ledger', icon: Wallet },
+  { id: 'deposit', label: 'BNB Deposit', icon: ArrowDownLeft },
+  { id: 'withdrawals', label: 'Withdrawals', icon: ArrowUpRight },
   { id: 'rewards', label: 'Rewards', icon: Coins, comingSoon: true },
-  { id: 'transactions', label: 'Transactions', icon: ArrowLeftRight, comingSoon: true },
+  { id: 'transactions', label: 'Transactions', icon: ArrowLeftRight },
   { id: 'profile', label: 'Profile', icon: User },
   { id: 'security', label: 'Security', icon: ShieldCheck },
 ];

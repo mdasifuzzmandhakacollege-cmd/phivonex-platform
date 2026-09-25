@@ -20,6 +20,15 @@ import {
   Calendar,
   History,
 } from 'lucide-react';
+import {
+  MatchingSection,
+  MatchingSummary,
+  MatchingSettlementItem,
+} from './MatchingSection';
+import {
+  PromotionSection,
+  PromotionSummaryResponse,
+} from './PromotionSection';
 
 export interface VolumeSummary {
   businessDate: string;
@@ -75,6 +84,9 @@ export const NetworkView: React.FC = () => {
   const [treeData, setTreeData] = useState<TreeNode | null>(null);
   const [volumeSummary, setVolumeSummary] = useState<VolumeSummary | null>(null);
   const [volumeHistory, setVolumeHistory] = useState<VolumeHistoryItem[]>([]);
+  const [matchingSummary, setMatchingSummary] = useState<MatchingSummary | null>(null);
+  const [matchingHistory, setMatchingHistory] = useState<MatchingSettlementItem[]>([]);
+  const [promotionData, setPromotionData] = useState<PromotionSummaryResponse | null>(null);
   const [showHistory, setShowHistory] = useState<boolean>(false);
   const [depth, setDepth] = useState<number>(3);
 
@@ -87,17 +99,20 @@ export const NetworkView: React.FC = () => {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
-  // Fetch summary, unplaced, tree, and binary sales volume
+  // Fetch summary, unplaced, tree, binary sales volume, matching bonus, and promotions
   const fetchNetworkData = useCallback(async (currentDepth = depth) => {
     setLoading(true);
     setErrorMsg(null);
     try {
-      const [summaryRes, unplacedRes, treeRes, volumeRes, historyRes] = await Promise.all([
+      const [summaryRes, unplacedRes, treeRes, volumeRes, historyRes, matchingSumRes, matchingHistRes, promoRes] = await Promise.all([
         fetch('/api/network/summary', { credentials: 'include' }),
         fetch('/api/network/unplaced', { credentials: 'include' }),
         fetch(`/api/network/tree?depth=${currentDepth}`, { credentials: 'include' }),
         fetch('/api/network/volume-summary', { credentials: 'include' }),
         fetch('/api/network/volume-history?page=1&limit=5', { credentials: 'include' }),
+        fetch('/api/matching/summary', { credentials: 'include' }),
+        fetch('/api/matching/history?page=1&limit=10', { credentials: 'include' }),
+        fetch('/api/promotions/me', { credentials: 'include' }),
       ]);
 
       if (!summaryRes.ok || !unplacedRes.ok || !treeRes.ok) {
@@ -119,6 +134,18 @@ export const NetworkView: React.FC = () => {
       if (historyRes.ok) {
         const histData = await historyRes.json();
         setVolumeHistory(histData.history || []);
+      }
+      if (matchingSumRes.ok) {
+        const sumData = await matchingSumRes.json();
+        setMatchingSummary(sumData);
+      }
+      if (matchingHistRes.ok) {
+        const histData = await matchingHistRes.json();
+        setMatchingHistory(histData.history || []);
+      }
+      if (promoRes.ok) {
+        const pData = await promoRes.json();
+        setPromotionData(pData);
       }
     } catch (err: any) {
       console.error('Error fetching network:', err);
@@ -454,6 +481,19 @@ export const NetworkView: React.FC = () => {
           )}
         </div>
       </div>
+
+      {/* Task #11: Daily Binary Matching Settlement Section */}
+      <MatchingSection
+        summary={matchingSummary}
+        history={matchingHistory}
+        loading={loading}
+      />
+
+      {/* Task #12: Promotion Milestone Bonuses Section */}
+      <PromotionSection
+        data={promotionData}
+        loading={loading}
+      />
 
       {/* Unplaced Direct Referrals Section */}
       <div className="p-6 rounded-2xl bg-[#0B1528]/80 border border-white/[0.08] backdrop-blur-sm">

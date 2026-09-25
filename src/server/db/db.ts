@@ -288,6 +288,160 @@ async function initSchema(client: DatabaseClient) {
         CONSTRAINT chk_bvb_carry_left CHECK (carry_left_units >= 0),
         CONSTRAINT chk_bvb_carry_right CHECK (carry_right_units >= 0)
       );
+
+      -- Task #11: Daily Binary Matching Settlement Engine Tables
+      CREATE TABLE IF NOT EXISTS binary_matching_settlements (
+        id UUID PRIMARY KEY,
+        public_settlement_id VARCHAR(50) UNIQUE NOT NULL,
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        business_date DATE NOT NULL,
+        available_left_units INTEGER NOT NULL,
+        available_right_units INTEGER NOT NULL,
+        consumed_left_units INTEGER NOT NULL,
+        consumed_right_units INTEGER NOT NULL,
+        carry_left_before INTEGER NOT NULL,
+        carry_right_before INTEGER NOT NULL,
+        carry_left_after INTEGER NOT NULL,
+        carry_right_after INTEGER NOT NULL,
+        total_bonus_usd NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+        status VARCHAR(20) NOT NULL DEFAULT 'COMPLETED',
+        settled_at TIMESTAMP WITH TIME ZONE NOT NULL,
+        created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        CONSTRAINT uq_bms_user_date UNIQUE (user_id, business_date),
+        CONSTRAINT chk_bms_status CHECK (status IN ('COMPLETED', 'REVERSED')),
+        CONSTRAINT chk_bms_units CHECK (
+          available_left_units >= 0 AND
+          available_right_units >= 0 AND
+          consumed_left_units >= 0 AND
+          consumed_right_units >= 0 AND
+          carry_left_before >= 0 AND
+          carry_right_before >= 0 AND
+          carry_left_after >= 0 AND
+          carry_right_after >= 0 AND
+          total_bonus_usd >= 0
+        )
+      );
+
+      CREATE TABLE IF NOT EXISTS binary_matching_components (
+        id UUID PRIMARY KEY,
+        settlement_id UUID NOT NULL REFERENCES binary_matching_settlements(id) ON DELETE CASCADE,
+        tier_units INTEGER NOT NULL,
+        left_units INTEGER NOT NULL,
+        right_units INTEGER NOT NULL,
+        bonus_usd NUMERIC(12, 2) NOT NULL,
+        sequence_no INTEGER NOT NULL,
+        created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        CONSTRAINT chk_bmc_tier CHECK (tier_units >= 2),
+        CONSTRAINT chk_bmc_bonus CHECK (bonus_usd > 0)
+      );
+
+      CREATE TABLE IF NOT EXISTS binary_settlement_cycles (
+        business_date DATE PRIMARY KEY,
+        status VARCHAR(20) NOT NULL DEFAULT 'RUNNING',
+        total_users_settled INTEGER NOT NULL DEFAULT 0,
+        total_bonus_usd NUMERIC(14, 2) NOT NULL DEFAULT 0.00,
+        started_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        completed_at TIMESTAMP WITH TIME ZONE NULL,
+        error_message TEXT NULL,
+        CONSTRAINT chk_bsc_status CHECK (status IN ('RUNNING', 'COMPLETED', 'FAILED'))
+      );
+
+      -- Task #12: Promotion Milestone Bonuses Table
+      CREATE TABLE IF NOT EXISTS promotion_bonuses (
+        id UUID PRIMARY KEY,
+        public_bonus_id VARCHAR(50) UNIQUE NOT NULL,
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        milestone VARCHAR(20) NOT NULL,
+        left_units INTEGER NOT NULL,
+        right_units INTEGER NOT NULL,
+        amount_usd NUMERIC(12, 2) NOT NULL,
+        status VARCHAR(20) NOT NULL DEFAULT 'EARNED',
+        qualified_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        CONSTRAINT uq_pb_user_milestone UNIQUE (user_id, milestone),
+        CONSTRAINT chk_pb_status CHECK (status IN ('EARNED', 'REVERSED')),
+        CONSTRAINT chk_pb_units CHECK (left_units >= 0 AND right_units >= 0 AND amount_usd > 0)
+      );
+
+      -- Task #13: Financial Ledger Entries Table
+      CREATE TABLE IF NOT EXISTS financial_ledger_entries (
+        id UUID PRIMARY KEY,
+        public_txn_id VARCHAR(50) UNIQUE NOT NULL,
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        entry_type VARCHAR(20) NOT NULL,
+        source_type VARCHAR(50) NOT NULL,
+        source_id UUID NOT NULL,
+        source_ref VARCHAR(100) NOT NULL,
+        description TEXT NOT NULL,
+        amount NUMERIC(12, 2) NOT NULL,
+        currency VARCHAR(10) NOT NULL DEFAULT 'USD',
+        status VARCHAR(20) NOT NULL DEFAULT 'SETTLED',
+        created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        CONSTRAINT chk_fle_entry_type CHECK (entry_type IN ('CREDIT', 'DEBIT', 'REVERSAL')),
+        CONSTRAINT chk_fle_source_type CHECK (source_type IN ('REFERRAL_COMMISSION', 'MATCHING_BONUS', 'PROMOTION_BONUS', 'NODE_REWARD')),
+        CONSTRAINT chk_fle_status CHECK (status IN ('SETTLED', 'REVERSED', 'PENDING')),
+        CONSTRAINT chk_fle_amount CHECK (amount > 0),
+        CONSTRAINT uq_fle_source_entry_type UNIQUE (source_type, source_id, entry_type)
+      );
+
+      -- Task #14: Genesis Node Mining Reward Epochs
+      CREATE TABLE IF NOT EXISTS reward_epochs (
+        id UUID PRIMARY KEY,
+        public_epoch_id VARCHAR(50) UNIQUE NOT NULL,
+        epoch_number INTEGER UNIQUE NOT NULL,
+        start_at TIMESTAMP WITH TIME ZONE NOT NULL,
+        end_at TIMESTAMP WITH TIME ZONE NOT NULL,
+        reward_per_node NUMERIC(14, 4) NULL,
+        currency VARCHAR(10) NOT NULL DEFAULT 'USD',
+        status VARCHAR(20) NOT NULL DEFAULT 'OPEN',
+        settled_at TIMESTAMP WITH TIME ZONE NULL,
+        created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        CONSTRAINT chk_epoch_status CHECK (status IN ('OPEN', 'COMPLETED')),
+        CONSTRAINT chk_epoch_reward CHECK (reward_per_node IS NULL OR reward_per_node > 0)
+      );
+
+      -- Task #14: Genesis Node Individual Rewards
+      CREATE TABLE IF NOT EXISTS node_rewards (
+        id UUID PRIMARY KEY,
+        public_reward_id VARCHAR(50) UNIQUE NOT NULL,
+        epoch_id UUID NOT NULL REFERENCES reward_epochs(id) ON DELETE CASCADE,
+        node_id UUID NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+        owner_user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        amount NUMERIC(14, 4) NOT NULL,
+        currency VARCHAR(10) NOT NULL DEFAULT 'USD',
+        status VARCHAR(20) NOT NULL DEFAULT 'ACCRUED',
+        accrued_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        claimed_at TIMESTAMP WITH TIME ZONE NULL,
+        reversed_at TIMESTAMP WITH TIME ZONE NULL,
+        created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        CONSTRAINT uq_nr_node_epoch UNIQUE (node_id, epoch_id),
+        CONSTRAINT chk_nr_status CHECK (status IN ('ACCRUED', 'CLAIMED', 'REVERSED')),
+        CONSTRAINT chk_nr_amount CHECK (amount > 0)
+      );
+
+      -- Task #17: Withdrawals Table
+      CREATE TABLE IF NOT EXISTS withdrawals (
+        id UUID PRIMARY KEY,
+        public_withdrawal_id VARCHAR(50) UNIQUE NOT NULL,
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        amount NUMERIC(12, 2) NOT NULL,
+        currency VARCHAR(10) NOT NULL DEFAULT 'USD',
+        destination_type VARCHAR(50) NOT NULL,
+        destination_reference TEXT NOT NULL,
+        status VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+        requested_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        approved_at TIMESTAMP WITH TIME ZONE NULL,
+        rejected_at TIMESTAMP WITH TIME ZONE NULL,
+        completed_at TIMESTAMP WITH TIME ZONE NULL,
+        cancelled_at TIMESTAMP WITH TIME ZONE NULL,
+        failed_at TIMESTAMP WITH TIME ZONE NULL,
+        rejection_reason TEXT NULL,
+        idempotency_key VARCHAR(100) NULL,
+        created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        CONSTRAINT chk_withdrawal_status CHECK (status IN ('PENDING', 'APPROVED', 'REJECTED', 'PROCESSING', 'COMPLETED', 'FAILED', 'CANCELLED')),
+        CONSTRAINT chk_withdrawal_amount CHECK (amount > 0)
+      );
     `);
 
     // Ensure public_id column exists on users (if created in previous version)
@@ -295,6 +449,22 @@ async function initSchema(client: DatabaseClient) {
       await client.exec(`ALTER TABLE users ADD COLUMN IF NOT EXISTS public_id VARCHAR(50);`);
     } catch {
       // Column may already exist
+    }
+
+    // Ensure role column exists on users (default USER)
+    try {
+      await client.exec(`ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(20) NOT NULL DEFAULT 'USER';`);
+    } catch {
+      // Column may already exist
+    }
+
+    // Ensure reward_epochs allows NULL reward_per_node when rate is not finalized
+    try {
+      await client.exec(`ALTER TABLE reward_epochs ALTER COLUMN reward_per_node DROP NOT NULL;`);
+      await client.exec(`ALTER TABLE reward_epochs DROP CONSTRAINT IF EXISTS chk_epoch_reward;`);
+      await client.exec(`ALTER TABLE reward_epochs ADD CONSTRAINT chk_epoch_reward CHECK (reward_per_node IS NULL OR reward_per_node > 0);`);
+    } catch {
+      // Constraints may already be updated
     }
 
     // Ensure user_agent and ip_address columns exist on sessions
@@ -356,7 +526,172 @@ async function initSchema(client: DatabaseClient) {
       CREATE INDEX IF NOT EXISTS idx_bve_beneficiary_date ON binary_volume_events (beneficiary_user_id, business_date);
 
       CREATE INDEX IF NOT EXISTS idx_bdv_user_date ON binary_daily_volumes (user_id, business_date);
+
+      -- Task #11: Indexes for binary matching settlements & components
+      CREATE INDEX IF NOT EXISTS idx_bms_user_id ON binary_matching_settlements (user_id);
+      CREATE INDEX IF NOT EXISTS idx_bms_business_date ON binary_matching_settlements (business_date);
+      CREATE INDEX IF NOT EXISTS idx_bms_status ON binary_matching_settlements (status);
+      CREATE INDEX IF NOT EXISTS idx_bms_user_settled_at ON binary_matching_settlements (user_id, settled_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_bmc_settlement_id ON binary_matching_components (settlement_id);
+      CREATE INDEX IF NOT EXISTS idx_bmc_settlement_seq ON binary_matching_components (settlement_id, sequence_no);
+
+      -- Task #12: Indexes for promotion milestone bonuses
+      CREATE INDEX IF NOT EXISTS idx_pb_user_id ON promotion_bonuses (user_id);
+      CREATE INDEX IF NOT EXISTS idx_pb_status ON promotion_bonuses (status);
+      CREATE INDEX IF NOT EXISTS idx_pb_milestone ON promotion_bonuses (milestone);
+      CREATE INDEX IF NOT EXISTS idx_pb_qualified_at ON promotion_bonuses (qualified_at DESC);
+
+      -- Task #13: Indexes for financial ledger entries
+      CREATE INDEX IF NOT EXISTS idx_fle_user_id ON financial_ledger_entries (user_id);
+      CREATE INDEX IF NOT EXISTS idx_fle_user_created ON financial_ledger_entries (user_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_fle_source ON financial_ledger_entries (source_type, source_id);
+      CREATE INDEX IF NOT EXISTS idx_fle_entry_type ON financial_ledger_entries (entry_type);
+      CREATE INDEX IF NOT EXISTS idx_fle_status ON financial_ledger_entries (status);
+      CREATE INDEX IF NOT EXISTS idx_fle_public_txn_id ON financial_ledger_entries (public_txn_id);
+
+      -- Task #14: Indexes for reward epochs and node rewards
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_reward_epochs_public_id ON reward_epochs (public_epoch_id);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_reward_epochs_number ON reward_epochs (epoch_number);
+      CREATE INDEX IF NOT EXISTS idx_reward_epochs_status ON reward_epochs (status);
+      CREATE INDEX IF NOT EXISTS idx_reward_epochs_dates ON reward_epochs (start_at, end_at);
+
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_node_rewards_public_id ON node_rewards (public_reward_id);
+      CREATE INDEX IF NOT EXISTS idx_node_rewards_owner ON node_rewards (owner_user_id);
+      CREATE INDEX IF NOT EXISTS idx_node_rewards_node ON node_rewards (node_id);
+      CREATE INDEX IF NOT EXISTS idx_node_rewards_epoch ON node_rewards (epoch_id);
+      CREATE INDEX IF NOT EXISTS idx_node_rewards_status ON node_rewards (status);
+      CREATE INDEX IF NOT EXISTS idx_node_rewards_accrued_at ON node_rewards (accrued_at DESC);
+
+      -- Task #17: Withdrawal Indexes
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_withdrawals_public_id ON withdrawals (public_withdrawal_id);
+      CREATE INDEX IF NOT EXISTS idx_withdrawals_user_id ON withdrawals (user_id);
+      CREATE INDEX IF NOT EXISTS idx_withdrawals_status ON withdrawals (status);
+      CREATE INDEX IF NOT EXISTS idx_withdrawals_created ON withdrawals (created_at DESC);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_withdrawals_idempotency ON withdrawals (user_id, idempotency_key) WHERE idempotency_key IS NOT NULL AND idempotency_key != '';
     `);
+
+    // Ensure financial_ledger_entries constraint supports NODE_REWARD and WITHDRAWAL
+    try {
+      await client.exec(`
+        ALTER TABLE financial_ledger_entries DROP CONSTRAINT IF EXISTS chk_fle_source_type;
+        ALTER TABLE financial_ledger_entries ADD CONSTRAINT chk_fle_source_type CHECK (source_type IN ('REFERRAL_COMMISSION', 'MATCHING_BONUS', 'PROMOTION_BONUS', 'NODE_REWARD', 'WITHDRAWAL'));
+      `);
+    } catch {
+      // Constraint update ignored if already applied or table structure matches
+    }
+
+    // Ensure admin_audit_logs table and indexes exist
+    try {
+      await client.exec(`
+        CREATE TABLE IF NOT EXISTS admin_audit_logs (
+          id UUID PRIMARY KEY,
+          admin_user_id UUID NULL REFERENCES users(id) ON DELETE SET NULL,
+          admin_public_id VARCHAR(50) NOT NULL,
+          action VARCHAR(100) NOT NULL,
+          target_type VARCHAR(50) NOT NULL,
+          target_id VARCHAR(100) NOT NULL,
+          details TEXT NOT NULL,
+          metadata TEXT NULL,
+          ip_address VARCHAR(100) NULL,
+          created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_admin_audit_admin_id ON admin_audit_logs (admin_user_id);
+        CREATE INDEX IF NOT EXISTS idx_admin_audit_action ON admin_audit_logs (action);
+        CREATE INDEX IF NOT EXISTS idx_admin_audit_target ON admin_audit_logs (target_type, target_id);
+        CREATE INDEX IF NOT EXISTS idx_admin_audit_created ON admin_audit_logs (created_at DESC);
+      `);
+    } catch (auditTableErr) {
+      console.warn('[DB Migration] admin_audit_logs creation error:', auditTableErr);
+    }
+
+    // Task #17.1: BNB Smart Chain Deposit & On-Chain Withdrawal Tables
+    try {
+      await client.exec(`
+        -- 1. User Deposit Addresses
+        CREATE TABLE IF NOT EXISTS user_deposit_addresses (
+          id UUID PRIMARY KEY,
+          user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          chain_id INTEGER NOT NULL DEFAULT 97,
+          asset VARCHAR(20) NOT NULL DEFAULT 'BNB',
+          address VARCHAR(100) NOT NULL,
+          derivation_reference VARCHAR(100) NOT NULL,
+          created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          CONSTRAINT uq_user_deposit_chain_asset UNIQUE (user_id, chain_id, asset),
+          CONSTRAINT uq_deposit_chain_address UNIQUE (chain_id, address)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_uda_user_id ON user_deposit_addresses (user_id);
+        CREATE INDEX IF NOT EXISTS idx_uda_address ON user_deposit_addresses (address);
+        CREATE INDEX IF NOT EXISTS idx_uda_chain_asset ON user_deposit_addresses (chain_id, asset);
+
+        -- 2. Blockchain Deposits Tracking
+        CREATE TABLE IF NOT EXISTS blockchain_deposits (
+          id UUID PRIMARY KEY,
+          public_deposit_id VARCHAR(50) UNIQUE NOT NULL,
+          user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          chain_id INTEGER NOT NULL,
+          asset VARCHAR(20) NOT NULL DEFAULT 'BNB',
+          tx_hash VARCHAR(100) NOT NULL,
+          from_address VARCHAR(100) NOT NULL,
+          to_address VARCHAR(100) NOT NULL,
+          amount NUMERIC(28, 18) NOT NULL,
+          block_number BIGINT NOT NULL,
+          confirmations INTEGER NOT NULL DEFAULT 0,
+          status VARCHAR(20) NOT NULL DEFAULT 'DETECTED',
+          detected_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          confirmed_at TIMESTAMP WITH TIME ZONE NULL,
+          credited_at TIMESTAMP WITH TIME ZONE NULL,
+          created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          CONSTRAINT uq_bcd_chain_tx_to UNIQUE (chain_id, tx_hash, to_address),
+          CONSTRAINT chk_bcd_status CHECK (status IN ('DETECTED', 'CONFIRMING', 'CONFIRMED', 'CREDITED', 'REORGED', 'FAILED')),
+          CONSTRAINT chk_bcd_amount CHECK (amount > 0)
+        );
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_bcd_public_id ON blockchain_deposits (public_deposit_id);
+        CREATE INDEX IF NOT EXISTS idx_bcd_user_id ON blockchain_deposits (user_id);
+        CREATE INDEX IF NOT EXISTS idx_bcd_tx_hash ON blockchain_deposits (tx_hash);
+        CREATE INDEX IF NOT EXISTS idx_bcd_to_address ON blockchain_deposits (to_address);
+        CREATE INDEX IF NOT EXISTS idx_bcd_status ON blockchain_deposits (status);
+        CREATE INDEX IF NOT EXISTS idx_bcd_created ON blockchain_deposits (created_at DESC);
+
+        -- 3. Blockchain On-Chain Withdrawals Tracking
+        CREATE TABLE IF NOT EXISTS blockchain_withdrawals (
+          id UUID PRIMARY KEY,
+          withdrawal_id UUID UNIQUE NOT NULL REFERENCES withdrawals(id) ON DELETE CASCADE,
+          chain_id INTEGER NOT NULL,
+          tx_hash VARCHAR(100) NULL,
+          nonce INTEGER NOT NULL,
+          from_address VARCHAR(100) NOT NULL,
+          destination VARCHAR(100) NOT NULL,
+          amount_bnb NUMERIC(28, 18) NOT NULL,
+          gas_price_gwei NUMERIC(14, 4) NULL,
+          gas_used BIGINT NULL,
+          status VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+          broadcast_at TIMESTAMP WITH TIME ZONE NULL,
+          confirmed_at TIMESTAMP WITH TIME ZONE NULL,
+          error_message TEXT NULL,
+          created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          CONSTRAINT chk_bcw_status CHECK (status IN ('PENDING', 'BROADCASTED', 'CONFIRMED', 'FAILED')),
+          CONSTRAINT chk_bcw_amount CHECK (amount_bnb > 0)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_bcw_withdrawal_id ON blockchain_withdrawals (withdrawal_id);
+        CREATE INDEX IF NOT EXISTS idx_bcw_tx_hash ON blockchain_withdrawals (tx_hash);
+        CREATE INDEX IF NOT EXISTS idx_bcw_status ON blockchain_withdrawals (status);
+        CREATE INDEX IF NOT EXISTS idx_bcw_chain_nonce ON blockchain_withdrawals (chain_id, from_address, nonce);
+      `);
+
+      // Update financial_ledger_entries constraint to support BLOCKCHAIN_DEPOSIT
+      await client.exec(`
+        ALTER TABLE financial_ledger_entries DROP CONSTRAINT IF EXISTS chk_fle_source_type;
+        ALTER TABLE financial_ledger_entries ADD CONSTRAINT chk_fle_source_type CHECK (source_type IN ('REFERRAL_COMMISSION', 'MATCHING_BONUS', 'PROMOTION_BONUS', 'NODE_REWARD', 'WITHDRAWAL', 'BLOCKCHAIN_DEPOSIT'));
+      `);
+    } catch (task171Err) {
+      console.warn('[DB Migration] Task #17.1 BSC schema migration warning:', task171Err);
+    }
 
     // 3. Backfill existing users with missing public_id, user_referrals, and binary_placements
     await backfillExistingUsers(client);
