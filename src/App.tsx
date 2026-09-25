@@ -151,6 +151,22 @@ function AppContent() {
     return <DashboardPage onNavigate={navigate} currentPath="/app/deposit" />;
   }
 
+  // ROUTE: /swap (Alias for /app/swap)
+  if (currentPath === '/swap' || currentPath.startsWith('/swap/')) {
+    if (!loading && !user) {
+      return <LoginPage onNavigate={navigate} />;
+    }
+    return <DashboardPage onNavigate={navigate} currentPath="/app/swap" />;
+  }
+
+  // ROUTE: /notifications (Alias for /app/notifications)
+  if (currentPath === '/notifications' || currentPath.startsWith('/notifications/')) {
+    if (!loading && !user) {
+      return <LoginPage onNavigate={navigate} />;
+    }
+    return <DashboardPage onNavigate={navigate} currentPath="/app/notifications" />;
+  }
+
   // ROUTE: /admin (Protected Admin Control Plane)
   if (currentPath === '/admin' || currentPath.startsWith('/admin/')) {
     if (!loading && !user) {

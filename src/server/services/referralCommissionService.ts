@@ -8,6 +8,7 @@ import {
 import { formatSafeDisplayName } from '../utils/idGenerator';
 import { postLedgerCredit, postLedgerReversal } from './walletLedgerService';
 import { getDirectReferralCommissionRate } from './economicService';
+import { notifyReferralEarned } from './notificationService';
 
 export interface SafeReferralCommission {
   publicCommissionId: string;
@@ -206,6 +207,18 @@ export async function processNodeActivationCommission(
     );
   } catch (secErr) {
     console.warn('[SecurityEvent] Could not log referral commission event:', secErr);
+  }
+
+  // Task #20: Trigger in-app notification for referral commission
+  try {
+    await notifyReferralEarned({
+      userId: sponsorUserId,
+      amountUsd: Number(row.amount_usd),
+      buyerPublicId,
+      commissionId: row.id,
+    });
+  } catch (notifErr) {
+    console.warn('[Notification] Could not trigger referral earned notification:', notifErr);
   }
 
   return {

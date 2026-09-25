@@ -2,6 +2,7 @@ import { getDb } from '../db/db';
 import { v4 as uuidv4 } from 'uuid';
 import { generatePromotionBonusPublicId } from '../utils/idGenerator';
 import { postLedgerCredit, postLedgerReversal } from './walletLedgerService';
+import { notifyPromotionEarned } from './notificationService';
 
 /**
  * Official Immutable Server-Side Promotion Configuration:
@@ -205,6 +206,18 @@ export async function evaluateUserPromotions(userId: string): Promise<PromotionS
       });
     } catch (ledgErr) {
       console.warn('[WalletLedger] Error posting promotion to ledger:', ledgErr);
+    }
+
+    // Task #20: Trigger in-app notification for promotion bonus (idempotent via sourceId)
+    try {
+      await notifyPromotionEarned({
+        userId,
+        bonusUsd: m.amountUsd,
+        milestoneTitle: `Milestone ${m.milestone}`,
+        bonusId: m.id,
+      });
+    } catch (notifErr) {
+      console.warn('[Notification] Error triggering promotion earned notification:', notifErr);
     }
   }
 

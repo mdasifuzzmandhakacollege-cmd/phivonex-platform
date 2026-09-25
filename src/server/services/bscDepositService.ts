@@ -4,6 +4,7 @@ import { BSC_CONFIG } from '../../config/bscConfig';
 import { generateDepositPublicId } from '../utils/idGenerator';
 import { findUserByDepositAddress } from './bscKeyService';
 import { postLedgerCredit } from './walletLedgerService';
+import { notifyUsdtDepositConfirmed } from './notificationService';
 
 export type BlockchainDepositStatus =
   | 'DETECTED'
@@ -260,6 +261,18 @@ export async function processBlockchainDepositEvent(params: {
 
       if (creditedRes.rows.length > 0) {
         depositRow = creditedRes.rows[0];
+      }
+
+      // Task #20: Trigger in-app notification for confirmed blockchain deposit
+      try {
+        await notifyUsdtDepositConfirmed({
+          userId,
+          amountUsdt: depAmount,
+          depositId: depId,
+          txHash: cleanTxHash,
+        });
+      } catch (notifErr) {
+        console.warn('[Notification] Error triggering deposit confirmed notification:', notifErr);
       }
     }
 

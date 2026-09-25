@@ -34,7 +34,7 @@ async function runTask13WalletTests() {
   async function createTestUser(tag: string, sponsorUserId?: string): Promise<{ id: string; publicId: string }> {
     const id = uuidv4();
     const cleanTag = tag.replace(/[^a-zA-Z0-9]/g, '').slice(0, 8).toUpperCase();
-    const publicId = `PX-${cleanTag}-${Math.floor(1000 + Math.random() * 9000)}`;
+    const publicId = `PX-${cleanTag}-${Date.now().toString().slice(-4)}${Math.floor(100 + Math.random() * 900)}`;
     const email = `u_${cleanTag}_${Date.now()}_${Math.floor(Math.random() * 100000)}@phivonex.test`;
     await db.query(
       `INSERT INTO users (id, public_id, full_name, email, country, password_hash, status, created_at, updated_at)
@@ -318,6 +318,8 @@ async function runTask13WalletTests() {
 
     if (failed > 0) {
       process.exit(1);
+    } else {
+      process.exit(0);
     }
   } catch (err) {
     console.error('Fatal error during Task #13 tests:', err);

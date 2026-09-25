@@ -419,14 +419,14 @@ export async function getInternalCoinPrice(): Promise<{
   const cfg = await getEconomicConfigByKey('INTERNAL_COIN_PRICE_USDT');
   if (cfg && typeof cfg.configValue === 'object' && cfg.configValue !== null) {
     return {
-      coinSymbol: cfg.configValue.coinSymbol || 'PHX',
+      coinSymbol: cfg.configValue.coinSymbol || 'PHIVO',
       priceUsdt: Number(cfg.configValue.priceUsdt || 0.10),
       effectiveFrom: cfg.configValue.effectiveFrom || cfg.effectiveFrom,
       swapEnabled: cfg.configValue.swapEnabled !== false,
     };
   }
   return {
-    coinSymbol: 'PHX',
+    coinSymbol: 'PHIVO',
     priceUsdt: 0.10,
     effectiveFrom: new Date().toISOString(),
     swapEnabled: true,

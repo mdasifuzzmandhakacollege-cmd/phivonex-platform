@@ -2,6 +2,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { DatabaseClient, getDb } from '../db/db';
 import { generateSettlementPublicId } from '../utils/idGenerator';
 import { postLedgerCredit, postLedgerReversal } from './walletLedgerService';
+import { notifyMatchingEarned } from './notificationService';
 import {
   getDhakaBusinessDate,
   getNextDhakaMidnightTime,
@@ -439,6 +440,17 @@ export async function settleUserMatchingForDate(
         });
       } catch (ledgErr) {
         console.warn('[WalletLedger] Error posting matching settlement to ledger:', ledgErr);
+      }
+
+      // Task #20: Trigger in-app notification for matching bonus
+      try {
+        await notifyMatchingEarned({
+          userId,
+          bonusUsd: decomposition.totalBonusUsd,
+          settlementId,
+        });
+      } catch (notifErr) {
+        console.warn('[Notification] Error triggering matching earned notification:', notifErr);
       }
     }
 

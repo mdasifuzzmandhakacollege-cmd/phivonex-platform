@@ -15,7 +15,7 @@ const FAQ_ITEMS: FAQItem[] = [
   {
     question: 'What is the maximum Coin supply?',
     answer:
-      'The maximum supply of PHIVONEX Coin is strictly hardcoded at 100,000,000 PHX. No secondary minting, inflationary debasement, or algorithmic emission beyond this ceiling can ever occur.',
+      'The maximum supply of PHIVONEX Coin is strictly hardcoded at 100,000,000 PHIVO. No secondary minting, inflationary debasement, or algorithmic emission beyond this ceiling can ever occur.',
   },
   {
     question: 'How many Genesis Nodes are planned?',

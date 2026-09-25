@@ -89,7 +89,7 @@ export const AppPlaceholderPage: React.FC<AppPlaceholderPageProps> = ({
               </div>
               <div className="flex items-center justify-between">
                 <span>Maximum Coin Supply:</span>
-                <span className="text-[#00CFFF]">100,000,000 PHX</span>
+                <span className="text-[#00CFFF]">100,000,000 PHIVO</span>
               </div>
             </div>
 

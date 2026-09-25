@@ -12,6 +12,7 @@ import { processNodeActivationCommission, SafeReferralCommission } from './refer
 import { propagateNodeSalesVolume } from './binaryVolumeService';
 import { broadcastPublicEvent } from './publicNetworkService';
 import { getNodeBasePrice, isNodeSalesEnabled } from './economicService';
+import { notifyNodeActivated } from './notificationService';
 
 export interface SafeNodeOrder {
   publicOrderId: string;
@@ -611,6 +612,18 @@ export async function settleNodeOrder(
     );
   } catch (secErr) {
     console.warn('[SecurityEvent] Could not log purchase event:', secErr);
+  }
+
+  // Task #20: Trigger in-app notification for node activation
+  try {
+    await notifyNodeActivated({
+      userId: order.user_id,
+      nodeNumber: finalNode.node_number,
+      orderPublicId: finalOrder.public_order_id,
+      sourceId: finalOrder.id,
+    });
+  } catch (notifErr) {
+    console.warn('[Notification] Could not trigger node activated notification:', notifErr);
   }
 
   // Broadcast live public event to SSE stream

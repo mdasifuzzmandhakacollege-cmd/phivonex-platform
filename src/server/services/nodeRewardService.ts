@@ -4,6 +4,7 @@ import { generateEpochPublicId, generateRewardPublicId } from '../utils/idGenera
 import { getConfiguredRewardPerNode, REWARD_CURRENCY } from '../config/rewardConfig';
 import { postLedgerCredit, postLedgerReversal } from './walletLedgerService';
 import { isNodeRewardsEnabled, getNodeRewardRatePerEpoch } from './economicService';
+import { notifyPhivoReward } from './notificationService';
 
 export interface RewardEpoch {
   id: string;
@@ -306,6 +307,17 @@ export async function closeAndSettleEpoch(
       description: `Genesis Node Mining Reward - ${publicEpochId} (Node ${node.public_node_id})`,
       createdAt: now,
     });
+
+    // Task #20: Trigger in-app notification for node mining reward (idempotent via sourceId)
+    try {
+      await notifyPhivoReward({
+        userId: node.owner_user_id,
+        amountPhivo: actualAmount,
+        rewardId: actualRewardId,
+      });
+    } catch (notifErr) {
+      console.warn('[Notification] Error triggering node reward notification:', notifErr);
+    }
   }
 
   return {

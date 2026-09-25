@@ -684,10 +684,10 @@ async function initSchema(client: DatabaseClient) {
         CREATE INDEX IF NOT EXISTS idx_bcw_chain_nonce ON blockchain_withdrawals (chain_id, from_address, nonce);
       `);
 
-      // Update financial_ledger_entries constraint to support BLOCKCHAIN_DEPOSIT
+      // Update financial_ledger_entries constraint to support BLOCKCHAIN_DEPOSIT & COIN_SWAP
       await client.exec(`
         ALTER TABLE financial_ledger_entries DROP CONSTRAINT IF EXISTS chk_fle_source_type;
-        ALTER TABLE financial_ledger_entries ADD CONSTRAINT chk_fle_source_type CHECK (source_type IN ('REFERRAL_COMMISSION', 'MATCHING_BONUS', 'PROMOTION_BONUS', 'NODE_REWARD', 'WITHDRAWAL', 'BLOCKCHAIN_DEPOSIT'));
+        ALTER TABLE financial_ledger_entries ADD CONSTRAINT chk_fle_source_type CHECK (source_type IN ('REFERRAL_COMMISSION', 'MATCHING_BONUS', 'PROMOTION_BONUS', 'NODE_REWARD', 'WITHDRAWAL', 'BLOCKCHAIN_DEPOSIT', 'COIN_SWAP'));
       `);
     } catch (task171Err) {
       console.warn('[DB Migration] Task #17.1 BSC schema migration warning:', task171Err);
@@ -745,6 +745,77 @@ async function initSchema(client: DatabaseClient) {
       `);
     } catch (task19Err) {
       console.warn('[DB Migration] Task #19 Economic Configs schema migration warning:', task19Err);
+    }
+
+    // Task #19.1: Internal Coin -> USDT Swap Transactions Table
+    try {
+      await client.exec(`
+        CREATE TABLE IF NOT EXISTS coin_swap_transactions (
+          id UUID PRIMARY KEY,
+          public_swap_id VARCHAR(50) UNIQUE NOT NULL,
+          user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          coin_amount NUMERIC(28, 6) NOT NULL,
+          rate_usdt NUMERIC(16, 6) NOT NULL,
+          usdt_amount NUMERIC(16, 4) NOT NULL,
+          status VARCHAR(20) NOT NULL DEFAULT 'COMPLETED',
+          rate_version INTEGER NOT NULL DEFAULT 1,
+          idempotency_key VARCHAR(100) NULL,
+          created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          completed_at TIMESTAMP WITH TIME ZONE NULL,
+          CONSTRAINT chk_cst_status CHECK (status IN ('PENDING', 'COMPLETED', 'REVERSED')),
+          CONSTRAINT chk_cst_coin_amount CHECK (coin_amount > 0),
+          CONSTRAINT chk_cst_rate_usdt CHECK (rate_usdt > 0),
+          CONSTRAINT chk_cst_usdt_amount CHECK (usdt_amount > 0)
+        );
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_cst_public_id ON coin_swap_transactions (public_swap_id);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_cst_user_idempotency ON coin_swap_transactions (user_id, idempotency_key) WHERE idempotency_key IS NOT NULL AND idempotency_key != '';
+        CREATE INDEX IF NOT EXISTS idx_cst_user_id ON coin_swap_transactions (user_id);
+        CREATE INDEX IF NOT EXISTS idx_cst_status ON coin_swap_transactions (status);
+        CREATE INDEX IF NOT EXISTS idx_cst_created_at ON coin_swap_transactions (created_at DESC);
+
+        -- Update financial_ledger_entries constraint to support COIN_SWAP
+        ALTER TABLE financial_ledger_entries DROP CONSTRAINT IF EXISTS chk_fle_source_type;
+        ALTER TABLE financial_ledger_entries ADD CONSTRAINT chk_fle_source_type CHECK (source_type IN ('REFERRAL_COMMISSION', 'MATCHING_BONUS', 'PROMOTION_BONUS', 'NODE_REWARD', 'WITHDRAWAL', 'BLOCKCHAIN_DEPOSIT', 'COIN_SWAP'));
+      `);
+    } catch (task191Err) {
+      console.warn('[DB Migration] Task #19.1 Swap Transactions schema migration warning:', task191Err);
+    }
+
+    // Task #20: In-App Notifications Table
+    try {
+      await client.exec(`
+        CREATE TABLE IF NOT EXISTS notifications (
+          id UUID PRIMARY KEY,
+          public_notification_id VARCHAR(50) UNIQUE NOT NULL,
+          user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          type VARCHAR(50) NOT NULL,
+          title VARCHAR(255) NOT NULL,
+          message TEXT NOT NULL,
+          source_type VARCHAR(50) NULL,
+          source_id VARCHAR(100) NULL,
+          read_at TIMESTAMP WITH TIME ZONE NULL,
+          created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          CONSTRAINT chk_notification_type CHECK (type IN (
+            'NODE_ACTIVATED',
+            'REFERRAL_EARNED',
+            'MATCHING_EARNED',
+            'PROMOTION_EARNED',
+            'PHIVO_REWARD',
+            'PHIVO_SWAP_COMPLETED',
+            'USDT_DEPOSIT_CONFIRMED',
+            'WITHDRAWAL_STATUS',
+            'SECURITY_ALERT'
+          ))
+        );
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_notifications_public_id ON notifications (public_notification_id);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_notifications_idempotency ON notifications (user_id, source_type, source_id, type) WHERE source_type IS NOT NULL AND source_id IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS idx_notifications_user_unread ON notifications (user_id, read_at, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_notifications_user_created ON notifications (user_id, created_at DESC);
+      `);
+    } catch (task20Err) {
+      console.warn('[DB Migration] Task #20 Notifications schema migration warning:', task20Err);
     }
 
     // 3. Backfill existing users with missing public_id, user_referrals, and binary_placements

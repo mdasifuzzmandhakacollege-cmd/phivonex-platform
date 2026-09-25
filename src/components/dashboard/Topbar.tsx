@@ -8,7 +8,11 @@ import {
   ExternalLink,
   Shield,
   Activity,
-  Check
+  Check,
+  Bell,
+  CheckCheck,
+  Clock,
+  ArrowRight
 } from 'lucide-react';
 import { PhivonexLogo } from '../brand/PhivonexLogo';
 import { PhivonexSymbol } from '../brand/PhivonexSymbol';
@@ -24,6 +28,15 @@ interface TopbarProps {
   onNavigate: (route: string) => void;
 }
 
+interface RecentNotification {
+  id: string;
+  type: string;
+  title: string;
+  message: string;
+  readAt: string | null;
+  createdAt: string;
+}
+
 export const Topbar: React.FC<TopbarProps> = ({
   user,
   activeTab,
@@ -33,13 +46,92 @@ export const Topbar: React.FC<TopbarProps> = ({
   onNavigate,
 }) => {
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
-  const userMenuRef = useRef<HTMLDivElement>(null);
+  const [isNotifOpen, setIsNotifOpen] = useState(false);
+  const [unreadCount, setUnreadCount] = useState<number>(0);
+  const [recentNotifications, setRecentNotifications] = useState<RecentNotification[]>([]);
+  const [loadingNotifs, setLoadingNotifs] = useState(false);
 
-  // Close user menu on outside click
+  const userMenuRef = useRef<HTMLDivElement>(null);
+  const notifMenuRef = useRef<HTMLDivElement>(null);
+
+  // Poll unread notification count
+  const fetchUnreadCount = async () => {
+    try {
+      const res = await fetch('/api/notifications/unread-count');
+      if (res.ok) {
+        const data = await res.json();
+        setUnreadCount(data.unreadCount || 0);
+      }
+    } catch {
+      // Ignore background fetch errors
+    }
+  };
+
+  useEffect(() => {
+    if (!user) return;
+    fetchUnreadCount();
+    const interval = setInterval(fetchUnreadCount, 15000);
+    return () => clearInterval(interval);
+  }, [user]);
+
+  // Fetch recent notifications when dropdown opens
+  const fetchRecentNotifications = async () => {
+    setLoadingNotifs(true);
+    try {
+      const res = await fetch('/api/notifications?limit=5');
+      if (res.ok) {
+        const data = await res.json();
+        setRecentNotifications(data.notifications || []);
+        setUnreadCount(data.unreadCount || 0);
+      }
+    } catch (err) {
+      console.warn('[Topbar] Error loading notifications:', err);
+    } finally {
+      setLoadingNotifs(false);
+    }
+  };
+
+  const handleToggleNotif = () => {
+    if (!isNotifOpen) {
+      fetchRecentNotifications();
+      setIsUserMenuOpen(false);
+    }
+    setIsNotifOpen(!isNotifOpen);
+  };
+
+  const handleMarkAsRead = async (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    try {
+      await fetch(`/api/notifications/${id}/read`, { method: 'PATCH' });
+      setRecentNotifications((prev) =>
+        prev.map((n) => (n.id === id ? { ...n, readAt: new Date().toISOString() } : n))
+      );
+      setUnreadCount((prev) => Math.max(0, prev - 1));
+    } catch {
+      // Ignore error
+    }
+  };
+
+  const handleMarkAllRead = async () => {
+    try {
+      await fetch('/api/notifications/read-all', { method: 'POST' });
+      setRecentNotifications((prev) =>
+        prev.map((n) => ({ ...n, readAt: n.readAt || new Date().toISOString() }))
+      );
+      setUnreadCount(0);
+    } catch {
+      // Ignore error
+    }
+  };
+
+  // Close menus on outside click
   useEffect(() => {
     const handleOutsideClick = (e: MouseEvent) => {
       if (userMenuRef.current && !userMenuRef.current.contains(e.target as Node)) {
         setIsUserMenuOpen(false);
+      }
+      if (notifMenuRef.current && !notifMenuRef.current.contains(e.target as Node)) {
+        setIsNotifOpen(false);
       }
     };
     document.addEventListener('mousedown', handleOutsideClick);
@@ -54,6 +146,18 @@ export const Topbar: React.FC<TopbarProps> = ({
         return 'Node Infrastructure';
       case 'network':
         return 'Network Topology';
+      case 'referrals':
+        return 'Direct Referrals';
+      case 'wallet':
+        return 'Wallet & Ledger';
+      case 'swap':
+        return 'Internal Coin Swap';
+      case 'deposit':
+        return 'BNB Chain Deposit';
+      case 'withdrawals':
+        return 'Asset Withdrawals';
+      case 'notifications':
+        return 'Protocol Notifications';
       case 'rewards':
         return 'Rewards & Mining Ledger';
       case 'transactions':
@@ -127,6 +231,125 @@ export const Topbar: React.FC<TopbarProps> = ({
         <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[#32D583]/[0.08] border border-[#32D583]/20 text-[11px] font-mono text-[#32D583]">
           <ShieldCheck className="w-3.5 h-3.5" />
           <span>TLS 1.3 Verified</span>
+        </div>
+
+        {/* Task #20: Notification Bell + Dropdown */}
+        <div className="relative" ref={notifMenuRef}>
+          <button
+            onClick={handleToggleNotif}
+            className={`p-2.5 rounded-xl border transition-all cursor-pointer relative min-h-[44px] min-w-[44px] flex items-center justify-center ${
+              isNotifOpen
+                ? 'bg-white/[0.08] border-[#00CFFF]/40 text-white'
+                : 'bg-white/[0.03] hover:bg-white/[0.08] border-white/[0.08] text-[#98A2B3] hover:text-white'
+            }`}
+            aria-label="Notifications"
+            aria-expanded={isNotifOpen}
+          >
+            <Bell className="w-4 h-4" />
+            {unreadCount > 0 && (
+              <span className="absolute top-1.5 right-1.5 min-w-[18px] h-[18px] px-1 rounded-full bg-[#00CFFF] text-[#05070B] text-[10px] font-mono font-bold flex items-center justify-center shadow-lg shadow-[#00CFFF]/40 animate-pulse">
+                {unreadCount > 99 ? '99+' : unreadCount}
+              </span>
+            )}
+          </button>
+
+          {/* Notifications Dropdown Preview */}
+          {isNotifOpen && (
+            <div className="absolute right-0 mt-2 w-80 sm:w-96 rounded-2xl bg-[#07101D] border border-white/[0.12] shadow-2xl p-3 z-50 animate-fadeIn">
+              <div className="flex items-center justify-between pb-2.5 mb-2 border-b border-white/[0.08] px-1">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-bold text-white tracking-tight">Notifications</span>
+                  {unreadCount > 0 && (
+                    <span className="px-1.5 py-0.5 rounded-full bg-[#00CFFF]/20 border border-[#00CFFF]/40 text-[#00CFFF] text-[10px] font-mono font-bold">
+                      {unreadCount} new
+                    </span>
+                  )}
+                </div>
+                {unreadCount > 0 && (
+                  <button
+                    onClick={handleMarkAllRead}
+                    className="text-[11px] text-[#00CFFF] hover:text-[#00CFFF]/80 font-medium flex items-center gap-1 cursor-pointer transition-colors"
+                  >
+                    <CheckCheck className="w-3.5 h-3.5" />
+                    <span>Mark all read</span>
+                  </button>
+                )}
+              </div>
+
+              {/* Notification preview list */}
+              <div className="max-h-[300px] overflow-y-auto space-y-1.5 pr-1 scrollbar-none">
+                {loadingNotifs ? (
+                  <div className="py-8 text-center text-xs text-[#98A2B3] font-mono flex items-center justify-center gap-2">
+                    <div className="w-3.5 h-3.5 border-2 border-[#00CFFF] border-t-transparent rounded-full animate-spin" />
+                    <span>Loading alerts...</span>
+                  </div>
+                ) : recentNotifications.length === 0 ? (
+                  <div className="py-8 text-center text-xs text-[#98A2B3]">
+                    No notifications yet.
+                  </div>
+                ) : (
+                  recentNotifications.map((notif) => {
+                    const isUnread = !notif.readAt;
+                    return (
+                      <div
+                        key={notif.id}
+                        onClick={() => {
+                          onSelectTab('notifications');
+                          setIsNotifOpen(false);
+                        }}
+                        className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer ${
+                          isUnread
+                            ? 'bg-[#0B1527] border-[#00CFFF]/30 hover:border-[#00CFFF]/50'
+                            : 'bg-white/[0.02] border-white/[0.04] hover:bg-white/[0.05]'
+                        }`}
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="flex items-center gap-1.5 min-w-0">
+                            {isUnread && (
+                              <span className="w-1.5 h-1.5 rounded-full bg-[#00CFFF] flex-shrink-0" />
+                            )}
+                            <h5 className={`text-xs font-semibold truncate ${isUnread ? 'text-white' : 'text-[#D0D5DD]'}`}>
+                              {notif.title}
+                            </h5>
+                          </div>
+                          {isUnread && (
+                            <button
+                              onClick={(e) => handleMarkAsRead(notif.id, e)}
+                              className="text-[10px] text-[#00CFFF] hover:text-white px-1.5 py-0.5 rounded bg-[#00CFFF]/10 hover:bg-[#00CFFF]/20 transition-colors flex-shrink-0"
+                              title="Mark read"
+                            >
+                              <Check className="w-3 h-3" />
+                            </button>
+                          )}
+                        </div>
+                        <p className="text-[11px] text-[#98A2B3] line-clamp-2 mt-0.5">
+                          {notif.message}
+                        </p>
+                        <div className="flex items-center gap-1 text-[10px] text-[#98A2B3] font-mono mt-1">
+                          <Clock className="w-2.5 h-2.5 opacity-60" />
+                          <span>{new Date(notif.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+
+              {/* View all footer */}
+              <div className="pt-2 mt-2 border-t border-white/[0.08]">
+                <button
+                  onClick={() => {
+                    onSelectTab('notifications');
+                    setIsNotifOpen(false);
+                  }}
+                  className="w-full py-2 px-3 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] text-xs font-medium text-white flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                >
+                  <span>View All in Notification Center</span>
+                  <ArrowRight className="w-3.5 h-3.5 text-[#00CFFF]" />
+                </button>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* User Menu Dropdown */}

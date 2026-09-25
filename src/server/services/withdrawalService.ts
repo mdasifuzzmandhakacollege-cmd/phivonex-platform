@@ -2,6 +2,7 @@ import { getDb } from '../db/db';
 import { v4 as uuidv4 } from 'uuid';
 import { generateWithdrawalPublicId } from '../utils/idGenerator';
 import { getWalletSummary, postLedgerDebit, postLedgerReversal } from './walletLedgerService';
+import { notifyWithdrawalStatus } from './notificationService';
 
 export type WithdrawalStatus =
   | 'PENDING'
@@ -191,6 +192,18 @@ export async function createWithdrawalRequest(params: {
       createdAt: now,
     });
 
+    // Task #20: Trigger in-app notification for withdrawal submission
+    try {
+      await notifyWithdrawalStatus({
+        userId,
+        amountUsdt: cleanAmount,
+        status: 'PENDING',
+        withdrawalId: withdrawal.id,
+      });
+    } catch (notifErr) {
+      console.warn('[Notification] Error triggering withdrawal pending notification:', notifErr);
+    }
+
     return withdrawal;
   });
 }
@@ -364,7 +377,18 @@ export async function settleWithdrawalAction(params: {
     );
 
     if (res.rows.length === 0) throw new Error('CONCURRENCY_ERROR: Status changed concurrently.');
-    return mapRowToWithdrawalRecord(res.rows[0]);
+    const approvedRec = mapRowToWithdrawalRecord(res.rows[0]);
+    try {
+      await notifyWithdrawalStatus({
+        userId: approvedRec.userId,
+        amountUsdt: approvedRec.amount,
+        status: 'APPROVED',
+        withdrawalId: approvedRec.id,
+      });
+    } catch (notifErr) {
+      console.warn('[Notification] Error triggering withdrawal approved notification:', notifErr);
+    }
+    return approvedRec;
   }
 
   if (normalizedAction === 'MARK_PROCESSING' || normalizedAction === 'PROCESSING') {
@@ -402,7 +426,18 @@ export async function settleWithdrawalAction(params: {
     );
 
     if (res.rows.length === 0) throw new Error('CONCURRENCY_ERROR: Withdrawal was already processed or cancelled.');
-    return mapRowToWithdrawalRecord(res.rows[0]);
+    const completedRec = mapRowToWithdrawalRecord(res.rows[0]);
+    try {
+      await notifyWithdrawalStatus({
+        userId: completedRec.userId,
+        amountUsdt: completedRec.amount,
+        status: 'COMPLETED',
+        withdrawalId: completedRec.id,
+      });
+    } catch (notifErr) {
+      console.warn('[Notification] Error triggering withdrawal completed notification:', notifErr);
+    }
+    return completedRec;
   }
 
   if (normalizedAction === 'REJECT') {
@@ -435,6 +470,18 @@ export async function settleWithdrawalAction(params: {
       description: `Withdrawal Rejected - Funds Released (${updated.publicWithdrawalId})`,
       createdAt: now,
     });
+
+    try {
+      await notifyWithdrawalStatus({
+        userId: updated.userId,
+        amountUsdt: updated.amount,
+        status: 'REJECTED',
+        withdrawalId: updated.id,
+        reason,
+      });
+    } catch (notifErr) {
+      console.warn('[Notification] Error triggering withdrawal rejected notification:', notifErr);
+    }
 
     return updated;
   }

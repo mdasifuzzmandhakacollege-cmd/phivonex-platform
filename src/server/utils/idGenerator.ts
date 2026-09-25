@@ -104,6 +104,20 @@ export function generateDepositPublicId(): string {
 }
 
 /**
+ * Generate a Public Coin Swap ID (e.g. PHX-SWP-9A2K4F)
+ */
+export function generateSwapPublicId(): string {
+  return `PHX-SWP-${getRandomCode(6)}`;
+}
+
+/**
+ * Generate a Public Notification ID (e.g. NTF-9A2K4F)
+ */
+export function generateNotificationPublicId(): string {
+  return `NTF-${getRandomCode(6)}`;
+}
+
+/**
  * Format privacy-safe display name (e.g., "John Doe" -> "John D.")
  */
 export function formatSafeDisplayName(fullName: string): string {

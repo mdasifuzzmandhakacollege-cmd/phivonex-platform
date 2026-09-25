@@ -3,7 +3,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { generateLedgerTransactionPublicId } from '../utils/idGenerator';
 
 export type LedgerEntryType = 'CREDIT' | 'DEBIT' | 'REVERSAL';
-export type LedgerSourceType = 'REFERRAL_COMMISSION' | 'MATCHING_BONUS' | 'PROMOTION_BONUS' | 'NODE_REWARD' | 'WITHDRAWAL';
+export type LedgerSourceType = 'REFERRAL_COMMISSION' | 'MATCHING_BONUS' | 'PROMOTION_BONUS' | 'NODE_REWARD' | 'WITHDRAWAL' | 'BLOCKCHAIN_DEPOSIT' | 'COIN_SWAP';
 
 export interface LedgerTransaction {
   id: string;
@@ -32,12 +32,14 @@ export interface WalletSummaryResponse {
     matching: number;
     promotion: number;
     nodeReward: number;
+    swap?: number;
   };
   grossBreakdown: {
     referral: number;
     matching: number;
     promotion: number;
     nodeReward: number;
+    swap?: number;
   };
 }
 
@@ -62,15 +64,17 @@ export async function postLedgerCredit(params: {
   sourceRef: string;
   amount: number;
   description: string;
+  currency?: string;
   createdAt?: Date;
 }): Promise<LedgerTransaction | null> {
-  const { userId, sourceType, sourceId, sourceRef, amount, description, createdAt } = params;
+  const { userId, sourceType, sourceId, sourceRef, amount, description, currency, createdAt } = params;
   if (!amount || amount <= 0) return null;
 
   const db = await getDb();
   const id = uuidv4();
   const publicTxnId = generateLedgerTransactionPublicId();
   const effectiveTime = createdAt || new Date();
+  const resolvedCurrency = currency || (sourceType === 'COIN_SWAP' || sourceType === 'WITHDRAWAL' || sourceType === 'BLOCKCHAIN_DEPOSIT' ? 'USDT' : 'USD');
 
   // Strict idempotency: ON CONFLICT DO NOTHING
   const res = await db.query<{
@@ -92,11 +96,11 @@ export async function postLedgerCredit(params: {
       id, public_txn_id, user_id, entry_type, source_type, source_id,
       source_ref, description, amount, currency, status, created_at
     )
-    VALUES ($1, $2, $3, 'CREDIT', $4, $5, $6, $7, $8, 'USD', 'SETTLED', $9)
+    VALUES ($1, $2, $3, 'CREDIT', $4, $5, $6, $7, $8, $9, 'SETTLED', $10)
     ON CONFLICT (source_type, source_id, entry_type) DO NOTHING
     RETURNING *
     `,
-    [id, publicTxnId, userId, sourceType, sourceId, sourceRef, description, amount, effectiveTime]
+    [id, publicTxnId, userId, sourceType, sourceId, sourceRef, description, amount, resolvedCurrency, effectiveTime]
   );
 
   if (res.rows.length > 0) {
@@ -171,15 +175,17 @@ export async function postLedgerReversal(params: {
   sourceRef: string;
   amount: number;
   description: string;
+  currency?: string;
   createdAt?: Date;
 }): Promise<LedgerTransaction | null> {
-  const { userId, sourceType, sourceId, sourceRef, amount, description, createdAt } = params;
+  const { userId, sourceType, sourceId, sourceRef, amount, description, currency, createdAt } = params;
   if (!amount || amount <= 0) return null;
 
   const db = await getDb();
   const id = uuidv4();
   const publicTxnId = generateLedgerTransactionPublicId();
   const effectiveTime = createdAt || new Date();
+  const resolvedCurrency = currency || (sourceType === 'COIN_SWAP' || sourceType === 'WITHDRAWAL' || sourceType === 'BLOCKCHAIN_DEPOSIT' ? 'USDT' : 'USD');
 
   // Strict idempotency: ON CONFLICT DO NOTHING
   const res = await db.query<{
@@ -201,11 +207,11 @@ export async function postLedgerReversal(params: {
       id, public_txn_id, user_id, entry_type, source_type, source_id,
       source_ref, description, amount, currency, status, created_at
     )
-    VALUES ($1, $2, $3, 'REVERSAL', $4, $5, $6, $7, $8, 'USD', 'SETTLED', $9)
+    VALUES ($1, $2, $3, 'REVERSAL', $4, $5, $6, $7, $8, $9, 'SETTLED', $10)
     ON CONFLICT (source_type, source_id, entry_type) DO NOTHING
     RETURNING *
     `,
-    [id, publicTxnId, userId, sourceType, sourceId, sourceRef, description, amount, effectiveTime]
+    [id, publicTxnId, userId, sourceType, sourceId, sourceRef, description, amount, resolvedCurrency, effectiveTime]
   );
 
   if (res.rows.length > 0) {
@@ -280,15 +286,17 @@ export async function postLedgerDebit(params: {
   sourceRef: string;
   amount: number;
   description: string;
+  currency?: string;
   createdAt?: Date;
 }): Promise<LedgerTransaction | null> {
-  const { userId, sourceType, sourceId, sourceRef, amount, description, createdAt } = params;
+  const { userId, sourceType, sourceId, sourceRef, amount, description, currency, createdAt } = params;
   if (!amount || amount <= 0) return null;
 
   const db = await getDb();
   const id = uuidv4();
   const publicTxnId = generateLedgerTransactionPublicId();
   const effectiveTime = createdAt || new Date();
+  const resolvedCurrency = currency || (sourceType === 'COIN_SWAP' || sourceType === 'WITHDRAWAL' || sourceType === 'BLOCKCHAIN_DEPOSIT' ? 'USDT' : 'USD');
 
   // Strict idempotency: ON CONFLICT DO NOTHING
   const res = await db.query<{
@@ -310,11 +318,11 @@ export async function postLedgerDebit(params: {
       id, public_txn_id, user_id, entry_type, source_type, source_id,
       source_ref, description, amount, currency, status, created_at
     )
-    VALUES ($1, $2, $3, 'DEBIT', $4, $5, $6, $7, $8, 'USD', 'SETTLED', $9)
+    VALUES ($1, $2, $3, 'DEBIT', $4, $5, $6, $7, $8, $9, 'SETTLED', $10)
     ON CONFLICT (source_type, source_id, entry_type) DO NOTHING
     RETURNING *
     `,
-    [id, publicTxnId, userId, sourceType, sourceId, sourceRef, description, amount, effectiveTime]
+    [id, publicTxnId, userId, sourceType, sourceId, sourceRef, description, amount, resolvedCurrency, effectiveTime]
   );
 
   if (res.rows.length > 0) {
@@ -516,19 +524,20 @@ export async function syncUserLedger(userId: string): Promise<void> {
     }
   }
 
-  // 4. Reconcile Node Mining Rewards
+  // 4. Reconcile Node Mining Rewards (USD-denominated rewards only; PHIVO coin rewards remain in coin balance)
   const rewardRes = await db.query<{
     id: string;
     public_reward_id: string;
     amount: string | number;
+    currency: string;
     status: string;
     accrued_at: Date;
     reversed_at: Date | null;
   }>(
     `
-    SELECT id, public_reward_id, amount, status, accrued_at, reversed_at
+    SELECT id, public_reward_id, amount, currency, status, accrued_at, reversed_at
     FROM node_rewards
-    WHERE owner_user_id = $1
+    WHERE owner_user_id = $1 AND (currency = 'USD' OR currency IS NULL)
     `,
     [userId]
   );
@@ -541,6 +550,7 @@ export async function syncUserLedger(userId: string): Promise<void> {
       sourceId: r.id,
       sourceRef: r.public_reward_id,
       amount: Number(r.amount),
+      currency: 'USD',
       description: 'Genesis Node Mining Reward Accrual',
       createdAt: new Date(r.accrued_at),
     });
@@ -553,6 +563,7 @@ export async function syncUserLedger(userId: string): Promise<void> {
         sourceId: r.id,
         sourceRef: r.public_reward_id,
         amount: Number(r.amount),
+        currency: 'USD',
         description: 'Genesis Node Mining Reward Reversal',
         createdAt: r.reversed_at ? new Date(r.reversed_at) : new Date(),
       });
@@ -605,6 +616,7 @@ export async function getWalletSummary(userId: string): Promise<WalletSummaryRes
     matching: 0,
     promotion: 0,
     nodeReward: 0,
+    swap: 0,
   };
 
   const reversals = {
@@ -612,6 +624,7 @@ export async function getWalletSummary(userId: string): Promise<WalletSummaryRes
     matching: 0,
     promotion: 0,
     nodeReward: 0,
+    swap: 0,
   };
 
   for (const row of aggRes.rows) {
@@ -625,6 +638,7 @@ export async function getWalletSummary(userId: string): Promise<WalletSummaryRes
       else if (row.source_type === 'MATCHING_BONUS') grossCredits.matching += amt;
       else if (row.source_type === 'PROMOTION_BONUS') grossCredits.promotion += amt;
       else if (row.source_type === 'NODE_REWARD') grossCredits.nodeReward += amt;
+      else if (row.source_type === 'COIN_SWAP') grossCredits.swap += amt;
     } else if (row.entry_type === 'REVERSAL') {
       if (row.source_type === 'WITHDRAWAL') {
         withdrawalReversals += amt;
@@ -634,6 +648,7 @@ export async function getWalletSummary(userId: string): Promise<WalletSummaryRes
         else if (row.source_type === 'MATCHING_BONUS') reversals.matching += amt;
         else if (row.source_type === 'PROMOTION_BONUS') reversals.promotion += amt;
         else if (row.source_type === 'NODE_REWARD') reversals.nodeReward += amt;
+        else if (row.source_type === 'COIN_SWAP') reversals.swap += amt;
       }
     } else if (row.entry_type === 'DEBIT') {
       totalDebited += amt;
@@ -646,6 +661,7 @@ export async function getWalletSummary(userId: string): Promise<WalletSummaryRes
     matching: Math.max(0, grossCredits.matching - reversals.matching),
     promotion: Math.max(0, grossCredits.promotion - reversals.promotion),
     nodeReward: Math.max(0, grossCredits.nodeReward - reversals.nodeReward),
+    swap: Math.max(0, grossCredits.swap - reversals.swap),
   };
 
   const netEarned = Math.max(0, totalEarned - earningReversals);
@@ -653,7 +669,7 @@ export async function getWalletSummary(userId: string): Promise<WalletSummaryRes
   const ledgerBalance = Math.max(0, netEarned - netWithdrawn);
 
   return {
-    totalEarned: netEarned,
+    totalEarned,
     totalReversed: earningReversals,
     totalWithdrawn: netWithdrawn,
     ledgerBalance,

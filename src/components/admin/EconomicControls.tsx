@@ -190,7 +190,7 @@ export const EconomicControls: React.FC = () => {
           throw new Error('Please enter a valid coin conversion price in USDT.');
         }
         parsedValue = {
-          coinSymbol: 'PHX',
+          coinSymbol: 'PHIVO',
           priceUsdt: price,
           effectiveFrom: new Date().toISOString(),
           swapEnabled: coinSwapEnabledInput,
@@ -758,7 +758,7 @@ export const EconomicControls: React.FC = () => {
           <div className="p-4 rounded-xl bg-[#05070B] border border-white/[0.06] flex flex-col justify-between space-y-3">
             <div>
               <div className="flex items-center justify-between">
-                <span className="text-xs font-semibold text-[#98A2B3]">1 PHIVONEX (PHX) =</span>
+                <span className="text-xs font-semibold text-[#98A2B3]">1 PHIVO =</span>
                 <span className="text-[10px] font-mono text-[#00CFFF]">v{internalCoinPrice?.version || 1}</span>
               </div>
               <div className="text-3xl font-extrabold font-mono text-sky-400 mt-1">
@@ -1078,7 +1078,7 @@ export const EconomicControls: React.FC = () => {
             {editingConfig.configKey === 'INTERNAL_COIN_PRICE_USDT' ? (
               <div className="space-y-3">
                 <div className="space-y-1">
-                  <label className="text-xs font-bold text-white block">1 PHX Coin Price (in USDT)</label>
+                  <label className="text-xs font-bold text-white block">1 PHIVO Coin Price (in USDT)</label>
                   <input
                     type="number"
                     step="0.0001"

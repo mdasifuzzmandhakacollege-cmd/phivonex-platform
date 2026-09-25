@@ -315,7 +315,7 @@ async function runTests() {
 
   console.log('\n--- TEST GROUP 7: Internal Coin Price & Swap Controls ---');
   const coinPriceInfo = await getInternalCoinPrice();
-  assert(coinPriceInfo.coinSymbol === 'PHX', 'Internal coin symbol is PHX');
+  assert(coinPriceInfo.coinSymbol === 'PHIVO', 'Internal coin symbol is PHIVO');
   assert(typeof coinPriceInfo.priceUsdt === 'number', 'Coin price in USDT is numeric');
   assert(coinPriceInfo.swapEnabled === true, 'Swap feature is enabled by default');
 
