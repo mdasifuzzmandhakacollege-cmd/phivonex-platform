@@ -114,9 +114,14 @@ router.get('/me', requireAuth, async (req: AuthRequest, res: Response): Promise<
     }
 
     // Determine domain/host for referral link
-    const host = req.get('host') || 'phivonex.org';
-    const protocol = req.protocol === 'https' || req.get('x-forwarded-proto') === 'https' ? 'https' : 'http';
-    const referralUrl = `${protocol}://${host}/register?ref=${userData.referral_code}`;
+    let baseUrl = process.env.APP_URL;
+    if (!baseUrl || baseUrl.includes('MY_APP_URL')) {
+      const host = process.env.CUSTOM_DOMAIN || req.get('host') || 'phivonex.com';
+      const protocol = req.protocol === 'https' || req.get('x-forwarded-proto') === 'https' ? 'https' : 'http';
+      baseUrl = `${protocol}://${host}`;
+    }
+    const cleanBaseUrl = baseUrl.replace(/\/$/, '');
+    const referralUrl = `${cleanBaseUrl}/register?ref=${userData.referral_code}`;
 
     res.status(200).json({
       publicId: userData.public_id,

@@ -11,6 +11,7 @@ export interface PublicNetworkSummaryData {
   totalNetworkTransactions: number;
   networkStatus: 'OPERATIONAL' | 'HEALTHY' | 'SYNCHRONIZED';
   updatedAt: string;
+  conversionRateUsd?: number;
 }
 
 export interface PublicNetworkEventItem {
@@ -33,6 +34,7 @@ const DEFAULT_SUMMARY: PublicNetworkSummaryData = {
   totalNetworkTransactions: 0,
   networkStatus: 'OPERATIONAL',
   updatedAt: new Date().toISOString(),
+  conversionRateUsd: 0.10,
 };
 
 export function usePublicNetwork() {

@@ -1,52 +1,100 @@
 /**
- * PHIVONEX — BNB Smart Chain (BSC) Configuration
- * Task #17.1 Server-side Network and Protocol Configuration
+ * PHIVONEX — BNB Smart Chain (BSC) Production Configuration
  * 
- * Strict Server-Side Security:
- * Network parameters, RPCs, and confirmation rules are authoritative
- * and NEVER accepted from user or client requests.
+ * Production Live Requirements:
+ * - APP_ENV = production (or staging/test/development)
+ * - BSC_CHAIN_ID = 56 (BNB Smart Chain Mainnet default)
+ * - Primary & Secondary Mainnet RPC endpoints with automatic failover
+ * - Official USDT BEP-20 Contract Address: 0x55d398326f99059fF775485246999027B3197955
+ * - Public HD Extended Key: DEPOSIT_ADDRESS_XPUB (No raw private keys / seeds in app)
+ * - Authoritative Treasury Address: TREASURY_WALLET_ADDRESS
+ * - Secure Signer Reference: SIGNER_SECRET_REFERENCE
+ * - WITHDRAWALS_ENABLED strictly false until separately approved
  */
 
 export const BSC_CONFIG = {
-  // BSC Chain ID: Default to 97 (BNB Smart Chain Testnet), 56 for Mainnet
-  CHAIN_ID: Number(process.env.BSC_CHAIN_ID) || 97,
+  // Application Environment
+  get APP_ENV(): string {
+    return process.env.APP_ENV || process.env.NODE_ENV || 'production';
+  },
+
+  // BSC Chain ID: Default to 56 (BNB Smart Chain Mainnet)
+  get CHAIN_ID(): number {
+    return Number(process.env.BSC_CHAIN_ID) || 56;
+  },
 
   // Human-readable network title
   get NETWORK_NAME(): string {
     return this.CHAIN_ID === 56 ? 'BNB Smart Chain Mainnet' : 'BNB Smart Chain Testnet';
   },
 
-  // Primary JSON-RPC endpoint for BNB Smart Chain
-  RPC_URL: process.env.BSC_RPC_URL || 'https://bsc-testnet.publicnode.com',
-
-  // Number of on-chain confirmations required before ledger credit
-  REQUIRED_CONFIRMATIONS: Number(process.env.BNB_REQUIRED_CONFIRMATIONS) || 3,
-
-  // Authoritative Hot Wallet / Treasury address for on-chain withdrawal settlements
-  TREASURY_ADDRESS: (process.env.BNB_TREASURY_ADDRESS || '0x71C8705E3473187F6c1aB3c4709d4352D7F338f0').toLowerCase(),
-
-  // Switch to control on-chain broadcast withdrawal execution
-  get WITHDRAWALS_ENABLED(): boolean {
-    if (process.env.BNB_WITHDRAWALS_ENABLED === 'true' || process.env.ENABLE_WITHDRAWALS === 'true') {
-      return true;
-    }
-    if (process.env.NODE_ENV === 'test' || process.env.VITEST === 'true') {
-      return true;
-    }
-    return false;
+  // Primary JSON-RPC endpoint for BNB Smart Chain Mainnet
+  get RPC_URL_PRIMARY(): string {
+    return (
+      process.env.BSC_RPC_URL_PRIMARY ||
+      (this.CHAIN_ID === 56 ? 'https://bsc-dataseed.binance.org' : 'https://bsc-testnet.publicnode.com')
+    );
   },
 
-  // Master Root Seed / Secret for deterministic user deposit address derivation
-  // In production, loaded from secure HSM / KMS / Secret Manager
-  get MASTER_DERIVATION_SEED(): string {
-    const seed = process.env.BNB_MASTER_SEED;
-    if (seed && seed.trim().length > 0) {
-      return seed.trim();
+  // Secondary / Failover JSON-RPC endpoint for BNB Smart Chain
+  get RPC_URL_SECONDARY(): string {
+    return (
+      process.env.BSC_RPC_URL_SECONDARY ||
+      (this.CHAIN_ID === 56 ? 'https://bsc-dataseed1.defibit.io' : 'https://data-seed-prebsc-1-s1.binance.org:8545')
+    );
+  },
+
+  // Default active RPC endpoint
+  get RPC_URL(): string {
+    return process.env.BSC_RPC_URL || this.RPC_URL_PRIMARY;
+  },
+
+  // Authoritative official USDT BEP-20 Contract Address
+  // BSC Mainnet Official Binance-Peg USDT: 0x55d398326f99059fF775485246999027B3197955
+  get USDT_CONTRACT_ADDRESS(): string {
+    if (process.env.USDT_CONTRACT_ADDRESS) {
+      return process.env.USDT_CONTRACT_ADDRESS.toLowerCase();
     }
-    if (process.env.NODE_ENV === 'test' || process.env.VITEST === 'true') {
-      return 'phivonex_test_only_deterministic_derivation_seed_2026';
-    }
-    throw new Error('FATAL_SECURITY_ERROR: BNB_MASTER_SEED environment variable is required in production mode. System failing closed.');
+    return this.CHAIN_ID === 56
+      ? '0x55d398326f99059ff775485246999027b3197955'
+      : '0x337610d27c682e347c9cd60bd4b3b107c9d34ddd';
+  },
+
+  // Public Extended Key (xpub) used purely for server-side non-hardened public child address derivation
+  // In production, app server holds only the public xpub (never private key/mnemonic)
+  get DEPOSIT_ADDRESS_XPUB(): string {
+    return process.env.DEPOSIT_ADDRESS_XPUB || '';
+  },
+
+  // Number of on-chain confirmations required before ledger credit (default 3)
+  get REQUIRED_CONFIRMATIONS(): number {
+    return Number(process.env.DEPOSIT_CONFIRMATIONS || process.env.BNB_REQUIRED_CONFIRMATIONS) || 3;
+  },
+
+  // Authoritative Treasury wallet address where swept USDT is collected
+  get TREASURY_WALLET_ADDRESS(): string {
+    return (
+      process.env.TREASURY_WALLET_ADDRESS ||
+      process.env.BNB_TREASURY_ADDRESS ||
+      '0x71C8705E3473187F6c1aB3c4709d4352D7F338f0'
+    ).toLowerCase();
+  },
+
+  get TREASURY_ADDRESS(): string {
+    return this.TREASURY_WALLET_ADDRESS;
+  },
+
+  // Reference / identifier for the remote KMS / Vault / HSM secure signing service
+  get SIGNER_SECRET_REFERENCE(): string {
+    return (
+      process.env.SIGNER_SECRET_REFERENCE ||
+      'gcp-kms://projects/phivonex/locations/global/keyRings/prod/cryptoKeys/bsc-signer'
+    );
+  },
+
+  // Switch to control on-chain broadcast withdrawal execution - STRICTLY FALSE
+  get WITHDRAWALS_ENABLED(): boolean {
+    return process.env.WITHDRAWALS_ENABLED === 'true';
   },
 
   // Block explorer URLs
@@ -59,6 +107,6 @@ export const BSC_CONFIG = {
   },
 
   // Asset Identifier
-  ASSET: 'BNB',
+  ASSET: 'USDT',
   DECIMALS: 18,
 };

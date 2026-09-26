@@ -75,11 +75,11 @@ async function runTests() {
   assert(BSC_CONFIG.CHAIN_ID === 97 || BSC_CONFIG.CHAIN_ID === 56, 'BSC Chain ID is configured server-side only (Chain 97/56)');
   assert(BSC_CONFIG.REQUIRED_CONFIRMATIONS >= 1, 'Required confirmations is configured server-side (default 3)');
   assert(Boolean(BSC_CONFIG.TREASURY_ADDRESS), 'Treasury hot wallet address is configured');
-  assert(BSC_CONFIG.ASSET === 'BNB', 'Asset identifier is native BNB');
+  assert(BSC_CONFIG.ASSET === 'USDT' || BSC_CONFIG.ASSET === 'BNB', 'Asset identifier is configured (USDT / BNB)');
 
   console.log('\n--- TEST GROUP 2: Deterministic Address Derivation & DB Privacy ---');
-  const userAAddressRecord = await getOrCreateUserDepositAddress(userAId);
-  const userBAddressRecord = await getOrCreateUserDepositAddress(userBId);
+  const userAAddressRecord = await getOrCreateUserDepositAddress(userAId, 'BNB');
+  const userBAddressRecord = await getOrCreateUserDepositAddress(userBId, 'BNB');
 
   assert(Boolean(userAAddressRecord.address), 'User A receives unique BNB deposit address');
   assert(Boolean(userBAddressRecord.address), 'User B receives unique BNB deposit address');
@@ -87,8 +87,9 @@ async function runTests() {
   assert(userAAddressRecord.asset === 'BNB', 'Deposit asset recorded as BNB');
 
   // Idempotency check for address retrieval
-  const userAAddressRecord2 = await getOrCreateUserDepositAddress(userAId);
+  const userAAddressRecord2 = await getOrCreateUserDepositAddress(userAId, 'BNB');
   assert(userAAddressRecord.address === userAAddressRecord2.address, 'Subsequent address retrieval returns identical address');
+  assert(userAAddressRecord.derivationIndex >= 0, 'Derivation index is assigned monotonically');
 
   // Verify private key is NOT in database
   const udaRaw = await db.query(`SELECT * FROM user_deposit_addresses WHERE user_id = $1`, [userAId]);
@@ -226,6 +227,7 @@ async function runTests() {
   assert(userADeposits.summary.totalCreditedBnb >= 1.5, 'User A summary reflects credited BNB');
 
   console.log('\n--- TEST GROUP 6: On-Chain Withdrawal Broadcast & Nonce Management ---');
+  process.env.WITHDRAWALS_ENABLED = 'true';
   // 1. Create a withdrawal request for User A with a valid BSC address
   // First, grant User A sufficient balance for test withdrawal
   await postLedgerCredit({

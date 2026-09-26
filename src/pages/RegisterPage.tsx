@@ -5,20 +5,16 @@ import {
   CheckCircle2,
   AlertCircle,
   ArrowRight,
-  ShieldCheck,
   UserCheck,
   Lock,
   Mail,
   Globe,
   Tag,
   Loader2,
-  Cpu,
-  Layers,
   Check,
   X
 } from 'lucide-react';
 import { PhivonexLogo } from '../components/brand/PhivonexLogo';
-import { PhivonexSymbol } from '../components/brand/PhivonexSymbol';
 import { COUNTRIES } from '../data/countries';
 import { useAuth } from '../context/AuthContext';
 
@@ -42,14 +38,53 @@ export const RegisterPage: React.FC<RegisterPageProps> = ({
   onNavigate,
   onOpenLegalModal,
 }) => {
-  const { register } = useAuth();
+  const { setUser } = useAuth();
+
+  // Multi-step Registration state
+  const [step, setStep] = useState<'form' | 'verify' | 'success'>('form');
+  const [otp, setOtp] = useState(['', '', '', '', '', '']);
+  const [resendCountdown, setResendCountdown] = useState(0);
+  const otpInputsRef = React.useRef<(HTMLInputElement | null)[]>([]);
+
+  useEffect(() => {
+    if (resendCountdown > 0) {
+      const timer = setTimeout(() => setResendCountdown(resendCountdown - 1), 1000);
+      return () => clearTimeout(timer);
+    }
+  }, [resendCountdown]);
+
+  const maskEmail = (emailStr: string) => {
+    const [local, domain] = emailStr.split('@');
+    if (!local || !domain) return emailStr;
+    if (local.length <= 2) {
+      return `${local[0]}***@${domain}`;
+    }
+    return `${local.slice(0, 3)}***@${domain}`;
+  };
+
+  const handleOtpChange = (value: string, index: number) => {
+    if (!/^\d*$/.test(value)) return;
+    const newOtp = [...otp];
+    newOtp[index] = value.slice(-1);
+    setOtp(newOtp);
+    if (errors.otp) setErrors({});
+
+    // Auto-focus next input box on type
+    if (value && index < 5) {
+      otpInputsRef.current[index + 1]?.focus();
+    }
+  };
+
+  const handleOtpKeyDown = (e: React.KeyboardEvent<HTMLInputElement>, index: number) => {
+    if (e.key === 'Backspace' && !otp[index] && index > 0) {
+      otpInputsRef.current[index - 1]?.focus();
+    }
+  };
 
   // Form fields
   const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
-  const [phone, setPhone] = useState('');
-  const [selectedCountry, setSelectedCountry] = useState<string>('United States');
-  const [dialCode, setDialCode] = useState<string>('+1');
+  const [selectedCountry, setSelectedCountry] = useState<string>('');
   const [referralCode, setReferralCode] = useState(initialReferralCode);
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -148,19 +183,10 @@ export const RegisterPage: React.FC<RegisterPageProps> = ({
     return () => clearTimeout(timer);
   }, [referralCode]);
 
-  // Handle country change
-  const handleCountryChange = (countryName: string) => {
-    setSelectedCountry(countryName);
-    const found = COUNTRIES.find((c) => c.name === countryName);
-    if (found) {
-      setDialCode(found.dialCode);
-    }
-  };
-
   // Password strength calculations (min 10 chars, uppercase, number, symbol)
   const passwordCriteria = {
     length: password.length >= 10,
-    uppercase: /[A-Z]/.test(password),
+    uppercase: /[A-Z]/.test(password) && /[a-z]/.test(password),
     number: /[0-9]/.test(password),
     special: /[^A-Za-z0-9]/.test(password),
   };
@@ -184,39 +210,31 @@ export const RegisterPage: React.FC<RegisterPageProps> = ({
       errs.email = 'Please enter a valid email address';
     }
 
-    // 3. Mobile Number
-    const phoneClean = phone.replace(/[\s-]/g, '');
-    if (!phoneClean) {
-      errs.phone = 'Mobile Number is required';
-    } else if (phoneClean.length < 6 || !/^\d+$/.test(phoneClean)) {
-      errs.phone = 'Please enter a valid phone number';
-    }
-
-    // 4. Country
+    // 3. Country
     if (!selectedCountry) {
       errs.country = 'Please select your country of residence';
     }
 
-    // 5. Referral Code (if provided, must be valid)
+    // 4. Referral Code (if provided, must be valid)
     if (referralCode.trim() && sponsorData && !sponsorData.valid) {
       errs.referralCode = 'Referral code not found.';
     }
 
-    // 6. Password (min 10 chars)
+    // 5. Password (min 10 chars)
     if (!password) {
       errs.password = 'Password is required';
     } else if (password.length < 10) {
       errs.password = 'Password must be at least 10 characters long';
     }
 
-    // 7. Confirm Password
+    // 6. Confirm Password
     if (!confirmPassword) {
       errs.confirmPassword = 'Confirm your password';
     } else if (password !== confirmPassword) {
       errs.confirmPassword = 'Passwords do not match';
     }
 
-    // 8. Terms & Privacy checkbox
+    // 7. Terms & Privacy checkbox
     if (!agreeTerms) {
       errs.agreeTerms = 'You must accept the Terms & Privacy policy to proceed';
     }
@@ -240,21 +258,120 @@ export const RegisterPage: React.FC<RegisterPageProps> = ({
     });
 
     try {
-      await register({
-        fullName: fullName.trim(),
-        email: email.trim().toLowerCase(),
-        phone: `${dialCode} ${phone.trim()}`,
-        country: selectedCountry,
-        password,
-        referralCode: referralCode.trim() || undefined,
+      const res = await fetch('/api/auth/register/request-verification', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fullName: fullName.trim(),
+          email: email.trim().toLowerCase(),
+          country: selectedCountry,
+          password,
+          referralCode: referralCode.trim() || undefined,
+        }),
       });
 
+      const result = await res.json();
+      if (!res.ok) {
+        throw new Error(result.message || result.error || 'Failed to request verification.');
+      }
+
+      setStep('verify');
+      setResendCountdown(60);
+    } catch (err: any) {
+      setErrors((prev) => ({ ...prev, general: err.message || 'An error occurred during registration.' }));
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleVerifyOtp = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const enteredCode = otp.join('');
+    if (enteredCode.length < 6) {
+      setErrors((prev) => ({ ...prev, otp: 'Please enter the complete 6-digit code.' }));
+      return;
+    }
+
+    setIsSubmitting(true);
+    setErrors({});
+
+    try {
+      const res = await fetch('/api/auth/register/verify-email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: email.trim().toLowerCase(),
+          code: enteredCode,
+        }),
+      });
+
+      const result = await res.json();
+      if (!res.ok) {
+        throw new Error(result.message || result.error || 'Verification failed.');
+      }
+
+      await handleCompleteRegistration(result.token);
+    } catch (err: any) {
+      setErrors((prev) => ({ ...prev, otp: err.message || 'Verification failed.' }));
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleCompleteRegistration = async (token: string) => {
+    try {
+      const res = await fetch('/api/auth/register/complete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: email.trim().toLowerCase(),
+          token,
+        }),
+      });
+
+      const result = await res.json();
+      if (!res.ok) {
+        throw new Error(result.message || result.error || 'Failed to complete registration.');
+      }
+
+      setUser(result.user);
       setRegistrationSuccess(true);
+      setStep('success');
       setTimeout(() => {
         onNavigate('/app');
       }, 1500);
     } catch (err: any) {
-      setErrors((prev) => ({ ...prev, general: err.message || 'An error occurred during registration.' }));
+      setErrors((prev) => ({ ...prev, otp: err.message || 'Failed to complete registration.' }));
+    }
+  };
+
+  const handleResendCode = async () => {
+    if (resendCountdown > 0) return;
+    setIsSubmitting(true);
+    setErrors({});
+    setOtp(['', '', '', '', '', '']);
+
+    try {
+      const res = await fetch('/api/auth/register/request-verification', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fullName: fullName.trim(),
+          email: email.trim().toLowerCase(),
+          country: selectedCountry,
+          password,
+          referralCode: referralCode.trim() || undefined,
+        }),
+      });
+
+      const result = await res.json();
+      if (!res.ok) {
+        throw new Error(result.message || result.error || 'Failed to resend code.');
+      }
+
+      setResendCountdown(60);
+    } catch (err: any) {
+      setErrors((prev) => ({ ...prev, otp: err.message || 'Failed to resend code.' }));
     } finally {
       setIsSubmitting(false);
     }
@@ -264,7 +381,7 @@ export const RegisterPage: React.FC<RegisterPageProps> = ({
     <div className="min-h-screen bg-[#05070B] text-[#F7FAFC] flex flex-col justify-between selection:bg-[#00CFFF]/20 selection:text-[#00CFFF]">
       
       {/* Top Navigation Bar */}
-      <header className="border-b border-white/[0.08] bg-[#07101D]/80 backdrop-blur-md sticky top-0 z-30">
+      <header className="border-b border-white/[0.04] bg-[#07101D]/50 backdrop-blur-md sticky top-0 z-30">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
           <button
             onClick={() => onNavigate('/')}
@@ -278,7 +395,7 @@ export const RegisterPage: React.FC<RegisterPageProps> = ({
             <span className="hidden sm:inline text-[#98A2B3]">Already have an account?</span>
             <button
               onClick={() => onNavigate('/login')}
-              className="px-3.5 py-1.5 rounded-lg bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.1] text-white font-medium transition-colors cursor-pointer min-h-[36px]"
+              className="px-3.5 py-1.5 rounded-lg bg-[#07101D] hover:bg-white/[0.04] border border-[#00CFFF]/30 hover:border-[#00CFFF]/50 text-[#00CFFF] font-medium transition-all cursor-pointer min-h-[36px]"
             >
               Sign In
             </button>
@@ -286,141 +403,61 @@ export const RegisterPage: React.FC<RegisterPageProps> = ({
         </div>
       </header>
 
-      {/* Main Split Layout Container */}
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 sm:py-12 flex items-center">
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 lg:gap-12 items-start w-full">
-          
-          {/* LEFT COLUMN: PHIVONEX Branding & Protocol Overview */}
-          <div className="lg:col-span-5 space-y-6 pt-2 lg:sticky lg:top-24">
+      {/* Main Centered Container */}
+      <main className="flex-1 flex items-center justify-center py-6 sm:py-8 px-4 sm:px-6 lg:px-8">
+        <div className="w-full max-w-[500px] space-y-6">
+          <div className="bg-[#07101D]/90 border border-white/[0.08] rounded-2xl shadow-2xl p-6 sm:p-8 backdrop-blur-xl">
             
-            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white/[0.03] border border-white/[0.08] text-xs font-mono text-[#00CFFF]">
-              <ShieldCheck className="w-3.5 h-3.5" />
-              <span>SECURE ACCESS GATEWAY</span>
-            </div>
-
-            <div className="space-y-3">
-              <h2 className="text-3xl sm:text-4xl font-extrabold text-[#F7FAFC] tracking-tight leading-tight">
-                Decentralized Node &amp; Asset Infrastructure
-              </h2>
-              <p className="text-sm text-[#98A2B3] leading-relaxed">
-                Connect to the PHIVONEX protocol. Authenticated operators receive a verified public ID, personal referral link, and direct cryptographic consensus attestation.
-              </p>
-            </div>
-
-            {/* Protocol Pillars Summary Box */}
-            <div className="p-5 rounded-2xl bg-[#07101D]/90 border border-white/[0.08] space-y-4">
-              <div className="flex items-start gap-3 text-xs">
-                <div className="w-8 h-8 rounded-lg bg-[#00CFFF]/10 border border-[#00CFFF]/30 flex items-center justify-center text-[#00CFFF] shrink-0 mt-0.5">
-                  <Cpu className="w-4 h-4" />
-                </div>
-                <div>
-                  <h4 className="font-bold text-white mb-0.5">Immutable Public User ID</h4>
-                  <p className="text-[#98A2B3] leading-relaxed">
-                    Every operator is assigned a unique non-sequential public ID (e.g. PHX-8F2K91).
+            {step === 'form' && (
+              <>
+                {/* Form Header */}
+                <div className="mb-6 text-center">
+                  <h1 className="text-2xl sm:text-3xl font-extrabold text-[#F7FAFC] tracking-tight font-sans">
+                    Create Your PHIVONEX Account
+                  </h1>
+                  <p className="text-xs sm:text-sm text-[#98A2B3] mt-2 font-normal">
+                    Create your account to access the PHIVONEX ecosystem.
                   </p>
                 </div>
-              </div>
 
-              <div className="flex items-start gap-3 text-xs">
-                <div className="w-8 h-8 rounded-lg bg-[#168BFF]/10 border border-[#168BFF]/30 flex items-center justify-center text-[#168BFF] shrink-0 mt-0.5">
-                  <Layers className="w-4 h-4" />
-                </div>
-                <div>
-                  <h4 className="font-bold text-white mb-0.5">Verified Sponsor Relationship</h4>
-                  <p className="text-[#98A2B3] leading-relaxed">
-                    Cryptographically protected sponsor associations with zero post-creation modification.
-                  </p>
-                </div>
-              </div>
-
-              <div className="flex items-start gap-3 text-xs">
-                <div className="w-8 h-8 rounded-lg bg-[#32D583]/10 border border-[#32D583]/30 flex items-center justify-center text-[#32D583] shrink-0 mt-0.5">
-                  <ShieldCheck className="w-4 h-4" />
-                </div>
-                <div>
-                  <h4 className="font-bold text-white mb-0.5">Argon2id &amp; Session Protection</h4>
-                  <p className="text-[#98A2B3] leading-relaxed">
-                    No plain text storage. Memory-hard Argon2id key derivation and HttpOnly session cookies.
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            {/* Verification Guarantee */}
-            <div className="p-4 rounded-xl bg-white/[0.02] border border-white/[0.06] flex items-center gap-3 text-xs font-mono text-[#98A2B3]">
-              <PhivonexSymbol size={20} />
-              <span>PostgreSQL Backend · Unique Public ID · TLS 1.3 Certified</span>
-            </div>
-
-          </div>
-
-          {/* RIGHT COLUMN: Registration Form Card */}
-          <div className="lg:col-span-7">
-            <div className="bg-[#07101D]/90 border border-white/[0.08] rounded-2xl shadow-2xl p-6 sm:p-8 backdrop-blur-xl">
-              
-              {/* Form Header */}
-              <div className="mb-6">
-                <h1 className="text-2xl sm:text-3xl font-extrabold text-[#F7FAFC] tracking-tight font-sans">
-                  Create Your PHIVONEX Account
-                </h1>
-                <p className="text-xs sm:text-sm text-[#98A2B3] mt-1.5 font-normal">
-                  Join the PHIVONEX network and obtain your personal ID and referral credentials.
-                </p>
-              </div>
-
-              {/* General Error Notification */}
-              {errors.general && (
-                <div className="mb-5 p-3.5 rounded-xl bg-[#F04438]/10 border border-[#F04438]/30 flex items-start gap-2.5 text-xs text-[#F04438] animate-fadeIn">
-                  <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-                  <span className="leading-relaxed">{errors.general}</span>
-                </div>
-              )}
-
-              {/* Registration Success Notification */}
-              {registrationSuccess && (
-                <div className="mb-6 p-4 rounded-xl bg-[#32D583]/10 border border-[#32D583]/30 text-xs text-[#32D583] flex items-start gap-3 animate-fadeIn">
-                  <CheckCircle2 className="w-5 h-5 shrink-0 mt-0.5" />
-                  <div>
-                    <strong className="block text-white font-semibold mb-1">Account Created Successfully!</strong>
-                    <span>
-                      Welcome to PHIVONEX, <strong className="text-white">{fullName}</strong>. Initializing your authenticated session...
-                    </span>
+                {/* General Error Notification */}
+                {errors.general && (
+                  <div className="mb-5 p-3.5 rounded-xl bg-[#F04438]/10 border border-[#F04438]/30 flex items-start gap-2.5 text-xs text-[#F04438] animate-fadeIn">
+                    <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                    <span className="leading-relaxed">{errors.general}</span>
                   </div>
-                </div>
-              )}
+                )}
 
-              {/* REGISTRATION FORM */}
-              <form onSubmit={handleSubmit} noValidate className="space-y-4 text-left">
-                
-                {/* 1. Full Name */}
-                <div>
-                  <label className="block text-xs font-medium text-[#98A2B3] mb-1.5">
-                    Full Name <span className="text-[#F04438]">*</span>
-                  </label>
-                  <input
-                    type="text"
-                    name="fullName"
-                    autoComplete="name"
-                    placeholder="e.g. David Vance"
-                    value={fullName}
-                    onChange={(e) => {
-                      setFullName(e.target.value);
-                      if (errors.fullName) setErrors((prev) => ({ ...prev, fullName: '' }));
-                    }}
-                    className={`w-full bg-[#05070B] border ${
-                      errors.fullName ? 'border-[#F04438]' : 'border-white/[0.1] focus:border-[#00CFFF]'
-                    } rounded-lg px-3.5 py-2.5 text-xs text-white placeholder:text-white/20 focus:outline-none transition-colors min-h-[44px]`}
-                  />
-                  {errors.fullName && (
-                    <span className="text-[11px] text-[#F04438] mt-1 block flex items-center gap-1">
-                      <AlertCircle className="w-3 h-3 shrink-0" /> {errors.fullName}
-                    </span>
-                  )}
-                </div>
+                {/* REGISTRATION FORM */}
+                <form onSubmit={handleSubmit} noValidate className="space-y-4 text-left">
+                  
+                  {/* 1. Full Name */}
+                  <div>
+                    <label className="block text-xs font-medium text-[#98A2B3] mb-1.5">
+                      Full Name <span className="text-[#F04438]">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      name="fullName"
+                      autoComplete="name"
+                      placeholder="e.g. David Vance"
+                      value={fullName}
+                      onChange={(e) => {
+                        setFullName(e.target.value);
+                        if (errors.fullName) setErrors((prev) => ({ ...prev, fullName: '' }));
+                      }}
+                      className={`w-full bg-[#05070B] border ${
+                        errors.fullName ? 'border-[#F04438]' : 'border-white/[0.1] focus:border-[#00CFFF]'
+                      } rounded-lg px-3.5 py-2.5 text-xs text-white placeholder:text-white/20 focus:outline-none transition-colors min-h-[44px]`}
+                    />
+                    {errors.fullName && (
+                      <span className="text-[11px] text-[#F04438] mt-1 block flex items-center gap-1">
+                        <AlertCircle className="w-3 h-3 shrink-0" /> {errors.fullName}
+                      </span>
+                    )}
+                  </div>
 
-                {/* 2. Email Address & Mobile Number */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  {/* Email Address */}
+                  {/* 2. Email Address */}
                   <div>
                     <label className="block text-xs font-medium text-[#98A2B3] mb-1.5">
                       Email Address <span className="text-[#F04438]">*</span>
@@ -433,7 +470,7 @@ export const RegisterPage: React.FC<RegisterPageProps> = ({
                         type="email"
                         name="email"
                         autoComplete="email"
-                        placeholder="operator@phivonex.org"
+                        placeholder="operator@phivonex.com"
                         value={email}
                         onChange={(e) => {
                           setEmail(e.target.value);
@@ -451,338 +488,426 @@ export const RegisterPage: React.FC<RegisterPageProps> = ({
                     )}
                   </div>
 
-                  {/* Mobile Number */}
+                  {/* 3. Country */}
                   <div>
                     <label className="block text-xs font-medium text-[#98A2B3] mb-1.5">
-                      Mobile Number <span className="text-[#F04438]">*</span>
+                      Country <span className="text-[#F04438]">*</span>
                     </label>
-                    <div className="flex gap-2">
-                      <div className="px-2.5 flex items-center bg-[#05070B] border border-white/[0.1] rounded-lg text-xs font-mono text-[#00CFFF] shrink-0 min-h-[44px]">
-                        {dialCode}
+                    <div className="relative">
+                      <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-white/30">
+                        <Globe className="w-3.5 h-3.5" />
+                      </div>
+                      <select
+                        value={selectedCountry}
+                        onChange={(e) => {
+                          setSelectedCountry(e.target.value);
+                          if (errors.country) setErrors((prev) => ({ ...prev, country: '' }));
+                        }}
+                        className="w-full bg-[#05070B] border border-white/[0.1] focus:border-[#00CFFF] rounded-lg pl-9 pr-8 py-2.5 text-xs text-white focus:outline-none transition-colors appearance-none cursor-pointer min-h-[44px]"
+                      >
+                        <option value="" className="bg-[#07101D] text-slate-500">Select Country</option>
+                        {COUNTRIES.map((country) => (
+                          <option key={country.code} value={country.name} className="bg-[#07101D] text-white">
+                            {country.flag} {country.name}
+                          </option>
+                        ))}
+                      </select>
+                      <div className="absolute inset-y-0 right-0 pr-3 flex items-center pointer-events-none text-white/40 text-[10px]">
+                        ▼
+                      </div>
+                    </div>
+                    {errors.country && (
+                      <span className="text-[11px] text-[#F04438] mt-1 block flex items-center gap-1">
+                        <AlertCircle className="w-3 h-3 shrink-0" /> {errors.country}
+                      </span>
+                    )}
+                  </div>
+
+                  {/* 4. Referral Code Field with Real-time Backend Resolution */}
+                  <div>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <label className="text-xs font-medium text-[#98A2B3]">
+                        Referral Code <span className="text-white/40 text-[10px]">(Optional)</span>
+                      </label>
+                      {isCheckingReferral && (
+                        <span className="text-[11px] text-[#00CFFF] flex items-center gap-1 font-mono">
+                          <Loader2 className="w-3 h-3 animate-spin" /> Resolving...
+                        </span>
+                      )}
+                    </div>
+                    <div className="relative">
+                      <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-white/30">
+                        <Tag className="w-3.5 h-3.5" />
                       </div>
                       <input
-                        type="tel"
-                        name="phone"
-                        autoComplete="tel"
-                        placeholder="202 555 0192"
-                        value={phone}
+                        type="text"
+                        placeholder="e.g. PHX8F2K91"
+                        value={referralCode}
                         onChange={(e) => {
-                          setPhone(e.target.value);
-                          if (errors.phone) setErrors((prev) => ({ ...prev, phone: '' }));
+                          setReferralCode(e.target.value.toUpperCase());
                         }}
                         className={`w-full bg-[#05070B] border ${
-                          errors.phone ? 'border-[#F04438]' : 'border-white/[0.1] focus:border-[#00CFFF]'
-                        } rounded-lg px-3.5 py-2.5 text-xs text-white placeholder:text-white/20 focus:outline-none transition-colors min-h-[44px]`}
+                          errors.referralCode
+                            ? 'border-[#F04438]'
+                            : sponsorData?.valid
+                            ? 'border-[#32D583]'
+                            : 'border-white/[0.1] focus:border-[#00CFFF]'
+                        } rounded-lg pl-9 pr-3.5 py-2.5 text-xs font-mono text-white placeholder:text-white/20 focus:outline-none transition-colors uppercase min-h-[44px]`}
                       />
                     </div>
-                    {errors.phone && (
-                      <span className="text-[11px] text-[#F04438] mt-1 block flex items-center gap-1">
-                        <AlertCircle className="w-3 h-3 shrink-0" /> {errors.phone}
-                      </span>
-                    )}
-                  </div>
-                </div>
 
-                {/* 3. Country */}
-                <div>
-                  <label className="block text-xs font-medium text-[#98A2B3] mb-1.5">
-                    Country <span className="text-[#F04438]">*</span>
-                  </label>
-                  <div className="relative">
-                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-white/30">
-                      <Globe className="w-3.5 h-3.5" />
-                    </div>
-                    <select
-                      value={selectedCountry}
-                      onChange={(e) => handleCountryChange(e.target.value)}
-                      className="w-full bg-[#05070B] border border-white/[0.1] focus:border-[#00CFFF] rounded-lg pl-9 pr-8 py-2.5 text-xs text-white focus:outline-none transition-colors appearance-none cursor-pointer min-h-[44px]"
-                    >
-                      {COUNTRIES.map((country) => (
-                        <option key={country.code} value={country.name} className="bg-[#07101D] text-white">
-                          {country.flag} {country.name} ({country.dialCode})
-                        </option>
-                      ))}
-                    </select>
-                    <div className="absolute inset-y-0 right-0 pr-3 flex items-center pointer-events-none text-white/40 text-[10px]">
-                      ▼
-                    </div>
-                  </div>
-                  {errors.country && (
-                    <span className="text-[11px] text-[#F04438] mt-1 block flex items-center gap-1">
-                      <AlertCircle className="w-3 h-3 shrink-0" /> {errors.country}
-                    </span>
-                  )}
-                </div>
-
-                {/* 4. Referral Code Field with Real-time Backend Resolution */}
-                <div>
-                  <div className="flex items-center justify-between mb-1.5">
-                    <label className="text-xs font-medium text-[#98A2B3]">
-                      Referral Code <span className="text-white/40 text-[10px]">(Optional)</span>
-                    </label>
-                    {isCheckingReferral && (
-                      <span className="text-[11px] text-[#00CFFF] flex items-center gap-1 font-mono">
-                        <Loader2 className="w-3 h-3 animate-spin" /> Resolving...
-                      </span>
-                    )}
-                  </div>
-                  <div className="relative">
-                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-white/30">
-                      <Tag className="w-3.5 h-3.5" />
-                    </div>
-                    <input
-                      type="text"
-                      placeholder="e.g. PHX8F2K91"
-                      value={referralCode}
-                      onChange={(e) => {
-                        setReferralCode(e.target.value.toUpperCase());
-                      }}
-                      className={`w-full bg-[#05070B] border ${
-                        errors.referralCode
-                          ? 'border-[#F04438]'
-                          : sponsorData?.valid
-                          ? 'border-[#32D583]'
-                          : 'border-white/[0.1] focus:border-[#00CFFF]'
-                      } rounded-lg pl-9 pr-3.5 py-2.5 text-xs font-mono text-white placeholder:text-white/20 focus:outline-none transition-colors uppercase min-h-[44px]`}
-                    />
-                  </div>
-
-                  {/* Valid Sponsor Display */}
-                  {sponsorData?.valid && sponsorData.sponsor && (
-                    <div className="mt-2 p-2.5 rounded-lg bg-[#32D583]/[0.08] border border-[#32D583]/30 flex items-center justify-between text-xs animate-fadeIn">
-                      <div className="flex items-center gap-2">
-                        <UserCheck className="w-4 h-4 text-[#32D583]" />
-                        <span className="text-white">
-                          Referred by: <strong className="text-[#32D583]">{sponsorData.sponsor.displayName}</strong>
+                    {/* Valid Sponsor Display */}
+                    {sponsorData?.valid && sponsorData.sponsor && (
+                      <div className="mt-2 p-2.5 rounded-lg bg-[#32D583]/[0.08] border border-[#32D583]/30 flex items-center justify-between text-xs animate-fadeIn">
+                        <div className="flex items-center gap-2">
+                          <UserCheck className="w-4 h-4 text-[#32D583]" />
+                          <span className="text-white">
+                            Referred by: <strong className="text-[#32D583]">{sponsorData.sponsor.displayName}</strong>
+                          </span>
+                        </div>
+                        <span className="text-[10px] font-mono text-[#98A2B3] bg-white/[0.06] px-2 py-0.5 rounded">
+                          {sponsorData.sponsor.publicId}
                         </span>
                       </div>
-                      <span className="text-[10px] font-mono text-[#98A2B3] bg-white/[0.06] px-2 py-0.5 rounded">
-                        {sponsorData.sponsor.publicId}
+                    )}
+
+                    {/* Invalid Referral Code Error */}
+                    {errors.referralCode && (
+                      <span className="text-[11px] text-[#F04438] mt-1 block flex items-center gap-1 animate-fadeIn">
+                        <AlertCircle className="w-3 h-3 shrink-0" /> {errors.referralCode}
                       </span>
+                    )}
+                  </div>
+
+                  {/* 5. Password & Confirm Password */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    {/* Password */}
+                    <div>
+                      <label className="block text-xs font-medium text-[#98A2B3] mb-1.5">
+                        Password <span className="text-[#F04438]">*</span>
+                      </label>
+                      <div className="relative">
+                        <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-white/30">
+                          <Lock className="w-3.5 h-3.5" />
+                        </div>
+                        <input
+                          type={showPassword ? 'text' : 'password'}
+                          placeholder="••••••••••"
+                          value={password}
+                          onChange={(e) => {
+                            setPassword(e.target.value);
+                            if (errors.password) setErrors((prev) => ({ ...prev, password: '' }));
+                          }}
+                          className={`w-full bg-[#05070B] border ${
+                            errors.password ? 'border-[#F04438]' : 'border-white/[0.1] focus:border-[#00CFFF]'
+                          } rounded-lg pl-9 pr-9 py-2.5 text-xs text-white placeholder:text-white/20 focus:outline-none transition-colors min-h-[44px]`}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowPassword(!showPassword)}
+                          className="absolute inset-y-0 right-0 pr-3 flex items-center text-white/40 hover:text-white transition-colors cursor-pointer"
+                          aria-label="Toggle password visibility"
+                        >
+                          {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                        </button>
+                      </div>
+                      {errors.password && (
+                        <span className="text-[11px] text-[#F04438] mt-1 block flex items-center gap-1">
+                          <AlertCircle className="w-3 h-3 shrink-0" /> {errors.password}
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Confirm Password */}
+                    <div>
+                      <label className="block text-xs font-medium text-[#98A2B3] mb-1.5">
+                        Confirm Password <span className="text-[#F04438]">*</span>
+                      </label>
+                      <div className="relative">
+                        <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-white/30">
+                          <Lock className="w-3.5 h-3.5" />
+                        </div>
+                        <input
+                          type={showConfirmPassword ? 'text' : 'password'}
+                          placeholder="••••••••••"
+                          value={confirmPassword}
+                          onChange={(e) => {
+                            setConfirmPassword(e.target.value);
+                            if (errors.confirmPassword) setErrors((prev) => ({ ...prev, confirmPassword: '' }));
+                          }}
+                          className={`w-full bg-[#05070B] border ${
+                            errors.confirmPassword ? 'border-[#F04438]' : 'border-white/[0.1] focus:border-[#00CFFF]'
+                          } rounded-lg pl-9 pr-9 py-2.5 text-xs text-white placeholder:text-white/20 focus:outline-none transition-colors min-h-[44px]`}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                          className="absolute inset-y-0 right-0 pr-3 flex items-center text-white/40 hover:text-white transition-colors cursor-pointer"
+                          aria-label="Toggle confirm password visibility"
+                        >
+                          {showConfirmPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                        </button>
+                      </div>
+                      {errors.confirmPassword && (
+                        <span className="text-[11px] text-[#F04438] mt-1 block flex items-center gap-1">
+                          <AlertCircle className="w-3 h-3 shrink-0" /> {errors.confirmPassword}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Password Strength Guidance - Modern requirements shown when user is typing */}
+                  {password.length > 0 && (
+                    <div className="p-3.5 rounded-xl bg-[#05070B] border border-white/[0.06] space-y-2 text-[11px]">
+                      <div className="flex items-center justify-between text-xs font-mono">
+                        <span className="text-[#98A2B3]">Password Strength:</span>
+                        <span
+                          className={
+                            passwordStrengthScore >= 4
+                              ? 'text-[#32D583] font-bold'
+                              : passwordStrengthScore >= 2
+                              ? 'text-[#00CFFF]'
+                              : 'text-[#F04438]'
+                          }
+                        >
+                          {passwordStrengthScore >= 4 ? 'Strong' : passwordStrengthScore >= 2 ? 'Fair' : 'Weak'}
+                        </span>
+                      </div>
+
+                      <div className="w-full h-1.5 bg-white/[0.06] rounded-full overflow-hidden">
+                        <div
+                          className={`h-full rounded-full transition-all duration-300 ${
+                            passwordStrengthScore >= 4
+                              ? 'bg-[#32D583]'
+                              : passwordStrengthScore >= 2
+                              ? 'bg-[#00CFFF]'
+                              : 'bg-[#F04438]'
+                          }`}
+                          style={{ width: `${(passwordStrengthScore / 4) * 100}%` }}
+                        />
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-1.5 text-[10px] text-[#98A2B3] pt-1">
+                        <div className="flex items-center gap-1.5">
+                          {passwordCriteria.length ? <Check className="w-3 h-3 text-[#32D583]" /> : <X className="w-3 h-3 text-white/30" />}
+                          <span>10+ Characters</span>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          {passwordCriteria.uppercase ? <Check className="w-3 h-3 text-[#32D583]" /> : <X className="w-3 h-3 text-white/30" />}
+                          <span>Case Variety (A-z)</span>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          {passwordCriteria.number ? <Check className="w-3 h-3 text-[#32D583]" /> : <X className="w-3 h-3 text-white/30" />}
+                          <span>Number (0-9)</span>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          {passwordCriteria.special ? <Check className="w-3 h-3 text-[#32D583]" /> : <X className="w-3 h-3 text-white/30" />}
+                          <span>Recommended Symbol</span>
+                        </div>
+                      </div>
                     </div>
                   )}
 
-                  {/* Invalid Referral Code Error */}
-                  {errors.referralCode && (
-                    <span className="text-[11px] text-[#F04438] mt-1 block flex items-center gap-1 animate-fadeIn">
-                      <AlertCircle className="w-3 h-3 shrink-0" /> {errors.referralCode}
-                    </span>
-                  )}
-                </div>
-
-                {/* 5. Password & Confirm Password */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  {/* Password */}
-                  <div>
-                    <label className="block text-xs font-medium text-[#98A2B3] mb-1.5">
-                      Password <span className="text-[#F04438]">* (Min 10 chars)</span>
-                    </label>
-                    <div className="relative">
-                      <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-white/30">
-                        <Lock className="w-3.5 h-3.5" />
-                      </div>
+                  {/* 6. Terms & Privacy Checkbox */}
+                  <div className="pt-2">
+                    <label className="flex items-start gap-2.5 cursor-pointer select-none">
                       <input
-                        type={showPassword ? 'text' : 'password'}
-                        placeholder="••••••••••"
-                        value={password}
+                        type="checkbox"
+                        checked={agreeTerms}
                         onChange={(e) => {
-                          setPassword(e.target.value);
-                          if (errors.password) setErrors((prev) => ({ ...prev, password: '' }));
+                          setAgreeTerms(e.target.checked);
+                          if (errors.agreeTerms) setErrors((prev) => ({ ...prev, agreeTerms: '' }));
                         }}
-                        className={`w-full bg-[#05070B] border ${
-                          errors.password ? 'border-[#F04438]' : 'border-white/[0.1] focus:border-[#00CFFF]'
-                        } rounded-lg pl-9 pr-9 py-2.5 text-xs text-white placeholder:text-white/20 focus:outline-none transition-colors min-h-[44px]`}
+                        className="mt-0.5 w-4 h-4 rounded border-white/20 bg-[#05070B] text-[#00CFFF] focus:ring-0 focus:ring-offset-0 cursor-pointer"
                       />
-                      <button
-                        type="button"
-                        onClick={() => setShowPassword(!showPassword)}
-                        className="absolute inset-y-0 right-0 pr-3 flex items-center text-white/40 hover:text-white transition-colors cursor-pointer"
-                        aria-label="Toggle password visibility"
-                      >
-                        {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                      </button>
-                    </div>
-                    {errors.password && (
-                      <span className="text-[11px] text-[#F04438] mt-1 block flex items-center gap-1">
-                        <AlertCircle className="w-3 h-3 shrink-0" /> {errors.password}
+                      <span className="text-xs text-[#98A2B3] leading-snug">
+                        I agree to the{' '}
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            onOpenLegalModal?.('Terms of Service');
+                          }}
+                          className="text-[#00CFFF] hover:underline cursor-pointer"
+                        >
+                          Terms of Service
+                        </button>{' '}
+                        and acknowledge the{' '}
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            onOpenLegalModal?.('Privacy Policy');
+                          }}
+                          className="text-[#00CFFF] hover:underline cursor-pointer"
+                        >
+                          Privacy Policy
+                        </button>
+                        . <span className="text-[#F04438]">*</span>
                       </span>
-                    )}
-                  </div>
-
-                  {/* Confirm Password */}
-                  <div>
-                    <label className="block text-xs font-medium text-[#98A2B3] mb-1.5">
-                      Confirm Password <span className="text-[#F04438]">*</span>
                     </label>
-                    <div className="relative">
-                      <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-white/30">
-                        <Lock className="w-3.5 h-3.5" />
-                      </div>
-                      <input
-                        type={showConfirmPassword ? 'text' : 'password'}
-                        placeholder="••••••••••"
-                        value={confirmPassword}
-                        onChange={(e) => {
-                          setConfirmPassword(e.target.value);
-                          if (errors.confirmPassword) setErrors((prev) => ({ ...prev, confirmPassword: '' }));
-                        }}
-                        className={`w-full bg-[#05070B] border ${
-                          errors.confirmPassword ? 'border-[#F04438]' : 'border-white/[0.1] focus:border-[#00CFFF]'
-                        } rounded-lg pl-9 pr-9 py-2.5 text-xs text-white placeholder:text-white/20 focus:outline-none transition-colors min-h-[44px]`}
-                      />
-                      <button
-                        type="button"
-                        onClick={() => setShowConfirmPassword(!showConfirmPassword)}
-                        className="absolute inset-y-0 right-0 pr-3 flex items-center text-white/40 hover:text-white transition-colors cursor-pointer"
-                        aria-label="Toggle confirm password visibility"
-                      >
-                        {showConfirmPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                      </button>
-                    </div>
-                    {errors.confirmPassword && (
+                    {errors.agreeTerms && (
                       <span className="text-[11px] text-[#F04438] mt-1 block flex items-center gap-1">
-                        <AlertCircle className="w-3 h-3 shrink-0" /> {errors.confirmPassword}
+                        <AlertCircle className="w-3 h-3 shrink-0" /> {errors.agreeTerms}
                       </span>
                     )}
                   </div>
+
+                  {/* 7. Primary Action Button */}
+                  <div className="pt-3">
+                    <button
+                      type="submit"
+                      disabled={isSubmitting || isCheckingReferral || Boolean(referralCode.trim() && sponsorData && !sponsorData.valid)}
+                      className="w-full py-3.5 px-4 rounded-lg bg-gradient-to-r from-[#00CFFF] to-[#168BFF] text-[#05070B] font-semibold text-xs flex items-center justify-center gap-2 hover:brightness-110 active:scale-[0.99] disabled:opacity-50 transition-all cursor-pointer shadow-lg shadow-[#00CFFF]/20 min-h-[44px]"
+                    >
+                      {isSubmitting ? (
+                        <>
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                          <span>Creating Account...</span>
+                        </>
+                      ) : (
+                        <>
+                          <span>Create Account</span>
+                          <ArrowRight className="w-4 h-4" />
+                        </>
+                      )}
+                    </button>
+                  </div>
+
+                </form>
+
+                {/* Bottom Nav to Sign In */}
+                <div className="mt-6 pt-6 border-t border-white/[0.08] text-center">
+                  <p className="text-xs text-[#98A2B3]">
+                    Already have an account?{' '}
+                    <button
+                      onClick={() => onNavigate('/login')}
+                      className="text-[#00CFFF] font-semibold hover:underline cursor-pointer ml-1"
+                    >
+                      Sign In
+                    </button>
+                  </p>
+                </div>
+              </>
+            )}
+
+            {step === 'verify' && (
+              <>
+                {/* Verification Header */}
+                <div className="mb-6 text-center">
+                  <h1 className="text-2xl sm:text-3xl font-extrabold text-[#F7FAFC] tracking-tight font-sans">
+                    Verify your email
+                  </h1>
+                  <p className="text-xs sm:text-sm text-[#98A2B3] mt-3 leading-relaxed">
+                    We sent a verification code to:<br />
+                    <strong className="text-white font-mono text-xs">{maskEmail(email)}</strong>
+                  </p>
                 </div>
 
-                {/* Password Strength Guidance */}
-                {password.length > 0 && (
-                  <div className="p-3 rounded-xl bg-[#05070B] border border-white/[0.06] space-y-2 text-[11px]">
-                    <div className="flex items-center justify-between text-xs font-mono">
-                      <span className="text-[#98A2B3]">Password Strength:</span>
-                      <span
-                        className={
-                          passwordStrengthScore >= 4
-                            ? 'text-[#32D583] font-bold'
-                            : passwordStrengthScore >= 2
-                            ? 'text-[#00CFFF]'
-                            : 'text-[#F04438]'
-                        }
-                      >
-                        {passwordStrengthScore >= 4 ? 'Strong (Argon2id)' : passwordStrengthScore >= 2 ? 'Fair' : 'Weak'}
-                      </span>
-                    </div>
-
-                    <div className="w-full h-1.5 bg-white/[0.06] rounded-full overflow-hidden">
-                      <div
-                        className={`h-full rounded-full transition-all duration-300 ${
-                          passwordStrengthScore >= 4
-                            ? 'bg-[#32D583]'
-                            : passwordStrengthScore >= 2
-                            ? 'bg-[#00CFFF]'
-                            : 'bg-[#F04438]'
-                        }`}
-                        style={{ width: `${(passwordStrengthScore / 4) * 100}%` }}
+                {/* Verification Form */}
+                <form onSubmit={handleVerifyOtp} className="space-y-6 text-left">
+                  <div className="flex justify-between items-center gap-2 max-w-xs mx-auto py-2">
+                    {[0, 1, 2, 3, 4, 5].map((index) => (
+                      <input
+                        key={index}
+                        type="text"
+                        maxLength={1}
+                        ref={(el) => { otpInputsRef.current[index] = el; }}
+                        value={otp[index]}
+                        onChange={(e) => handleOtpChange(e.target.value, index)}
+                        onKeyDown={(e) => handleOtpKeyDown(e, index)}
+                        className="w-10 sm:w-12 h-14 bg-[#05070B] border border-white/[0.1] focus:border-[#00CFFF] rounded-lg text-center text-lg sm:text-xl font-extrabold font-mono text-white focus:outline-none focus:ring-1 focus:ring-[#00CFFF]/30 transition-all select-all min-h-[44px]"
                       />
+                    ))}
+                  </div>
+
+                  {errors.otp && (
+                    <div className="p-3 rounded-xl bg-[#F04438]/10 border border-[#F04438]/30 text-xs text-[#F04438] flex items-center gap-2 animate-fadeIn justify-center">
+                      <AlertCircle className="w-4 h-4 shrink-0" />
+                      <span>{errors.otp}</span>
+                    </div>
+                  )}
+
+                  <div className="space-y-4">
+                    <button
+                      type="submit"
+                      disabled={isSubmitting}
+                      className="w-full py-3.5 px-4 rounded-lg bg-gradient-to-r from-[#00CFFF] to-[#168BFF] text-[#05070B] font-semibold text-xs flex items-center justify-center gap-2 hover:brightness-110 active:scale-[0.99] disabled:opacity-50 transition-all cursor-pointer shadow-lg shadow-[#00CFFF]/20 min-h-[44px]"
+                    >
+                      {isSubmitting ? (
+                        <>
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                          <span>Completing Registration...</span>
+                        </>
+                      ) : (
+                        <>
+                          <span>Verify Email</span>
+                          <CheckCircle2 className="w-4 h-4" />
+                        </>
+                      )}
+                    </button>
+
+                    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 text-xs text-[#98A2B3] pt-4 border-t border-white/[0.08] mt-4">
+                      <button
+                        type="button"
+                        onClick={handleResendCode}
+                        disabled={resendCountdown > 0 || isSubmitting}
+                        className="text-[#00CFFF] font-semibold hover:underline disabled:opacity-40 disabled:hover:no-underline cursor-pointer flex items-center gap-1.5"
+                      >
+                        {resendCountdown > 0 ? (
+                          <span>Resend Code ({resendCountdown}s)</span>
+                        ) : (
+                          <span>Resend Code</span>
+                        )}
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setStep('form');
+                          setOtp(['', '', '', '', '', '']);
+                          setErrors({});
+                        }}
+                        className="hover:text-white transition-colors cursor-pointer text-left font-semibold"
+                      >
+                        Change Email
+                      </button>
                     </div>
 
-                    <div className="grid grid-cols-2 gap-1.5 text-[10px] text-[#98A2B3] pt-1">
-                      <div className="flex items-center gap-1.5">
-                        {passwordCriteria.length ? <Check className="w-3 h-3 text-[#32D583]" /> : <X className="w-3 h-3 text-white/30" />}
-                        <span>10+ Characters</span>
-                      </div>
-                      <div className="flex items-center gap-1.5">
-                        {passwordCriteria.uppercase ? <Check className="w-3 h-3 text-[#32D583]" /> : <X className="w-3 h-3 text-white/30" />}
-                        <span>Uppercase Letter</span>
-                      </div>
-                      <div className="flex items-center gap-1.5">
-                        {passwordCriteria.number ? <Check className="w-3 h-3 text-[#32D583]" /> : <X className="w-3 h-3 text-white/30" />}
-                        <span>Number (0-9)</span>
-                      </div>
-                      <div className="flex items-center gap-1.5">
-                        {passwordCriteria.special ? <Check className="w-3 h-3 text-[#32D583]" /> : <X className="w-3 h-3 text-white/30" />}
-                        <span>Special Symbol</span>
-                      </div>
+                    <div className="text-center pt-2">
+                      <button
+                        type="button"
+                        onClick={() => onNavigate('/login')}
+                        className="text-xs text-slate-500 hover:text-slate-300 font-medium transition-colors"
+                      >
+                        Back to Login
+                      </button>
                     </div>
                   </div>
-                )}
+                </form>
+              </>
+            )}
 
-                {/* 6. Terms & Privacy Checkbox */}
-                <div className="pt-2">
-                  <label className="flex items-start gap-2.5 cursor-pointer select-none">
-                    <input
-                      type="checkbox"
-                      checked={agreeTerms}
-                      onChange={(e) => {
-                        setAgreeTerms(e.target.checked);
-                        if (errors.agreeTerms) setErrors((prev) => ({ ...prev, agreeTerms: '' }));
-                      }}
-                      className="mt-0.5 w-4 h-4 rounded border-white/20 bg-[#05070B] text-[#00CFFF] focus:ring-0 focus:ring-offset-0 cursor-pointer"
-                    />
-                    <span className="text-xs text-[#98A2B3] leading-snug">
-                      I agree to the{' '}
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.preventDefault();
-                          onOpenLegalModal?.('Terms of Service');
-                        }}
-                        className="text-[#00CFFF] hover:underline"
-                      >
-                        Terms of Service
-                      </button>{' '}
-                      and acknowledge the{' '}
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.preventDefault();
-                          onOpenLegalModal?.('Privacy Policy');
-                        }}
-                        className="text-[#00CFFF] hover:underline"
-                      >
-                        Privacy Policy
-                      </button>
-                      . <span className="text-[#F04438]">*</span>
-                    </span>
-                  </label>
-                  {errors.agreeTerms && (
-                    <span className="text-[11px] text-[#F04438] mt-1 block flex items-center gap-1">
-                      <AlertCircle className="w-3 h-3 shrink-0" /> {errors.agreeTerms}
-                    </span>
-                  )}
+            {step === 'success' && (
+              <div className="py-12 text-center space-y-6 animate-fadeIn">
+                <div className="w-16 h-16 rounded-full bg-[#32D583]/10 border border-[#32D583]/20 text-[#32D583] flex items-center justify-center mx-auto shadow-[0_0_20px_rgba(50,213,131,0.15)]">
+                  <CheckCircle2 className="w-10 h-10" />
+                </div>
+                
+                <div className="space-y-2">
+                  <h2 className="text-2xl font-extrabold text-white tracking-tight">Account Created!</h2>
+                  <p className="text-sm text-slate-400 max-w-sm mx-auto leading-relaxed">
+                    Welcome to PHIVONEX, <strong className="text-white">{fullName}</strong>. Your email has been verified and your secure operator session is initializing.
+                  </p>
                 </div>
 
-                {/* 7. Primary Action Button */}
-                <div className="pt-3">
-                  <button
-                    type="submit"
-                    disabled={isSubmitting || isCheckingReferral || Boolean(referralCode.trim() && sponsorData && !sponsorData.valid)}
-                    className="w-full py-3.5 px-4 rounded-lg bg-gradient-to-r from-[#00CFFF] to-[#168BFF] text-[#05070B] font-semibold text-xs flex items-center justify-center gap-2 hover:brightness-110 active:scale-[0.99] disabled:opacity-50 transition-all cursor-pointer shadow-lg shadow-[#00CFFF]/20 min-h-[44px]"
-                  >
-                    {isSubmitting ? (
-                      <>
-                        <Loader2 className="w-4 h-4 animate-spin" />
-                        <span>Creating Account...</span>
-                      </>
-                    ) : (
-                      <>
-                        <span>Create Account</span>
-                        <ArrowRight className="w-4 h-4" />
-                      </>
-                    )}
-                  </button>
+                <div className="flex justify-center pt-2">
+                  <Loader2 className="w-6 h-6 animate-spin text-[#00CFFF]" />
                 </div>
-
-              </form>
-
-              {/* Bottom Nav to Sign In */}
-              <div className="mt-6 pt-6 border-t border-white/[0.08] text-center">
-                <p className="text-xs text-[#98A2B3]">
-                  Already have an account?{' '}
-                  <button
-                    onClick={() => onNavigate('/login')}
-                    className="text-[#00CFFF] font-semibold hover:underline cursor-pointer ml-1"
-                  >
-                    Sign In
-                  </button>
-                </p>
               </div>
+            )}
 
-            </div>
           </div>
-
         </div>
       </main>
 

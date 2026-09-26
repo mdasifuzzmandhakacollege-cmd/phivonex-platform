@@ -30,13 +30,13 @@ withdrawalRouter.post('/', requireAuth, withdrawalLimiter, async (req: AuthReque
       });
     }
 
-    const destType = String(destinationType || 'BEP20').toUpperCase();
-    if (destType === 'BEP20' || destType === 'BNB') {
+    const destType = String(destinationType || 'USDT_BEP20').toUpperCase();
+    if (destType === 'USDT_BEP20' || destType === 'BEP20' || destType === 'BNB' || destType === 'USDT_ERC20' || destType === 'ETH') {
       const addrCheck = validateEvmAddress(destinationReference);
       if (!addrCheck.valid) {
         return res.status(400).json({
           error: 'INVALID_DESTINATION_ADDRESS',
-          message: addrCheck.error || 'Invalid destination wallet address.',
+          message: addrCheck.error || 'Invalid destination wallet address (Must be a valid 0x... EVM / BNB Smart Chain address).',
         });
       }
     }

@@ -373,7 +373,8 @@ async function runTask22SecurityTests() {
     const serializedRecord = JSON.stringify(addrRecord);
     assert(!serializedRecord.includes('privateKey'), 'Deposit address response contains NO privateKey');
     assert(!serializedRecord.includes('mnemonic'), 'Deposit address response contains NO mnemonic');
-    assert(!serializedRecord.includes(BSC_CONFIG.MASTER_DERIVATION_SEED), 'Deposit response does NOT leak MASTER_DERIVATION_SEED');
+    assert(!serializedRecord.includes('seed'), 'Deposit address response contains NO seed');
+    assert(addrRecord.derivationIndex >= 0, 'Deposit address record has valid non-negative derivation index');
   }
 
   // =========================================================================

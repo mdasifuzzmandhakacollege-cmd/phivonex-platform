@@ -61,12 +61,413 @@ async function getUniqueReferralCode(db: any): Promise<string> {
 }
 
 /**
+ * POST /api/auth/register/request-verification
+ * Step 1 of the premium registration flow. Validates entries and dispatches a 6-digit OTP code via email.
+ */
+router.post('/register/request-verification', registrationLimiter, async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { fullName, email, country, password, referralCode, phone } = req.body;
+
+    // 1. Validation
+    if (!fullName || typeof fullName !== 'string' || fullName.trim().length < 2) {
+      res.status(400).json({ error: 'INVALID_NAME', message: 'Full name is required (min 2 characters).' });
+      return;
+    }
+
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!email || !emailRegex.test(email.trim())) {
+      res.status(400).json({ error: 'INVALID_EMAIL', message: 'A valid email address is required.' });
+      return;
+    }
+
+    if (!country || typeof country !== 'string') {
+      res.status(400).json({ error: 'INVALID_COUNTRY', message: 'Country is required.' });
+      return;
+    }
+
+    if (!password || typeof password !== 'string' || password.length < 10) {
+      res.status(400).json({
+        error: 'WEAK_PASSWORD',
+        message: 'Password must be at least 10 characters long.',
+      });
+      return;
+    }
+
+    const db = await getDb();
+    const normalizedEmail = email.trim().toLowerCase();
+    const cleanPhone = phone ? phone.trim() : null;
+
+    // 2. Check for duplicate email in users table
+    const existingEmail = await db.query(`SELECT id FROM users WHERE LOWER(email) = $1`, [normalizedEmail]);
+    if (existingEmail.rowCount > 0) {
+      res.status(409).json({ error: 'EMAIL_EXISTS', message: 'An account with this email address already exists.' });
+      return;
+    }
+
+    // 3. Check for duplicate phone if provided
+    if (cleanPhone) {
+      const existingPhone = await db.query(`SELECT id FROM users WHERE phone = $1`, [cleanPhone]);
+      if (existingPhone.rowCount > 0) {
+        res.status(409).json({ error: 'PHONE_EXISTS', message: 'An account with this phone number already exists.' });
+        return;
+      }
+    }
+
+    // 4. Resolve sponsor user ID if referralCode provided
+    let sponsorUserId: string | null = null;
+    let pendingCodeToStore: string | null = null;
+
+    if (referralCode && typeof referralCode === 'string' && referralCode.trim() !== '') {
+      const normalizedCode = normalizeReferralCode(referralCode);
+      const sponsorResult = await db.query<{ user_id: string }>(
+        `SELECT user_id FROM user_referrals WHERE referral_code = $1`,
+        [normalizedCode]
+      );
+
+      if (sponsorResult.rowCount > 0) {
+        sponsorUserId = sponsorResult.rows[0].user_id;
+      } else {
+        pendingCodeToStore = normalizedCode;
+      }
+    }
+
+    // 5. Hash password with Argon2id right now for secure storage in pending data
+    const passwordHash = await hashPassword(password);
+
+    // 6. Generate 6-digit verification code and its secure hash
+    const crypto = await import('crypto');
+    const rawCode = crypto.randomInt(100000, 999999).toString();
+    const codeHash = crypto.createHash('sha256').update(rawCode).digest('hex');
+
+    // 7. Check for existing pending registration and enforce cooldown
+    const existingPending = await db.query(
+      `SELECT last_sent_at FROM pending_registrations WHERE email = $1`,
+      [normalizedEmail]
+    );
+
+    if (existingPending.rowCount > 0) {
+      const lastSent = new Date(existingPending.rows[0].last_sent_at).getTime();
+      const COOLDOWN_MS = 60 * 1000; // 60 seconds cooldown
+      if (Date.now() - lastSent < COOLDOWN_MS) {
+        res.status(429).json({
+          error: 'COOLDOWN_ACTIVE',
+          message: `Please wait ${Math.ceil((COOLDOWN_MS - (Date.now() - lastSent)) / 1000)} seconds before requesting another code.`,
+        });
+        return;
+      }
+    }
+
+    // 8. Store verification details and registration data
+    const registrationData = JSON.stringify({
+      fullName: fullName.trim(),
+      email: normalizedEmail,
+      phone: cleanPhone,
+      country: country.trim(),
+      passwordHash,
+      referralCode: referralCode || null,
+      sponsorUserId,
+      pendingCodeToStore,
+    });
+
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes expiry
+
+    await db.query(
+      `INSERT INTO pending_registrations (
+        email, code_hash, registration_data, failed_attempts, expires_at, is_verified, verification_token, created_at, last_sent_at
+      ) VALUES ($1, $2, $3, 0, $4, FALSE, NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      ON CONFLICT (email) DO UPDATE SET
+        code_hash = EXCLUDED.code_hash,
+        registration_data = EXCLUDED.registration_data,
+        failed_attempts = 0,
+        expires_at = EXCLUDED.expires_at,
+        is_verified = FALSE,
+        verification_token = NULL,
+        last_sent_at = CURRENT_TIMESTAMP`,
+      [normalizedEmail, codeHash, registrationData, expiresAt]
+    );
+
+    // 9. Dispatch Email via emailService
+    const { sendVerificationCodeEmail } = await import('../services/emailService');
+    const sent = await sendVerificationCodeEmail(normalizedEmail, rawCode);
+
+    if (!sent) {
+      console.warn(`[Auth API] Email broadcast completed with provider warnings.`);
+    }
+
+    res.status(200).json({
+      message: 'Verification code sent successfully to your email address.',
+      email: normalizedEmail,
+    });
+  } catch (err) {
+    console.error('[Auth API] Error in /register/request-verification:', err);
+    res.status(500).json({ error: 'SERVER_ERROR', message: 'Failed to request email verification.' });
+  }
+});
+
+/**
+ * POST /api/auth/register/verify-email
+ * Step 2 of the premium registration flow. Validates the 6-digit code entered by user.
+ */
+router.post('/register/verify-email', registrationLimiter, async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { email, code } = req.body;
+
+    if (!email || !code) {
+      res.status(400).json({ error: 'MISSING_FIELDS', message: 'Email and verification code are required.' });
+      return;
+    }
+
+    const normalizedEmail = email.trim().toLowerCase();
+    const db = await getDb();
+
+    // 1. Fetch pending registration
+    const result = await db.query(
+      `SELECT code_hash, failed_attempts, expires_at, is_verified FROM pending_registrations WHERE email = $1`,
+      [normalizedEmail]
+    );
+
+    if (result.rowCount === 0) {
+      res.status(400).json({ error: 'INVALID_REQUEST', message: 'No registration session found for this email.' });
+      return;
+    }
+
+    const record = result.rows[0];
+
+    // 2. Check failed attempts limit
+    if (record.failed_attempts >= 5) {
+      res.status(429).json({
+        error: 'MAX_ATTEMPTS_EXCEEDED',
+        message: 'Maximum verification attempts exceeded. Please request a new code.',
+      });
+      return;
+    }
+
+    // 3. Check expiration
+    if (new Date(record.expires_at).getTime() < Date.now()) {
+      res.status(400).json({ error: 'TOKEN_EXPIRED', message: 'Verification code has expired. Please request a new code.' });
+      return;
+    }
+
+    // 4. Verify code securely using sha256 hash comparison
+    const crypto = await import('crypto');
+    const codeHash = crypto.createHash('sha256').update(code.trim()).digest('hex');
+
+    if (record.code_hash !== codeHash) {
+      await db.query(
+        `UPDATE pending_registrations SET failed_attempts = failed_attempts + 1 WHERE email = $1`,
+        [normalizedEmail]
+      );
+      res.status(401).json({
+        error: 'INVALID_CODE',
+        message: 'Invalid verification code. Please try again.',
+        remainingAttempts: 5 - (record.failed_attempts + 1),
+      });
+      return;
+    }
+
+    // 5. Successful verification - generate a unique single-use completion token
+    const verificationToken = uuidv4();
+    await db.query(
+      `UPDATE pending_registrations SET
+        is_verified = TRUE,
+        verification_token = $1,
+        code_hash = 'USED'
+       WHERE email = $2`,
+      [verificationToken, normalizedEmail]
+    );
+
+    res.status(200).json({
+      message: 'Email address verified successfully.',
+      email: normalizedEmail,
+      token: verificationToken,
+    });
+  } catch (err) {
+    console.error('[Auth API] Error in /register/verify-email:', err);
+    res.status(500).json({ error: 'SERVER_ERROR', message: 'Failed to verify code.' });
+  }
+});
+
+/**
+ * POST /api/auth/register/complete
+ * Step 3 of the premium registration flow. Creates user account after email verification succeeds.
+ */
+router.post('/register/complete', registrationLimiter, async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { email, token } = req.body;
+
+    if (!email || !token) {
+      res.status(400).json({ error: 'MISSING_FIELDS', message: 'Email and verification completion token are required.' });
+      return;
+    }
+
+    const normalizedEmail = email.trim().toLowerCase();
+    const db = await getDb();
+
+    // 1. Retrieve the verified pending registration
+    const result = await db.query(
+      `SELECT registration_data, is_verified, verification_token, expires_at FROM pending_registrations WHERE email = $1`,
+      [normalizedEmail]
+    );
+
+    if (result.rowCount === 0) {
+      res.status(400).json({ error: 'INVALID_REQUEST', message: 'No registration session found for this email.' });
+      return;
+    }
+
+    const record = result.rows[0];
+
+    // 2. Validate token and verification status
+    if (!record.is_verified || record.verification_token !== token) {
+      res.status(401).json({ error: 'UNAUTHORIZED_VERIFICATION', message: 'Verification token is invalid or unverified.' });
+      return;
+    }
+
+    // 3. Ensure code/session isn't expired
+    if (new Date(record.expires_at).getTime() < Date.now()) {
+      res.status(400).json({ error: 'SESSION_EXPIRED', message: 'Your registration session has expired. Please verify again.' });
+      return;
+    }
+
+    // 4. Parse registration data
+    const data = JSON.parse(record.registration_data);
+
+    // 5. Final check for duplicate email in users table before final creation
+    const existingEmail = await db.query(`SELECT id FROM users WHERE LOWER(email) = $1`, [normalizedEmail]);
+    if (existingEmail.rowCount > 0) {
+      res.status(409).json({ error: 'EMAIL_EXISTS', message: 'An account with this email address already exists.' });
+      return;
+    }
+
+    // 6. Complete registration (Generate IDs and insert records)
+    const userId = uuidv4();
+    const publicId = await getUniquePublicId(db);
+    const newReferralCode = await getUniqueReferralCode(db);
+
+    // Insert user record with email_verified_at set to current timestamp (since verified!)
+    await db.query(
+      `INSERT INTO users (
+        id, public_id, full_name, email, phone, country, password_hash,
+        status, pending_referral_code, email_verified_at, created_at, updated_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'ACTIVE', $8, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+      [
+        userId,
+        publicId,
+        data.fullName,
+        normalizedEmail,
+        data.phone,
+        data.country,
+        data.passwordHash,
+        data.pendingCodeToStore,
+      ]
+    );
+
+    // Insert user_referrals record
+    await db.query(
+      `INSERT INTO user_referrals (user_id, referral_code, sponsor_user_id, created_at)
+       VALUES ($1, $2, $3, CURRENT_TIMESTAMP)`,
+      [userId, newReferralCode, data.sponsorUserId]
+    );
+
+    // Insert initial binary_placements record (UNPLACED)
+    await db.query(
+      `INSERT INTO binary_placements (user_id, parent_user_id, side, status, placed_at, created_at)
+       VALUES ($1, NULL, NULL, 'UNPLACED', NULL, CURRENT_TIMESTAMP)
+       ON CONFLICT (user_id) DO NOTHING`,
+      [userId]
+    );
+
+    // Delete the pending registration record (single-use session completed!)
+    await db.query(`DELETE FROM pending_registrations WHERE email = $1`, [normalizedEmail]);
+
+    // 7. Create Session
+    const rawSessionToken = generateRandomToken(32);
+    const sessionTokenHash = hashToken(rawSessionToken);
+    const sessionExpiresAt = new Date(Date.now() + SESSION_DURATION_DAYS * 24 * 60 * 60 * 1000);
+    const userAgent = req.headers['user-agent'] || '';
+
+    await db.query(
+      `INSERT INTO sessions (id, user_id, token_hash, user_agent, expires_at, created_at, last_used_at)
+       VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+      [uuidv4(), userId, sessionTokenHash, userAgent, sessionExpiresAt]
+    );
+
+    // 8. Record security audit event
+    await logSecurityEvent(db, {
+      userId,
+      eventType: 'ACCOUNT_REGISTERED',
+      description: 'Account successfully registered and authenticated via email verification.',
+      userAgent,
+    });
+
+    // Send Welcome and Sponsor Notifications via Email Automation Engine
+    try {
+      const { queueEventEmail } = await import('../services/emailService');
+      await queueEventEmail(normalizedEmail, 'WELCOME', {
+        displayName: data.fullName,
+        publicId,
+        signupTime: new Date().toISOString()
+      });
+
+      if (data.sponsorUserId) {
+        const sponsorRes = await db.query<{ email: string }>(
+          `SELECT email FROM users WHERE id = $1`,
+          [data.sponsorUserId]
+        );
+        if (sponsorRes.rowCount > 0) {
+          const nameParts = data.fullName.split(' ');
+          const safeDisplayName = nameParts.length > 1 
+            ? `${nameParts[0]} ${nameParts[nameParts.length - 1][0]}.` 
+            : nameParts[0];
+
+          await queueEventEmail(sponsorRes.rows[0].email, 'REFERRAL_SIGNUP', {
+            displayName: safeDisplayName,
+            publicId,
+            signupTime: new Date().toISOString()
+          });
+        }
+      }
+    } catch (emailErr) {
+      console.error('[Auth API] Failed to queue welcome/sponsor emails:', emailErr);
+    }
+
+    setSessionCookie(res, rawSessionToken, true);
+
+    res.status(201).json({
+      message: 'Account created and verified successfully',
+      user: {
+        id: userId,
+        publicId,
+        referralCode: newReferralCode,
+        fullName: data.fullName,
+        email: normalizedEmail,
+        phone: data.phone,
+        country: data.country,
+        status: 'ACTIVE',
+        emailVerified: true,
+      },
+    });
+  } catch (err) {
+    console.error('[Auth API] Error in /register/complete:', err);
+    res.status(500).json({ error: 'SERVER_ERROR', message: 'Failed to complete account registration.' });
+  }
+});
+
+/**
  * POST /api/auth/register
- * User registration with Argon2id hashing, unique public_id, referral code generation, and sponsor resolution.
+ * Retained direct registration endpoint strictly for automated test suites or backward compatibility.
  */
 router.post('/register', registrationLimiter, async (req: Request, res: Response): Promise<void> => {
   try {
     const { fullName, email, phone, country, password, referralCode } = req.body;
+
+    // Direct registration permitted in automated E2E tests, otherwise redirected
+    if (process.env.NODE_ENV !== 'test' && process.env.BYPASS_EMAIL_VERIFICATION !== 'true') {
+      res.status(403).json({
+        error: 'VERIFICATION_REQUIRED',
+        message: 'Direct registration is disabled. Please register via the verified email flow.',
+      });
+      return;
+    }
 
     // 1. Validation
     if (!fullName || typeof fullName !== 'string' || fullName.trim().length < 2) {
@@ -186,43 +587,9 @@ router.post('/register', registrationLimiter, async (req: Request, res: Response
     await logSecurityEvent(db, {
       userId,
       eventType: 'ACCOUNT_REGISTERED',
-      description: 'Account successfully registered and authenticated.',
+      description: 'Account successfully registered and authenticated directly.',
       userAgent,
     });
-
-    // Send Welcome and Sponsor Notifications via Email Automation Engine
-    try {
-      const { queueEventEmail } = await import('../services/emailService');
-      // Queue Welcome Email
-      await queueEventEmail(normalizedEmail, 'WELCOME', {
-        displayName: fullName.trim(),
-        publicId,
-        signupTime: new Date().toISOString()
-      });
-
-      // Queue Sponsor Notification
-      if (sponsorUserId) {
-        const sponsorRes = await db.query<{ email: string }>(
-          `SELECT email FROM users WHERE id = $1`,
-          [sponsorUserId]
-        );
-        if (sponsorRes.rowCount > 0) {
-          // Send privacy-safe sponsor notification containing only safe display name, public ID, and signup time.
-          const nameParts = fullName.trim().split(' ');
-          const safeDisplayName = nameParts.length > 1 
-            ? `${nameParts[0]} ${nameParts[nameParts.length - 1][0]}.` 
-            : nameParts[0];
-
-          await queueEventEmail(sponsorRes.rows[0].email, 'REFERRAL_SIGNUP', {
-            displayName: safeDisplayName,
-            publicId,
-            signupTime: new Date().toISOString()
-          });
-        }
-      }
-    } catch (emailErr) {
-      console.error('[Auth API] Failed to queue welcome/sponsor emails:', emailErr);
-    }
 
     setSessionCookie(res, rawSessionToken, true);
 
@@ -241,7 +608,7 @@ router.post('/register', registrationLimiter, async (req: Request, res: Response
       },
     });
   } catch (err) {
-    console.error('[Auth API] Error in /register:', err);
+    console.error('[Auth API] Error in direct /register:', err);
     res.status(500).json({ error: 'SERVER_ERROR', message: 'An unexpected error occurred during registration.' });
   }
 });

@@ -17,6 +17,7 @@ export interface PublicNetworkSummary {
   totalNetworkTransactions: number;
   networkStatus: 'OPERATIONAL' | 'HEALTHY' | 'SYNCHRONIZED';
   updatedAt: string;
+  conversionRateUsd?: number;
 }
 
 export interface PublicNetworkEvent {
@@ -74,6 +75,23 @@ export async function getPublicNetworkSummary(): Promise<PublicNetworkSummary> {
   );
   const totalNetworkTransactions = Number(txnRes.rows[0]?.count || 0);
 
+  // 4. Query live INTERNAL_COIN_PRICE_USDT swap rate configuration
+  let conversionRateUsd = 0.10;
+  try {
+    const configRes = await db.query<{ config_value: string }>(
+      `SELECT config_value FROM system_economic_configs WHERE config_key = 'INTERNAL_COIN_PRICE_USDT'`
+    );
+    if (configRes.rows.length > 0) {
+      const valStr = configRes.rows[0].config_value;
+      const val = typeof valStr === 'string' ? JSON.parse(valStr) : valStr;
+      if (val && typeof val.priceUsdt === 'number') {
+        conversionRateUsd = val.priceUsdt;
+      }
+    }
+  } catch (err) {
+    console.warn('[Public API] Error loading INTERNAL_COIN_PRICE_USDT config value for summary:', err);
+  }
+
   return {
     genesisNodeCap: GENESIS_NODE_CAP,
     activeNodes,
@@ -85,6 +103,7 @@ export async function getPublicNetworkSummary(): Promise<PublicNetworkSummary> {
     totalNetworkTransactions,
     networkStatus: 'OPERATIONAL',
     updatedAt: new Date().toISOString(),
+    conversionRateUsd,
   };
 }
 

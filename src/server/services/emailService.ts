@@ -25,6 +25,11 @@ export class ResendEmailProvider implements EmailProvider {
 
   async sendEmail(to: string, subject: string, html: string): Promise<{ providerMessageId?: string; error?: string }> {
     try {
+      const defaultDomain = process.env.RESEND_DOMAIN || process.env.CUSTOM_DOMAIN || 'phivonex.com';
+      const fromAddress = process.env.EMAIL_FROM_ADDRESS || `support@${defaultDomain}`;
+      const fromName = process.env.EMAIL_FROM_NAME || 'PHIVONEX';
+      const from = `${fromName} <${fromAddress}>`;
+
       const response = await fetch('https://api.resend.com/emails', {
         method: 'POST',
         headers: {
@@ -32,7 +37,7 @@ export class ResendEmailProvider implements EmailProvider {
           'Authorization': `Bearer ${this.apiKey}`
         },
         body: JSON.stringify({
-          from: 'Phivonex <no-reply@phivonex.com>',
+          from,
           to,
           subject,
           html
@@ -41,21 +46,24 @@ export class ResendEmailProvider implements EmailProvider {
 
       const data = await response.json();
       if (!response.ok) {
-        return { error: data.message || 'Resend provider error' };
+        console.warn('[Resend Provider] API response error:', data);
+        return { error: data.message || data.error || 'Resend provider error' };
       }
 
+      console.log(`[Resend Provider] Live email sent successfully to ${to} from ${from}, ID: ${data.id}`);
       return { providerMessageId: data.id };
     } catch (err: any) {
+      console.warn('[Resend Provider] Network error communicating with Resend:', err);
       return { error: err.message || 'Network error communicating with Resend' };
     }
   }
 }
 
-// Instantiate Provider (Fail-safe to Mock when Resend Key not configured)
+// Instantiate Provider (Uses Resend whenever RESEND_API_KEY is provided)
 export function getEmailProvider(): EmailProvider {
   const apiKey = process.env.RESEND_API_KEY;
-  if (apiKey && apiKey.trim() !== '' && process.env.NODE_ENV === 'production') {
-    return new ResendEmailProvider(apiKey);
+  if (apiKey && apiKey.trim() !== '' && !apiKey.includes('your_resend_api_key')) {
+    return new ResendEmailProvider(apiKey.trim());
   }
   return new MockEmailProvider();
 }
@@ -559,4 +567,37 @@ export async function handleProviderEmailWebhook(
   );
 
   return res.rowCount > 0;
+}
+
+/**
+ * Sends a premium PHIVONEX HTML email containing a 6-digit registration verification code.
+ */
+export async function sendVerificationCodeEmail(toEmail: string, code: string): Promise<boolean> {
+  const provider = getEmailProvider();
+  const subject = 'Verify your PHIVONEX account';
+  const html = `
+    <div style="font-family: 'Plus Jakarta Sans', 'Segoe UI', Helvetica, Arial, sans-serif; background-color: #05070C; color: #F7FAFC; padding: 40px 20px; text-align: center; border-radius: 12px; max-width: 600px; margin: 0 auto; border: 1px solid rgba(0, 207, 255, 0.15);">
+      <div style="margin-bottom: 24px;">
+        <span style="font-size: 24px; font-weight: 800; letter-spacing: 2px; color: #ffffff; font-family: monospace;">PHIVONEX</span>
+      </div>
+      <h2 style="font-size: 20px; font-weight: 700; color: #ffffff; margin-bottom: 12px;">Verify Your Email Address</h2>
+      <p style="font-size: 14px; color: #98A2B3; max-width: 480px; margin: 0 auto 30px auto; line-height: 1.6;">
+        Welcome to PHIVONEX. Use the 6-digit verification code below to complete your secure account registration. This code will expire in 10 minutes.
+      </p>
+      <div style="background: rgba(0, 207, 255, 0.08); border: 1px solid rgba(0, 207, 255, 0.2); border-radius: 8px; padding: 18px 30px; display: inline-block; font-size: 32px; font-weight: 800; letter-spacing: 6px; color: #00CFFF; font-family: monospace; margin-bottom: 30px; box-shadow: 0 0 20px rgba(0, 207, 255, 0.1);">
+        ${code}
+      </div>
+      <div style="border-top: 1px solid rgba(255,255,255,0.06); padding-top: 24px; max-width: 480px; margin: 0 auto; text-align: left; font-size: 11px; color: #586575; line-height: 1.5;">
+        <p style="margin-bottom: 8px;"><strong>Security Note:</strong> Never share this code with anyone. PHIVONEX administrators will never ask for your verification code.</p>
+        <p>If you did not request this email, please ignore it. Your email address remains safe.</p>
+      </div>
+    </div>
+  `;
+  const result = await provider.sendEmail(toEmail, subject, html);
+  if (result.error) {
+    console.warn(`[EmailService] Failed to send verification email to ${toEmail}:`, result.error);
+  } else {
+    console.log(`[EmailService] Verification code email sent to ${toEmail}`);
+  }
+  return !result.error;
 }

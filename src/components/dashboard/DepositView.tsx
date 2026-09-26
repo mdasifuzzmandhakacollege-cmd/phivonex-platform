@@ -11,8 +11,6 @@ import {
   Coins,
   QrCode,
   Radio,
-  Sparkles,
-  Zap,
   Info,
   Layers,
   Search
@@ -83,13 +81,6 @@ export const DepositView: React.FC<DepositViewProps> = ({ user, onNavigateTab })
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
-  // Simulation Modal State
-  const [showSimulateModal, setShowSimulateModal] = useState(false);
-  const [simAsset, setSimAsset] = useState<DepositAsset>('BNB');
-  const [simAmount, setSimAmount] = useState('100');
-  const [simConfirmations, setSimConfirmations] = useState('3');
-  const [simulating, setSimulating] = useState(false);
-
   // Fetch Deposit Address & Transaction History
   const fetchData = useCallback(async () => {
     try {
@@ -147,7 +138,7 @@ export const DepositView: React.FC<DepositViewProps> = ({ user, onNavigateTab })
     setTimeout(() => setCopied(false), 2500);
   };
 
-  // Trigger On-Chain Rescan
+  // Trigger Real-Time On-Chain Rescan
   const handleRescan = async () => {
     try {
       setRescanning(true);
@@ -159,48 +150,16 @@ export const DepositView: React.FC<DepositViewProps> = ({ user, onNavigateTab })
       const data = await res.json();
 
       if (res.ok && data.success) {
-        setSuccessMessage('On-chain scan completed. Deposit statuses updated.');
+        setSuccessMessage('BNB Smart Chain listener synchronized. Latest transactions updated.');
         setTimeout(() => setSuccessMessage(null), 4000);
         await fetchData();
       } else {
         throw new Error(data.message || 'Rescan failed');
       }
     } catch (err: any) {
-      setErrorMessage(err?.message || 'Error during on-chain rescan');
+      setErrorMessage(err?.message || 'Error during on-chain scan');
     } finally {
       setRescanning(false);
-    }
-  };
-
-  // Trigger Simulated Deposit
-  const handleSimulateDeposit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    try {
-      setSimulating(true);
-      setErrorMessage(null);
-      const res = await fetch('/api/deposits/simulate-test-deposit', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          asset: simAsset,
-          amount: parseFloat(simAmount),
-          confirmations: parseInt(simConfirmations, 10),
-        }),
-      });
-      const data = await res.json();
-
-      if (res.ok && data.success) {
-        setShowSimulateModal(false);
-        setSuccessMessage(`Simulated deposit of ${simAmount} ${simAsset} processed (${data.data?.status || 'CREDITED'}).`);
-        setTimeout(() => setSuccessMessage(null), 4000);
-        await fetchData();
-      } else {
-        throw new Error(data.message || 'Simulation failed');
-      }
-    } catch (err: any) {
-      setErrorMessage(err?.message || 'Simulation error');
-    } finally {
-      setSimulating(false);
     }
   };
 
@@ -240,12 +199,12 @@ export const DepositView: React.FC<DepositViewProps> = ({ user, onNavigateTab })
                 <ArrowDownLeft className="w-6 h-6" />
               </div>
               <div className="flex flex-wrap items-center gap-2">
-                <span className="px-2.5 py-0.5 rounded-full text-xs font-mono font-semibold bg-cyan-500/10 border border-cyan-500/30 text-cyan-300">
+                <span className="px-2.5 py-0.5 rounded-full text-xs font-mono font-semibold bg-[#F0B90B]/10 border border-[#F0B90B]/30 text-[#F0B90B]">
                   BNB SMART CHAIN (BEP-20 / Native)
                 </span>
-                <span className="px-2.5 py-0.5 rounded-full text-xs font-mono bg-[#00CFFF]/10 border border-[#00CFFF]/30 text-[#00CFFF] flex items-center gap-1.5">
-                  <span className="w-1.5 h-1.5 rounded-full bg-[#00CFFF] animate-pulse" />
-                  {addressInfo?.networkName || 'BSC Testnet (Chain 97)'}
+                <span className="px-2.5 py-0.5 rounded-full text-xs font-mono bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 flex items-center gap-1.5">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                  Real-Time Listener Active
                 </span>
               </div>
             </div>
@@ -253,7 +212,7 @@ export const DepositView: React.FC<DepositViewProps> = ({ user, onNavigateTab })
               Blockchain Deposit Portal
             </h1>
             <p className="text-[#98A2B3] text-sm mt-1 max-w-xl">
-              Deposit native BNB or BEP-20 USDT directly to your assigned protocol deposit address. Incoming transfers are detected automatically on-chain and credited to your ledger.
+              Deposit native BNB or BEP-20 USDT directly to your assigned protocol address on BNB Smart Chain. Incoming on-chain transfers are automatically detected and credited to your financial ledger in real-time.
             </p>
           </div>
 
@@ -274,25 +233,10 @@ export const DepositView: React.FC<DepositViewProps> = ({ user, onNavigateTab })
             <button
               onClick={handleRescan}
               disabled={rescanning || loading}
-              className="px-4 py-2.5 rounded-xl bg-[#00CFFF]/10 hover:bg-[#00CFFF]/20 border border-[#00CFFF]/30 text-[#00CFFF] text-sm font-medium flex items-center gap-2 transition-all cursor-pointer disabled:opacity-50"
+              className="px-4 py-2.5 rounded-xl bg-[#F0B90B]/10 hover:bg-[#F0B90B]/20 border border-[#F0B90B]/30 text-[#F0B90B] text-sm font-semibold flex items-center gap-2 transition-all cursor-pointer disabled:opacity-50"
             >
-              <Radio className={`w-4 h-4 ${rescanning ? 'animate-pulse text-[#00CFFF]' : ''}`} />
-              {rescanning ? 'Scanning Chain...' : 'Rescan Chain'}
-            </button>
-
-            <button
-              onClick={() => {
-                setSimAsset(selectedAsset);
-                setShowSimulateModal(true);
-              }}
-              className={`px-4 py-2.5 rounded-xl text-slate-950 text-sm font-semibold flex items-center gap-2 transition-all shadow-lg cursor-pointer ${
-                isBnbSelected
-                  ? 'bg-gradient-to-r from-amber-400 to-amber-500 hover:brightness-110 shadow-amber-500/20'
-                  : 'bg-gradient-to-r from-emerald-400 to-emerald-500 hover:brightness-110 shadow-emerald-500/20'
-              }`}
-            >
-              <Sparkles className="w-4 h-4" />
-              Simulate Deposit
+              <Radio className={`w-4 h-4 ${rescanning ? 'animate-pulse text-[#F0B90B]' : ''}`} />
+              {rescanning ? 'Scanning BNB Chain...' : 'Sync BNB Chain'}
             </button>
           </div>
         </div>
@@ -313,7 +257,7 @@ export const DepositView: React.FC<DepositViewProps> = ({ user, onNavigateTab })
         <div className="p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 flex items-start gap-3">
           <CheckCircle2 className="w-5 h-5 flex-shrink-0 mt-0.5 text-emerald-400" />
           <div className="text-sm">
-            <p className="font-semibold text-emerald-200">Deposit Confirmed</p>
+            <p className="font-semibold text-emerald-200">Sync Complete</p>
             <p className="mt-0.5 text-emerald-300/90">{successMessage}</p>
           </div>
         </div>
@@ -324,11 +268,11 @@ export const DepositView: React.FC<DepositViewProps> = ({ user, onNavigateTab })
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div>
             <h2 className="text-base font-bold text-white flex items-center gap-2">
-              <Coins className="w-5 h-5 text-[#00CFFF]" />
+              <Coins className="w-5 h-5 text-[#F0B90B]" />
               Asset Selector (Deposit Currency)
             </h2>
             <p className="text-xs text-[#98A2B3] mt-0.5">
-              Select your preferred deposit asset. Each asset generates a unique static address on BNB Smart Chain.
+              Select your preferred deposit currency on BNB Smart Chain.
             </p>
           </div>
 
@@ -345,7 +289,7 @@ export const DepositView: React.FC<DepositViewProps> = ({ user, onNavigateTab })
               <div className={`w-2 h-2 rounded-full ${isBnbSelected ? 'bg-slate-950' : 'bg-amber-400'}`} />
               <span>BNB Deposit</span>
               <span className={`px-1.5 py-0.5 rounded text-[10px] font-mono ${isBnbSelected ? 'bg-slate-950/20 text-slate-950' : 'bg-amber-500/20 text-amber-300'}`}>
-                Native
+                Native BNB
               </span>
             </button>
 
@@ -367,14 +311,14 @@ export const DepositView: React.FC<DepositViewProps> = ({ user, onNavigateTab })
         </div>
 
         {/* Balance Separation & Node Activation Notice */}
-        <div className="p-4 rounded-xl bg-gradient-to-r from-[#00CFFF]/[0.08] via-[#0088FF]/[0.05] to-transparent border border-[#00CFFF]/30 flex items-start gap-3.5">
-          <Info className="w-5 h-5 text-[#00CFFF] shrink-0 mt-0.5" />
+        <div className="p-4 rounded-xl bg-gradient-to-r from-[#F0B90B]/[0.08] via-[#00CFFF]/[0.05] to-transparent border border-[#F0B90B]/30 flex items-start gap-3.5">
+          <Info className="w-5 h-5 text-[#F0B90B] shrink-0 mt-0.5" />
           <div className="text-xs space-y-1">
             <p className="font-bold text-white">
-              Independent Ledger Balances &amp; Direct Node Funding
+              BNB Smart Chain Integration &amp; Node Activation
             </p>
             <p className="text-[#98A2B3] leading-relaxed">
-              Your <strong className="text-amber-300">BNB</strong> and <strong className="text-emerald-300">USDT</strong> deposit balances are tracked separately in your financial ledger. Either deposit balance can be used directly to purchase &amp; activate Genesis Nodes from the <button onClick={() => onNavigateTab?.('nodes')} className="text-[#00CFFF] underline hover:text-[#80EAFF] font-semibold">Buy Node</button> section.
+              Your <strong className="text-amber-300">BNB</strong> and <strong className="text-emerald-300">USDT (BEP-20)</strong> deposits are automatically detected on the BNB Smart Chain network. Either balance can be used directly to purchase and activate Genesis Nodes from the <button onClick={() => onNavigateTab?.('nodes')} className="text-[#00CFFF] underline hover:text-[#80EAFF] font-semibold">Buy Node</button> section.
             </p>
           </div>
         </div>
@@ -388,11 +332,11 @@ export const DepositView: React.FC<DepositViewProps> = ({ user, onNavigateTab })
             <div className="flex items-center gap-2">
               <QrCode className={`w-5 h-5 ${isBnbSelected ? 'text-amber-400' : 'text-emerald-400'}`} />
               <h2 className="text-lg font-bold text-white">
-                Your Static {selectedAsset} Deposit Address
+                Your Assigned {selectedAsset} Deposit Address
               </h2>
             </div>
-            <span className="text-xs font-mono text-[#98A2B3] bg-black/40 px-2.5 py-1 rounded-md border border-white/[0.06]">
-              Permanent Assigned Address
+            <span className="text-xs font-mono text-[#F0B90B] bg-[#F0B90B]/10 px-2.5 py-1 rounded-md border border-[#F0B90B]/20 font-semibold">
+              BNB Smart Chain (BEP-20)
             </span>
           </div>
 
@@ -401,10 +345,10 @@ export const DepositView: React.FC<DepositViewProps> = ({ user, onNavigateTab })
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
               <div className="min-w-0 flex-1">
                 <span className="text-[11px] font-mono text-[#98A2B3] uppercase tracking-wider block mb-1">
-                  Recipient Address ({addressInfo?.networkName || 'BNB Smart Chain'})
+                  Recipient EVM Address ({addressInfo?.networkName || 'BNB Smart Chain'})
                 </span>
                 <p className={`font-mono text-sm sm:text-base md:text-lg font-semibold truncate select-all ${isBnbSelected ? 'text-amber-300' : 'text-emerald-300'}`}>
-                  {loading ? 'Generating static address...' : addressInfo?.address || '0x0000000000000000000000000000000000000000'}
+                  {loading ? 'Deriving secure address...' : addressInfo?.address || '0x0000000000000000000000000000000000000000'}
                 </p>
               </div>
               <button
@@ -431,7 +375,7 @@ export const DepositView: React.FC<DepositViewProps> = ({ user, onNavigateTab })
             </div>
           </div>
 
-          {/* Derivation & Explorer Details */}
+          {/* Explorer Details */}
           <div className="flex flex-wrap items-center justify-between gap-4 pt-2 text-xs text-[#98A2B3] border-t border-white/[0.04]">
             <div className="flex flex-wrap items-center gap-4">
               <span>
@@ -441,7 +385,7 @@ export const DepositView: React.FC<DepositViewProps> = ({ user, onNavigateTab })
                 Network: <strong className="text-white font-mono">{addressInfo?.networkName || 'BNB Smart Chain'}</strong>
               </span>
               <span>
-                Confirmations: <strong className="text-[#00CFFF] font-mono">{addressInfo?.requiredConfirmations || 3} Blocks</strong>
+                Required Confirmations: <strong className="text-[#00CFFF] font-mono">{addressInfo?.requiredConfirmations || 3} Blocks</strong>
               </span>
             </div>
             {addressInfo?.explorerUrl && (
@@ -457,19 +401,19 @@ export const DepositView: React.FC<DepositViewProps> = ({ user, onNavigateTab })
             )}
           </div>
 
-          {/* Asset Specific Warning Card */}
+          {/* Asset Specific Safety Card */}
           <div className={`p-4 rounded-xl border text-xs flex items-start gap-3 ${
             isBnbSelected
               ? 'bg-amber-500/[0.06] border-amber-500/20 text-amber-200'
               : 'bg-emerald-500/[0.06] border-emerald-500/20 text-emerald-200'
           }`}>
-            <ShieldCheck className="w-5 h-5 flex-shrink-0 mt-0.5 text-[#00CFFF]" />
+            <ShieldCheck className="w-5 h-5 flex-shrink-0 mt-0.5 text-[#F0B90B]" />
             <div className="space-y-1">
-              <p className="font-semibold text-white">Deposit Safety Guidelines</p>
+              <p className="font-semibold text-white">BNB Smart Chain Protocol Instructions</p>
               <p className="text-[#98A2B3]">
-                {addressInfo?.warning || (isBnbSelected
-                  ? 'Send native BNB on BNB Smart Chain (Chain ID: 97/56) only.'
-                  : 'Send BEP-20 USDT on BNB Smart Chain only. Do not use TRC-20 or ERC-20 networks.')}
+                {isBnbSelected
+                  ? 'Send native BNB on BNB Smart Chain (BSC / BEP-20) only. Your transaction will be confirmed within 3 on-chain blocks and automatically credited to your balance.'
+                  : 'Send BEP-20 USDT on BNB Smart Chain (BSC) only. Do not send via other networks. Deposits are detected automatically by the real-time node listener.'}
               </p>
             </div>
           </div>
@@ -478,8 +422,8 @@ export const DepositView: React.FC<DepositViewProps> = ({ user, onNavigateTab })
         {/* Right: QR Code Visual Display */}
         <div className="lg:col-span-4 p-6 rounded-2xl border border-white/[0.08] bg-[#07101D] flex flex-col items-center justify-center text-center space-y-4">
           <div className="text-center space-y-1">
-            <span className="text-xs font-mono text-[#00CFFF] font-semibold">QR CODE SCAN</span>
-            <h3 className="text-sm font-bold text-white">Scan with Web3 Wallet</h3>
+            <span className="text-xs font-mono text-[#F0B90B] font-semibold">QR SCAN</span>
+            <h3 className="text-sm font-bold text-white">Scan with BNB Wallet</h3>
           </div>
 
           {/* QR Code Frame */}
@@ -501,7 +445,7 @@ export const DepositView: React.FC<DepositViewProps> = ({ user, onNavigateTab })
           </div>
 
           <p className="text-[11px] text-[#98A2B3] max-w-xs">
-            Scan to copy your static <strong className="text-white">{selectedAsset}</strong> deposit address in MetaMask, Trust Wallet, or Binance Web3 Wallet.
+            Scan using <strong className="text-white">Binance App</strong>, <strong className="text-white">Trust Wallet</strong>, or <strong className="text-white">MetaMask</strong> on BNB Smart Chain.
           </p>
         </div>
       </div>
@@ -512,7 +456,7 @@ export const DepositView: React.FC<DepositViewProps> = ({ user, onNavigateTab })
           <div>
             <h2 className="text-lg font-bold text-white">Deposit Transaction History</h2>
             <p className="text-xs text-[#98A2B3]">
-              Real-time on-chain transfers detected and credited to your protocol ledger.
+              Real-time on-chain transfers on BNB Smart Chain detected and credited to your protocol ledger.
             </p>
           </div>
 
@@ -526,7 +470,7 @@ export const DepositView: React.FC<DepositViewProps> = ({ user, onNavigateTab })
                 placeholder="Search TX / ID / Address..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="pl-9 pr-3 py-1.5 rounded-lg bg-black/40 border border-white/[0.1] text-xs text-white placeholder-[#98A2B3] focus:outline-none focus:border-[#00CFFF] w-48"
+                className="pl-9 pr-3 py-1.5 rounded-lg bg-black/40 border border-white/[0.1] text-xs text-white placeholder-[#98A2B3] focus:outline-none focus:border-[#F0B90B] w-48"
               />
             </div>
 
@@ -534,7 +478,7 @@ export const DepositView: React.FC<DepositViewProps> = ({ user, onNavigateTab })
             <select
               value={statusFilter}
               onChange={(e) => setStatusFilter(e.target.value)}
-              className="px-3 py-1.5 rounded-lg bg-black/40 border border-white/[0.1] text-xs text-white focus:outline-none focus:border-[#00CFFF]"
+              className="px-3 py-1.5 rounded-lg bg-black/40 border border-white/[0.1] text-xs text-white focus:outline-none focus:border-[#F0B90B]"
             >
               <option value="ALL">All Statuses</option>
               <option value="CREDITED">Credited</option>
@@ -572,7 +516,7 @@ export const DepositView: React.FC<DepositViewProps> = ({ user, onNavigateTab })
                     <Layers className="w-8 h-8 mx-auto text-slate-600 mb-2" />
                     <p className="font-semibold text-white">No deposits found</p>
                     <p className="text-xs max-w-sm mx-auto">
-                      Send {selectedAsset} to your static deposit address above or click "Simulate Deposit" to test the automated flow.
+                      Send {selectedAsset} on BNB Smart Chain to your assigned deposit address above. Incoming transfers appear here in real-time.
                     </p>
                   </td>
                 </tr>
@@ -597,7 +541,7 @@ export const DepositView: React.FC<DepositViewProps> = ({ user, onNavigateTab })
                     </td>
                     <td className="py-3.5 px-4 font-mono">
                       <a
-                        href={`https://testnet.bscscan.com/tx/${dep.txHash}`}
+                        href={`https://bscscan.com/tx/${dep.txHash}`}
                         target="_blank"
                         rel="noopener noreferrer"
                         className="text-[#00CFFF] hover:underline flex items-center gap-1"
@@ -630,110 +574,6 @@ export const DepositView: React.FC<DepositViewProps> = ({ user, onNavigateTab })
           </table>
         </div>
       </div>
-
-      {/* SIMULATED TEST DEPOSIT MODAL */}
-      {showSimulateModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-4 animate-in fade-in duration-200">
-          <div className="relative w-full max-w-md rounded-2xl bg-[#0B1528] border border-[#00CFFF]/40 p-6 shadow-2xl space-y-5">
-            <div className="flex items-center justify-between border-b border-white/[0.08] pb-4">
-              <div className="flex items-center gap-2">
-                <Sparkles className="w-5 h-5 text-[#00CFFF]" />
-                <h3 className="text-base font-bold text-white">Simulate Blockchain Deposit</h3>
-              </div>
-              <button
-                onClick={() => setShowSimulateModal(false)}
-                className="text-[#98A2B3] hover:text-white p-1 rounded-lg"
-              >
-                ✕
-              </button>
-            </div>
-
-            <form onSubmit={handleSimulateDeposit} className="space-y-4">
-              <div>
-                <label className="text-xs font-semibold text-[#98A2B3] block mb-1">
-                  Deposit Asset
-                </label>
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setSimAsset('BNB')}
-                    className={`py-2 px-3 rounded-lg border text-xs font-bold transition-all ${
-                      simAsset === 'BNB'
-                        ? 'bg-amber-500/20 border-amber-500 text-amber-300'
-                        : 'bg-black/30 border-white/[0.08] text-[#98A2B3]'
-                    }`}
-                  >
-                    BNB (Native)
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setSimAsset('USDT')}
-                    className={`py-2 px-3 rounded-lg border text-xs font-bold transition-all ${
-                      simAsset === 'USDT'
-                        ? 'bg-emerald-500/20 border-emerald-500 text-emerald-300'
-                        : 'bg-black/30 border-white/[0.08] text-[#98A2B3]'
-                    }`}
-                  >
-                    USDT (BEP-20)
-                  </button>
-                </div>
-              </div>
-
-              <div>
-                <label className="text-xs font-semibold text-[#98A2B3] block mb-1">
-                  Amount ({simAsset})
-                </label>
-                <input
-                  type="number"
-                  step="any"
-                  min="0.01"
-                  required
-                  value={simAmount}
-                  onChange={(e) => setSimAmount(e.target.value)}
-                  className="w-full px-3.5 py-2.5 rounded-xl bg-black/50 border border-white/[0.1] text-sm text-white focus:outline-none focus:border-[#00CFFF] font-mono"
-                  placeholder="e.g. 100"
-                />
-              </div>
-
-              <div>
-                <label className="text-xs font-semibold text-[#98A2B3] block mb-1">
-                  Simulated Block Confirmations
-                </label>
-                <select
-                  value={simConfirmations}
-                  onChange={(e) => setSimConfirmations(e.target.value)}
-                  className="w-full px-3.5 py-2.5 rounded-xl bg-black/50 border border-white/[0.1] text-sm text-white focus:outline-none focus:border-[#00CFFF]"
-                >
-                  <option value="3">3 Blocks (Auto Confirmed &amp; Credited)</option>
-                  <option value="1">1 Block (Confirming Status)</option>
-                  <option value="0">0 Blocks (Detected Status)</option>
-                </select>
-              </div>
-
-              <div className="p-3 rounded-xl bg-cyan-500/10 border border-cyan-500/20 text-[11px] text-cyan-200">
-                This triggers the automated listener pipeline to ingest the deposit event and update your ledger in real-time.
-              </div>
-
-              <div className="flex items-center gap-3 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setShowSimulateModal(false)}
-                  className="flex-1 py-2.5 rounded-xl bg-white/[0.05] hover:bg-white/[0.1] text-xs font-semibold text-slate-300"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={simulating}
-                  className="flex-1 py-2.5 rounded-xl bg-gradient-to-r from-[#00CFFF] to-[#0088FF] text-xs font-bold text-slate-950 hover:brightness-110 shadow-lg shadow-[#00CFFF]/20 disabled:opacity-50"
-                >
-                  {simulating ? 'Processing...' : 'Run Simulation'}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
     </div>
   );
 };

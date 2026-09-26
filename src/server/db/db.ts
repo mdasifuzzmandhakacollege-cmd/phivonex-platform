@@ -122,6 +122,20 @@ async function initSchema(client: DatabaseClient) {
   try {
     // 1. Run core DDL statements individually or with client.exec
     await client.exec(`
+      DROP TABLE IF EXISTS pending_registrations;
+
+      CREATE TABLE IF NOT EXISTS pending_registrations (
+        email VARCHAR(255) PRIMARY KEY,
+        code_hash TEXT NOT NULL,
+        registration_data TEXT NOT NULL,
+        failed_attempts INTEGER NOT NULL DEFAULT 0,
+        expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+        verification_token VARCHAR(100) NULL,
+        is_verified BOOLEAN NOT NULL DEFAULT FALSE,
+        created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        last_sent_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+
       CREATE TABLE IF NOT EXISTS users (
         id UUID PRIMARY KEY,
         public_id VARCHAR(50),
@@ -619,27 +633,41 @@ async function initSchema(client: DatabaseClient) {
         CREATE TABLE IF NOT EXISTS user_deposit_addresses (
           id UUID PRIMARY KEY,
           user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-          chain_id INTEGER NOT NULL DEFAULT 97,
-          asset VARCHAR(20) NOT NULL DEFAULT 'BNB',
+          chain_id INTEGER NOT NULL DEFAULT 56,
+          asset VARCHAR(20) NOT NULL DEFAULT 'USDT',
           address VARCHAR(100) NOT NULL,
+          derivation_index INTEGER NOT NULL DEFAULT 0,
           derivation_reference VARCHAR(100) NOT NULL,
           created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
           CONSTRAINT uq_user_deposit_chain_asset UNIQUE (user_id, chain_id, asset),
           CONSTRAINT uq_deposit_chain_address UNIQUE (chain_id, address)
         );
+      `);
+    } catch (t171Err) {
+      console.warn('[DB Migration] user_deposit_addresses init warning:', t171Err);
+    }
 
-        CREATE INDEX IF NOT EXISTS idx_uda_user_id ON user_deposit_addresses (user_id);
-        CREATE INDEX IF NOT EXISTS idx_uda_address ON user_deposit_addresses (address);
-        CREATE INDEX IF NOT EXISTS idx_uda_chain_asset ON user_deposit_addresses (chain_id, asset);
+    try {
+      await client.exec(`ALTER TABLE user_deposit_addresses ADD COLUMN IF NOT EXISTS derivation_index INTEGER NOT NULL DEFAULT 0;`);
+      await client.exec(`CREATE INDEX IF NOT EXISTS idx_uda_user_id ON user_deposit_addresses (user_id);`);
+      await client.exec(`CREATE INDEX IF NOT EXISTS idx_uda_address ON user_deposit_addresses (address);`);
+      await client.exec(`CREATE INDEX IF NOT EXISTS idx_uda_chain_asset ON user_deposit_addresses (chain_id, asset);`);
+      await client.exec(`CREATE INDEX IF NOT EXISTS idx_uda_chain_index ON user_deposit_addresses (chain_id, derivation_index);`);
+    } catch (udaColErr) {
+      console.warn('[DB Migration] user_deposit_addresses column migration warning:', udaColErr);
+    }
 
+    try {
+      await client.exec(`
         -- 2. Blockchain Deposits Tracking
         CREATE TABLE IF NOT EXISTS blockchain_deposits (
           id UUID PRIMARY KEY,
           public_deposit_id VARCHAR(50) UNIQUE NOT NULL,
           user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-          chain_id INTEGER NOT NULL,
-          asset VARCHAR(20) NOT NULL DEFAULT 'BNB',
+          chain_id INTEGER NOT NULL DEFAULT 56,
+          asset VARCHAR(20) NOT NULL DEFAULT 'USDT',
           tx_hash VARCHAR(100) NOT NULL,
+          log_index INTEGER NOT NULL DEFAULT 0,
           from_address VARCHAR(100) NOT NULL,
           to_address VARCHAR(100) NOT NULL,
           amount NUMERIC(28, 18) NOT NULL,
@@ -649,20 +677,39 @@ async function initSchema(client: DatabaseClient) {
           detected_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
           confirmed_at TIMESTAMP WITH TIME ZONE NULL,
           credited_at TIMESTAMP WITH TIME ZONE NULL,
+          swept_at TIMESTAMP WITH TIME ZONE NULL,
+          sweep_tx_hash VARCHAR(100) NULL,
+          gas_funding_tx_hash VARCHAR(100) NULL,
           created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
           updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
           CONSTRAINT uq_bcd_chain_tx_to UNIQUE (chain_id, tx_hash, to_address),
-          CONSTRAINT chk_bcd_status CHECK (status IN ('DETECTED', 'CONFIRMING', 'CONFIRMED', 'CREDITED', 'REORGED', 'FAILED')),
+          CONSTRAINT chk_bcd_status CHECK (status IN ('DETECTED', 'CONFIRMING', 'CONFIRMED', 'CREDITED', 'SWEPT', 'REORGED', 'FAILED')),
           CONSTRAINT chk_bcd_amount CHECK (amount > 0)
         );
+      `);
+    } catch (bcdInitErr) {
+      console.warn('[DB Migration] blockchain_deposits init warning:', bcdInitErr);
+    }
 
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_bcd_public_id ON blockchain_deposits (public_deposit_id);
-        CREATE INDEX IF NOT EXISTS idx_bcd_user_id ON blockchain_deposits (user_id);
-        CREATE INDEX IF NOT EXISTS idx_bcd_tx_hash ON blockchain_deposits (tx_hash);
-        CREATE INDEX IF NOT EXISTS idx_bcd_to_address ON blockchain_deposits (to_address);
-        CREATE INDEX IF NOT EXISTS idx_bcd_status ON blockchain_deposits (status);
-        CREATE INDEX IF NOT EXISTS idx_bcd_created ON blockchain_deposits (created_at DESC);
+    try {
+      await client.exec(`ALTER TABLE blockchain_deposits ADD COLUMN IF NOT EXISTS log_index INTEGER NOT NULL DEFAULT 0;`);
+      await client.exec(`ALTER TABLE blockchain_deposits ADD COLUMN IF NOT EXISTS swept_at TIMESTAMP WITH TIME ZONE NULL;`);
+      await client.exec(`ALTER TABLE blockchain_deposits ADD COLUMN IF NOT EXISTS sweep_tx_hash VARCHAR(100) NULL;`);
+      await client.exec(`ALTER TABLE blockchain_deposits ADD COLUMN IF NOT EXISTS gas_funding_tx_hash VARCHAR(100) NULL;`);
+      await client.exec(`ALTER TABLE blockchain_deposits DROP CONSTRAINT IF EXISTS chk_bcd_status;`);
+      await client.exec(`ALTER TABLE blockchain_deposits ADD CONSTRAINT chk_bcd_status CHECK (status IN ('DETECTED', 'CONFIRMING', 'CONFIRMED', 'CREDITED', 'SWEPT', 'REORGED', 'FAILED'));`);
+      await client.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_bcd_public_id ON blockchain_deposits (public_deposit_id);`);
+      await client.exec(`CREATE INDEX IF NOT EXISTS idx_bcd_user_id ON blockchain_deposits (user_id);`);
+      await client.exec(`CREATE INDEX IF NOT EXISTS idx_bcd_tx_hash ON blockchain_deposits (tx_hash);`);
+      await client.exec(`CREATE INDEX IF NOT EXISTS idx_bcd_to_address ON blockchain_deposits (to_address);`);
+      await client.exec(`CREATE INDEX IF NOT EXISTS idx_bcd_status ON blockchain_deposits (status);`);
+      await client.exec(`CREATE INDEX IF NOT EXISTS idx_bcd_created ON blockchain_deposits (created_at DESC);`);
+    } catch (bcdColErr) {
+      console.warn('[DB Migration] blockchain_deposits column migration warning:', bcdColErr);
+    }
 
+    try {
+      await client.exec(`
         -- 3. Blockchain On-Chain Withdrawals Tracking
         CREATE TABLE IF NOT EXISTS blockchain_withdrawals (
           id UUID PRIMARY KEY,

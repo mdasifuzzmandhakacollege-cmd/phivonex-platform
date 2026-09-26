@@ -3,6 +3,7 @@ import { BSC_CONFIG } from '../../config/bscConfig';
 import { getDb } from '../db/db';
 import { processBlockchainDepositEvent } from './bscDepositService';
 import { getOrCreateUserDepositAddress } from './bscKeyService';
+import { bscRpcManager } from '../providers/bscRpcProvider';
 
 export interface ScanResult {
   scannedBlocks: number;
@@ -17,7 +18,8 @@ let isScanning = false;
 let lastScannedBlock = 0;
 
 /**
- * Scan on-chain transfers for all known user deposit addresses.
+ * Scan on-chain USDT BEP-20 transfers for all known user deposit addresses.
+ * Uses bscRpcManager for primary/secondary RPC failover.
  */
 export async function scanBlocksForDeposits(range = 10): Promise<ScanResult> {
   if (isScanning) {
@@ -33,86 +35,124 @@ export async function scanBlocksForDeposits(range = 10): Promise<ScanResult> {
   isScanning = true;
 
   try {
-    const network = ethers.Network.from(BSC_CONFIG.CHAIN_ID);
-    const provider = new ethers.JsonRpcProvider(BSC_CONFIG.RPC_URL, network, { staticNetwork: network });
-    let currentBlock = 0;
+    const scanOutcome = await bscRpcManager.executeWithFailover(async (provider) => {
+      const currentBlock = await provider.getBlockNumber();
 
-    try {
-      currentBlock = await provider.getBlockNumber();
-    } catch (err: any) {
-      // If RPC is unreachable or running in mock/isolated environment
-      return {
-        scannedBlocks: 0,
-        detectedDeposits: 0,
-        fromBlock: 0,
-        toBlock: 0,
-        status: 'ERROR',
-        error: `RPC connection error: ${err?.message || 'Unreachable node'}`,
-      };
-    }
+      if (lastScannedBlock === 0) {
+        lastScannedBlock = Math.max(1, currentBlock - range);
+      }
 
-    if (lastScannedBlock === 0) {
-      lastScannedBlock = Math.max(1, currentBlock - range);
-    }
+      const fromBlock = Math.max(1, lastScannedBlock + 1);
+      const toBlock = Math.min(currentBlock, fromBlock + range);
 
-    const fromBlock = Math.max(1, lastScannedBlock + 1);
-    const toBlock = Math.min(currentBlock, fromBlock + range);
+      if (fromBlock > toBlock) {
+        return {
+          scannedBlocks: 0,
+          detectedDeposits: 0,
+          fromBlock: currentBlock,
+          toBlock: currentBlock,
+          status: 'NO_NEW_BLOCKS' as const,
+        };
+      }
 
-    if (fromBlock > toBlock) {
-      return {
-        scannedBlocks: 0,
-        detectedDeposits: 0,
-        fromBlock: currentBlock,
-        toBlock: currentBlock,
-        status: 'NO_NEW_BLOCKS',
-      };
-    }
+      // Get all registered deposit addresses for this chain
+      const db = await getDb();
+      const addrsRes = await db.query<{ address: string; user_id: string }>(
+        `SELECT address, user_id FROM user_deposit_addresses WHERE chain_id = $1`,
+        [BSC_CONFIG.CHAIN_ID]
+      );
 
-    // Get all registered deposit addresses
-    const db = await getDb();
-    const addrsRes = await db.query<{ address: string; user_id: string }>(
-      `SELECT address, user_id FROM user_deposit_addresses WHERE chain_id = $1 AND asset = $2`,
-      [BSC_CONFIG.CHAIN_ID, BSC_CONFIG.ASSET]
-    );
+      const addressMap = new Set(addrsRes.rows.map((r) => r.address.toLowerCase()));
+      let detectedCount = 0;
 
-    const addressMap = new Set(addrsRes.rows.map((r) => r.address.toLowerCase()));
-    let detectedCount = 0;
-
-    if (addressMap.size > 0) {
-      for (let b = fromBlock; b <= toBlock; b++) {
+      if (addressMap.size > 0) {
+        // 1. Scan USDT BEP-20 Transfer logs with logIndex
         try {
-          const block = await provider.getBlock(b, true);
-          if (block && block.prefetchedTransactions) {
-            for (const tx of block.prefetchedTransactions) {
-              if (tx.to && addressMap.has(tx.to.toLowerCase()) && tx.value > 0n) {
-                const amountBnb = Number(ethers.formatEther(tx.value));
+          const transferTopic = ethers.id('Transfer(address,address,uint256)');
+          const logs = await provider.getLogs({
+            fromBlock,
+            toBlock,
+            address: BSC_CONFIG.USDT_CONTRACT_ADDRESS,
+            topics: [transferTopic],
+          });
+
+          for (const log of logs) {
+            if (log.topics && log.topics.length >= 3) {
+              const fromAddr = ethers.getAddress(ethers.dataSlice(log.topics[1], 12));
+              const toAddr = ethers.getAddress(ethers.dataSlice(log.topics[2], 12));
+
+              if (addressMap.has(toAddr.toLowerCase())) {
+                const rawAmount = BigInt(log.data);
+                const amountUsdt = Number(ethers.formatUnits(rawAmount, 18));
+
                 await processBlockchainDepositEvent({
                   chainId: BSC_CONFIG.CHAIN_ID,
-                  txHash: tx.hash,
-                  fromAddress: tx.from,
-                  toAddress: tx.to,
-                  amount: amountBnb,
-                  blockNumber: b,
+                  asset: 'USDT',
+                  contractAddress: log.address,
+                  txHash: log.transactionHash,
+                  logIndex: log.index,
+                  fromAddress: fromAddr,
+                  toAddress: toAddr,
+                  amount: amountUsdt,
+                  blockNumber: log.blockNumber,
                   currentBlockNumber: currentBlock,
                 });
                 detectedCount++;
               }
             }
           }
-        } catch (blockErr) {
-          console.warn(`[BSC Listener] Error scanning block ${b}:`, blockErr);
+        } catch (logErr) {
+          console.warn('[BSC Listener] Error querying USDT Transfer logs:', logErr);
+        }
+
+        // 2. Scan native transfers across blocks
+        for (let b = fromBlock; b <= toBlock; b++) {
+          try {
+            const block = await provider.getBlock(b, true);
+            if (block && block.prefetchedTransactions) {
+              for (const tx of block.prefetchedTransactions) {
+                if (tx.to && addressMap.has(tx.to.toLowerCase()) && tx.value > 0n) {
+                  const amountBnb = Number(ethers.formatEther(tx.value));
+                  await processBlockchainDepositEvent({
+                    chainId: BSC_CONFIG.CHAIN_ID,
+                    asset: 'BNB',
+                    txHash: tx.hash,
+                    fromAddress: tx.from,
+                    toAddress: tx.to,
+                    amount: amountBnb,
+                    blockNumber: b,
+                    currentBlockNumber: currentBlock,
+                  });
+                  detectedCount++;
+                }
+              }
+            }
+          } catch (blockErr) {
+            console.warn(`[BSC Listener] Error scanning block ${b}:`, blockErr);
+          }
         }
       }
-    }
 
-    lastScannedBlock = toBlock;
+      lastScannedBlock = toBlock;
 
+      return {
+        scannedBlocks: toBlock - fromBlock + 1,
+        detectedDeposits: detectedCount,
+        fromBlock,
+        toBlock,
+        status: 'SUCCESS' as const,
+      };
+    });
+
+    return scanOutcome.result;
+  } catch (err: any) {
     return {
-      scannedBlocks: toBlock - fromBlock + 1,
-      detectedDeposits: detectedCount,
-      fromBlock,
-      toBlock,
-      status: 'SUCCESS',
+      scannedBlocks: 0,
+      detectedDeposits: 0,
+      fromBlock: 0,
+      toBlock: 0,
+      status: 'ERROR',
+      error: `RPC connection error: ${err?.message || 'Unreachable node'}`,
     };
   } finally {
     isScanning = false;
@@ -121,31 +161,32 @@ export async function scanBlocksForDeposits(range = 10): Promise<ScanResult> {
 
 /**
  * Trigger an immediate rescan of on-chain deposits for a specific user.
- * Fetches user's deposit address and verifies any unconfirmed or new transactions.
  */
 export async function rescanUserDepositStatus(userId: string): Promise<{
   address: string;
   scanned: boolean;
   currentBlock: number;
 }> {
-  const depositRecord = await getOrCreateUserDepositAddress(userId);
-  let currentBlock = 0;
+  const depositRecord = await getOrCreateUserDepositAddress(userId, 'USDT');
 
   try {
-    const provider = new ethers.JsonRpcProvider(BSC_CONFIG.RPC_URL, BSC_CONFIG.CHAIN_ID);
-    currentBlock = await provider.getBlockNumber();
+    const { result: currentBlock } = await bscRpcManager.executeWithFailover(async (provider) => {
+      return await provider.getBlockNumber();
+    });
 
     // Re-verify pending/confirming deposits
     const db = await getDb();
     const pendingDeposits = await db.query<{
       tx_hash: string;
+      log_index: number;
       from_address: string;
       to_address: string;
       amount: string | number;
       block_number: string | number;
+      asset: string;
     }>(
       `
-      SELECT tx_hash, from_address, to_address, amount, block_number
+      SELECT tx_hash, log_index, from_address, to_address, amount, block_number, asset
       FROM blockchain_deposits
       WHERE user_id = $1 AND status IN ('DETECTED', 'CONFIRMING')
       `,
@@ -155,7 +196,9 @@ export async function rescanUserDepositStatus(userId: string): Promise<{
     for (const dep of pendingDeposits.rows) {
       await processBlockchainDepositEvent({
         chainId: BSC_CONFIG.CHAIN_ID,
+        asset: dep.asset || 'USDT',
         txHash: dep.tx_hash,
+        logIndex: Number(dep.log_index || 0),
         fromAddress: dep.from_address,
         toAddress: dep.to_address,
         amount: Number(dep.amount),

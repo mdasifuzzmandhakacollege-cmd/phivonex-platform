@@ -17,7 +17,8 @@ import {
   Loader2,
   Info,
   ExternalLink,
-  Ban
+  Ban,
+  Check
 } from 'lucide-react';
 import { UserProfile } from '../../context/AuthContext';
 
@@ -54,9 +55,9 @@ export const WithdrawalsView: React.FC<WithdrawalsViewProps> = ({ user, onNaviga
   const [submitting, setSubmitting] = useState<boolean>(false);
   const [cancellingId, setCancellingId] = useState<string | null>(null);
 
-  // Form states
+  // Form states - BNB Smart Chain BEP-20 as primary default
   const [amountInput, setAmountInput] = useState<string>('');
-  const [destinationType, setDestinationType] = useState<string>('USDT_TRC20');
+  const [destinationType, setDestinationType] = useState<string>('USDT_BEP20');
   const [destinationRef, setDestinationRef] = useState<string>('');
   const [formError, setFormError] = useState<string | null>(null);
   const [formSuccess, setFormSuccess] = useState<string | null>(null);
@@ -128,9 +129,19 @@ export const WithdrawalsView: React.FC<WithdrawalsViewProps> = ({ user, onNaviga
       return;
     }
 
-    if (!destinationRef.trim()) {
+    const trimmedRef = destinationRef.trim();
+    if (!trimmedRef) {
       setFormError('Please provide your payout wallet address or bank account destination.');
       return;
+    }
+
+    // EVM Address validation for BEP-20 & ERC-20
+    if (destinationType === 'USDT_BEP20' || destinationType === 'BNB' || destinationType === 'USDT_ERC20') {
+      const evmRegex = /^0x[a-fA-F0-9]{40}$/;
+      if (!evmRegex.test(trimmedRef)) {
+        setFormError('Invalid wallet address format. BNB Smart Chain (BEP-20) addresses must start with "0x" and be 42 characters long.');
+        return;
+      }
     }
 
     try {
@@ -141,7 +152,7 @@ export const WithdrawalsView: React.FC<WithdrawalsViewProps> = ({ user, onNaviga
         body: JSON.stringify({
           amount: numAmount,
           destinationType,
-          destinationReference: destinationRef.trim(),
+          destinationReference: trimmedRef,
           idempotencyKey: `wdr-ui-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`,
         }),
       });
@@ -153,7 +164,7 @@ export const WithdrawalsView: React.FC<WithdrawalsViewProps> = ({ user, onNaviga
         return;
       }
 
-      setFormSuccess(`Withdrawal request ${data.publicWithdrawalId} for $${numAmount.toFixed(2)} USD submitted successfully!`);
+      setFormSuccess(`Withdrawal request ${data.publicWithdrawalId || ''} for $${numAmount.toFixed(2)} USD submitted successfully via ${formatDestinationLabel(destinationType)}!`);
       setAmountInput('');
       setDestinationRef('');
       await fetchData();
@@ -208,8 +219,11 @@ export const WithdrawalsView: React.FC<WithdrawalsViewProps> = ({ user, onNaviga
 
   const formatDestinationLabel = (type: string) => {
     switch (type) {
-      case 'USDT_TRC20':
-        return 'USDT (TRC-20)';
+      case 'USDT_BEP20':
+      case 'BEP20':
+        return 'USDT (BEP-20) [BNB Chain]';
+      case 'BNB':
+        return 'BNB (BEP-20) [BNB Smart Chain]';
       case 'USDT_ERC20':
         return 'USDT (ERC-20)';
       case 'BTC':
@@ -275,20 +289,20 @@ export const WithdrawalsView: React.FC<WithdrawalsViewProps> = ({ user, onNaviga
     <div className="space-y-8 animate-fadeIn">
       {/* Header Banner */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 p-6 rounded-2xl bg-gradient-to-r from-[#07101D] via-[#091527] to-[#0B1A30] border border-white/[0.08] shadow-2xl relative overflow-hidden">
-        <div className="absolute -right-12 -top-12 w-64 h-64 bg-[#00CFFF]/5 rounded-full blur-3xl pointer-events-none" />
+        <div className="absolute -right-12 -top-12 w-64 h-64 bg-[#F0B90B]/5 rounded-full blur-3xl pointer-events-none" />
         
         <div className="space-y-1 relative z-10">
           <div className="flex items-center gap-2">
-            <span className="px-2.5 py-0.5 rounded-full bg-[#00CFFF]/10 text-[#00CFFF] border border-[#00CFFF]/20 text-[11px] font-mono font-medium flex items-center gap-1">
+            <span className="px-2.5 py-0.5 rounded-full bg-[#F0B90B]/10 text-[#F0B90B] border border-[#F0B90B]/20 text-[11px] font-mono font-medium flex items-center gap-1">
               <ShieldCheck className="w-3.5 h-3.5" />
-              Settlement Module v1.0
+              BNB Smart Chain Settlement Engine
             </span>
           </div>
           <h1 className="text-2xl font-bold text-white tracking-tight">
-            Withdrawal & Settlement Portal
+            Withdrawal &amp; Settlement Portal
           </h1>
           <p className="text-xs text-[#98A2B3] max-w-xl">
-            Request funds directly from your verified ledger earnings. All requests undergo transactional balance reservation and cryptographic audit verification.
+            Request funds directly from your verified ledger earnings. Fast, low-gas disbursements are prioritized on BNB Smart Chain (BEP-20).
           </p>
         </div>
 
@@ -297,7 +311,7 @@ export const WithdrawalsView: React.FC<WithdrawalsViewProps> = ({ user, onNaviga
           disabled={loading}
           className="self-start md:self-center px-3.5 py-2 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] text-white border border-white/[0.1] text-xs font-medium flex items-center gap-2 transition-all cursor-pointer min-h-[40px]"
         >
-          <RefreshCw className={`w-3.5 h-3.5 text-[#00CFFF] ${loading ? 'animate-spin' : ''}`} />
+          <RefreshCw className={`w-3.5 h-3.5 text-[#F0B90B] ${loading ? 'animate-spin' : ''}`} />
           <span>Refresh Metrics</span>
         </button>
       </div>
@@ -305,14 +319,14 @@ export const WithdrawalsView: React.FC<WithdrawalsViewProps> = ({ user, onNaviga
       {/* Metrics Cards */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
         {/* Available Ledger Balance */}
-        <div className="p-5 rounded-2xl bg-[#07101D] border border-[#00CFFF]/30 shadow-xl relative overflow-hidden group">
-          <div className="absolute top-0 right-0 w-32 h-32 bg-[#00CFFF]/10 rounded-full blur-2xl pointer-events-none" />
+        <div className="p-5 rounded-2xl bg-[#07101D] border border-[#F0B90B]/30 shadow-xl relative overflow-hidden group">
+          <div className="absolute top-0 right-0 w-32 h-32 bg-[#F0B90B]/10 rounded-full blur-2xl pointer-events-none" />
           <div className="flex items-center justify-between text-[#98A2B3] text-xs font-medium mb-2">
             <span className="flex items-center gap-1.5 text-white">
-              <Wallet className="w-4 h-4 text-[#00CFFF]" />
+              <Wallet className="w-4 h-4 text-[#F0B90B]" />
               Available Ledger Balance
             </span>
-            <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-[#00CFFF]/10 text-[#00CFFF] border border-[#00CFFF]/20">
+            <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-[#F0B90B]/10 text-[#F0B90B] border border-[#F0B90B]/20">
               Eligible
             </span>
           </div>
@@ -320,7 +334,7 @@ export const WithdrawalsView: React.FC<WithdrawalsViewProps> = ({ user, onNaviga
             ${availableBalance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
           </div>
           <p className="text-[11px] text-[#98A2B3] mt-2">
-            Net settled earnings ready for immediate withdrawal.
+            Net settled earnings ready for withdrawal.
           </p>
         </div>
 
@@ -370,15 +384,15 @@ export const WithdrawalsView: React.FC<WithdrawalsViewProps> = ({ user, onNaviga
           <div className="flex items-center justify-between pb-4 border-b border-white/[0.08]">
             <div>
               <h2 className="text-base font-bold text-white flex items-center gap-2">
-                <Send className="w-4 h-4 text-[#00CFFF]" />
+                <Send className="w-4 h-4 text-[#F0B90B]" />
                 Request New Withdrawal
               </h2>
               <p className="text-xs text-[#98A2B3]">
                 Funds are reserved from your ledger balance upon submission.
               </p>
             </div>
-            <span className="text-[11px] font-mono text-[#98A2B3]">
-              USD Settlement
+            <span className="text-[11px] font-mono text-[#F0B90B] bg-[#F0B90B]/10 px-2.5 py-1 rounded-md border border-[#F0B90B]/20 font-bold">
+              BNB Smart Chain
             </span>
           </div>
 
@@ -407,7 +421,7 @@ export const WithdrawalsView: React.FC<WithdrawalsViewProps> = ({ user, onNaviga
             <div className="space-y-2">
               <div className="flex items-center justify-between text-xs">
                 <label className="font-medium text-white flex items-center gap-1.5">
-                  <DollarSign className="w-3.5 h-3.5 text-[#00CFFF]" />
+                  <DollarSign className="w-3.5 h-3.5 text-[#F0B90B]" />
                   Withdrawal Amount (USD)
                 </label>
                 <span className="text-[#98A2B3]">
@@ -426,20 +440,20 @@ export const WithdrawalsView: React.FC<WithdrawalsViewProps> = ({ user, onNaviga
                   placeholder="0.00"
                   value={amountInput}
                   onChange={(e) => setAmountInput(e.target.value)}
-                  className="w-full pl-8 pr-20 py-3 bg-[#05070B] border border-white/[0.12] focus:border-[#00CFFF] rounded-xl text-white font-mono font-semibold text-base outline-none transition-colors"
+                  className="w-full pl-8 pr-20 py-3 bg-[#05070B] border border-white/[0.12] focus:border-[#F0B90B] rounded-xl text-white font-mono font-semibold text-base outline-none transition-colors"
                   required
                 />
                 <button
                   type="button"
                   onClick={() => setAmountInput(availableBalance.toFixed(2))}
-                  className="absolute inset-y-1.5 right-2 px-3 bg-[#00CFFF]/10 hover:bg-[#00CFFF]/20 text-[#00CFFF] border border-[#00CFFF]/30 rounded-lg text-xs font-mono font-bold transition-colors cursor-pointer"
+                  className="absolute inset-y-1.5 right-2 px-3 bg-[#F0B90B]/10 hover:bg-[#F0B90B]/20 text-[#F0B90B] border border-[#F0B90B]/30 rounded-lg text-xs font-mono font-bold transition-colors cursor-pointer"
                 >
                   MAX
                 </button>
               </div>
               <p className="text-[11px] text-[#98A2B3] flex items-center justify-between">
                 <span>Minimum limit: $10.00 USD</span>
-                <span>Zero transfer fee</span>
+                <span className="text-[#32D583]">Ultra-low network gas fee</span>
               </p>
             </div>
 
@@ -450,11 +464,11 @@ export const WithdrawalsView: React.FC<WithdrawalsViewProps> = ({ user, onNaviga
               </label>
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
                 {[
-                  { id: 'USDT_TRC20', name: 'USDT (TRC-20)', sub: 'TRON Network' },
-                  { id: 'USDT_ERC20', name: 'USDT (ERC-20)', sub: 'Ethereum Network' },
-                  { id: 'BTC', name: 'Bitcoin (BTC)', sub: 'Bitcoin Mainnet' },
-                  { id: 'ETH', name: 'Ethereum (ETH)', sub: 'EVM Address' },
-                  { id: 'BANK_WIRE', name: 'Bank Wire', sub: 'SWIFT / ACH' },
+                  { id: 'USDT_BEP20', name: 'USDT (BEP-20)', sub: 'BNB Smart Chain (Recommended)', isPrimary: true },
+                  { id: 'BNB', name: 'BNB (BEP-20)', sub: 'BNB Smart Chain Native', isPrimary: true },
+                  { id: 'USDT_ERC20', name: 'USDT (ERC-20)', sub: 'Ethereum Network', isPrimary: false },
+                  { id: 'BTC', name: 'Bitcoin (BTC)', sub: 'Bitcoin Mainnet', isPrimary: false },
+                  { id: 'BANK_WIRE', name: 'Bank Wire', sub: 'SWIFT / ACH', isPrimary: false },
                 ].map((item) => {
                   const selected = destinationType === item.id;
                   return (
@@ -462,13 +476,18 @@ export const WithdrawalsView: React.FC<WithdrawalsViewProps> = ({ user, onNaviga
                       key={item.id}
                       type="button"
                       onClick={() => setDestinationType(item.id)}
-                      className={`p-3 rounded-xl text-left border transition-all cursor-pointer ${
+                      className={`p-3 rounded-xl text-left border transition-all cursor-pointer relative ${
                         selected
-                          ? 'bg-[#00CFFF]/10 border-[#00CFFF] text-white shadow-sm shadow-[#00CFFF]/20'
+                          ? 'bg-[#F0B90B]/10 border-[#F0B90B] text-white shadow-sm shadow-[#F0B90B]/20'
                           : 'bg-[#05070B] border-white/[0.08] text-[#98A2B3] hover:text-white hover:border-white/[0.2]'
                       }`}
                     >
-                      <div className="text-xs font-bold text-white">{item.name}</div>
+                      {item.isPrimary && (
+                        <span className="absolute top-2 right-2 text-[9px] font-mono px-1.5 py-0.5 rounded bg-[#F0B90B]/20 text-[#F0B90B] border border-[#F0B90B]/30 font-bold">
+                          BSC
+                        </span>
+                      )}
+                      <div className="text-xs font-bold text-white pr-8">{item.name}</div>
                       <div className="text-[10px] text-[#98A2B3] mt-0.5">{item.sub}</div>
                     </button>
                   );
@@ -479,32 +498,41 @@ export const WithdrawalsView: React.FC<WithdrawalsViewProps> = ({ user, onNaviga
             {/* Destination Reference Address */}
             <div className="space-y-2">
               <label className="text-xs font-medium text-white block">
-                Destination Reference / Address Details
+                Destination Wallet Address / Bank Details
               </label>
               <textarea
                 rows={2}
                 placeholder={
                   destinationType === 'BANK_WIRE'
                     ? 'Bank Name, Account Number, SWIFT/BIC Code, Account Holder Name'
-                    : 'Enter your valid wallet public address (e.g., T... or 0x...)'
+                    : destinationType === 'BTC'
+                    ? 'Enter your Bitcoin wallet address (e.g., bc1... or 1...)'
+                    : 'Enter your BNB Smart Chain (BEP-20) 0x... wallet address'
                 }
                 value={destinationRef}
                 onChange={(e) => setDestinationRef(e.target.value)}
-                className="w-full px-3.5 py-2.5 bg-[#05070B] border border-white/[0.12] focus:border-[#00CFFF] rounded-xl text-white font-mono text-xs outline-none transition-colors resize-none"
+                className="w-full px-3.5 py-2.5 bg-[#05070B] border border-white/[0.12] focus:border-[#F0B90B] rounded-xl text-white font-mono text-xs outline-none transition-colors resize-none"
                 required
               />
+              <p className="text-[11px] text-[#98A2B3]">
+                {destinationType === 'USDT_BEP20' || destinationType === 'BNB' ? (
+                  <span className="text-[#F0B90B]">
+                    Ensure your address supports BNB Smart Chain (BEP-20) (e.g. Binance, Trust Wallet, MetaMask).
+                  </span>
+                ) : null}
+              </p>
             </div>
 
             {/* Submit Button */}
             <button
               type="submit"
               disabled={submitting || availableBalance < 10}
-              className="w-full py-3.5 px-4 rounded-xl bg-[#00CFFF] hover:bg-[#00CFFF]/90 disabled:opacity-50 disabled:cursor-not-allowed text-[#05070B] font-extrabold text-sm flex items-center justify-center gap-2 transition-all cursor-pointer min-h-[48px] shadow-lg shadow-[#00CFFF]/20"
+              className="w-full py-3.5 px-4 rounded-xl bg-gradient-to-r from-[#F0B90B] to-[#F5D061] hover:brightness-110 disabled:opacity-50 disabled:cursor-not-allowed text-slate-950 font-extrabold text-sm flex items-center justify-center gap-2 transition-all cursor-pointer min-h-[48px] shadow-lg shadow-[#F0B90B]/20"
             >
               {submitting ? (
                 <>
                   <Loader2 className="w-4 h-4 animate-spin" />
-                  <span>Reserving Funds &amp; Processing...</span>
+                  <span>Reserving Funds &amp; Submitting to BNB Smart Chain...</span>
                 </>
               ) : (
                 <>
@@ -521,31 +549,31 @@ export const WithdrawalsView: React.FC<WithdrawalsViewProps> = ({ user, onNaviga
           <div className="p-6 rounded-2xl bg-[#07101D] border border-white/[0.08] shadow-xl space-y-4">
             <h3 className="text-sm font-bold text-white flex items-center gap-2">
               <ShieldCheck className="w-4 h-4 text-[#32D583]" />
-              Settlement Safeguards
+              BNB Smart Chain Settlement Safeguards
             </h3>
             
             <ul className="space-y-3 text-xs text-[#98A2B3]">
               <li className="flex items-start gap-2.5">
-                <CheckCircle2 className="w-4 h-4 text-[#00CFFF] shrink-0 mt-0.5" />
-                <span><strong>Transactional Reservation:</strong> Funds are safely reserved immediately upon request to prevent concurrent double-spending.</span>
+                <CheckCircle2 className="w-4 h-4 text-[#F0B90B] shrink-0 mt-0.5" />
+                <span><strong>Transactional Balance Reservation:</strong> Funds are locked immediately upon request to ensure zero double-spending.</span>
               </li>
               <li className="flex items-start gap-2.5">
-                <CheckCircle2 className="w-4 h-4 text-[#00CFFF] shrink-0 mt-0.5" />
-                <span><strong>Automatic Release:</strong> If a request is rejected or cancelled, reserved funds are automatically credited back to your balance.</span>
+                <CheckCircle2 className="w-4 h-4 text-[#F0B90B] shrink-0 mt-0.5" />
+                <span><strong>High-Speed BEP-20 Execution:</strong> BNB Smart Chain transactions confirm rapidly with minimal gas overhead.</span>
               </li>
               <li className="flex items-start gap-2.5">
-                <CheckCircle2 className="w-4 h-4 text-[#00CFFF] shrink-0 mt-0.5" />
-                <span><strong>Multi-Sig Approval:</strong> Disbursal transfers undergo protocol compliance checks prior to execution.</span>
+                <CheckCircle2 className="w-4 h-4 text-[#F0B90B] shrink-0 mt-0.5" />
+                <span><strong>Automatic Release:</strong> If a request is rejected or cancelled, reserved funds are automatically restored to your available balance.</span>
               </li>
             </ul>
 
             <div className="p-3.5 rounded-xl bg-white/[0.02] border border-white/[0.06] text-[11px] text-[#98A2B3] space-y-1">
               <div className="font-semibold text-white flex items-center gap-1.5">
-                <Info className="w-3.5 h-3.5 text-[#00CFFF]" />
+                <Info className="w-3.5 h-3.5 text-[#F0B90B]" />
                 Cancel Anytime
               </div>
               <p>
-                You may cancel any <strong>PENDING</strong> request at any time prior to administrative review to release funds back to your balance.
+                You may cancel any <strong>PENDING</strong> request at any time prior to administrative review to immediately release funds back to your balance.
               </p>
             </div>
           </div>
@@ -557,11 +585,11 @@ export const WithdrawalsView: React.FC<WithdrawalsViewProps> = ({ user, onNaviga
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-white/[0.08]">
           <div>
             <h2 className="text-base font-bold text-white flex items-center gap-2">
-              <Clock className="w-4 h-4 text-[#00CFFF]" />
+              <Clock className="w-4 h-4 text-[#F0B90B]" />
               Withdrawal History &amp; Status
             </h2>
             <p className="text-xs text-[#98A2B3]">
-              Real-time audit log of all requested payouts and settlements.
+              Real-time audit log of all requested payouts and settlements on BNB Smart Chain.
             </p>
           </div>
 
@@ -575,7 +603,7 @@ export const WithdrawalsView: React.FC<WithdrawalsViewProps> = ({ user, onNaviga
                 placeholder="Search ID or Destination..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="pl-8 pr-3 py-1.5 bg-[#05070B] border border-white/[0.1] rounded-lg text-xs text-white outline-none focus:border-[#00CFFF] w-48"
+                className="pl-8 pr-3 py-1.5 bg-[#05070B] border border-white/[0.1] rounded-lg text-xs text-white outline-none focus:border-[#F0B90B] w-48"
               />
             </div>
 
@@ -583,7 +611,7 @@ export const WithdrawalsView: React.FC<WithdrawalsViewProps> = ({ user, onNaviga
             <select
               value={statusFilter}
               onChange={(e) => setStatusFilter(e.target.value)}
-              className="px-3 py-1.5 bg-[#05070B] border border-white/[0.1] rounded-lg text-xs text-white outline-none focus:border-[#00CFFF] cursor-pointer"
+              className="px-3 py-1.5 bg-[#05070B] border border-white/[0.1] rounded-lg text-xs text-white outline-none focus:border-[#F0B90B] cursor-pointer"
             >
               <option value="ALL">All Statuses</option>
               <option value="PENDING">Pending Review</option>
@@ -631,7 +659,7 @@ export const WithdrawalsView: React.FC<WithdrawalsViewProps> = ({ user, onNaviga
                         {item.destinationReference}
                       </div>
                     </td>
-                    <td className="py-3.5 px-3 font-mono font-bold text-[#00CFFF]">
+                    <td className="py-3.5 px-3 font-mono font-bold text-[#F0B90B]">
                       ${item.amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                     </td>
                     <td className="py-3.5 px-3">
@@ -679,7 +707,7 @@ export const WithdrawalsView: React.FC<WithdrawalsViewProps> = ({ user, onNaviga
             <div className="flex items-center justify-between border-b border-white/[0.08] pb-3">
               <div>
                 <h3 className="text-base font-bold text-white flex items-center gap-2">
-                  <ShieldCheck className="w-4 h-4 text-[#00CFFF]" />
+                  <ShieldCheck className="w-4 h-4 text-[#F0B90B]" />
                   Withdrawal Audit Inspector
                 </h3>
                 <p className="text-xs text-[#98A2B3] font-mono">{selectedItem.publicWithdrawalId}</p>
@@ -696,7 +724,7 @@ export const WithdrawalsView: React.FC<WithdrawalsViewProps> = ({ user, onNaviga
               <div className="grid grid-cols-2 gap-3 p-3.5 rounded-xl bg-[#05070B] border border-white/[0.06]">
                 <div>
                   <span className="text-[#98A2B3] block text-[10px] uppercase font-mono">Amount</span>
-                  <span className="text-lg font-bold font-mono text-[#00CFFF]">${selectedItem.amount.toFixed(2)} USD</span>
+                  <span className="text-lg font-bold font-mono text-[#F0B90B]">${selectedItem.amount.toFixed(2)} USD</span>
                 </div>
                 <div>
                   <span className="text-[#98A2B3] block text-[10px] uppercase font-mono">Status</span>
