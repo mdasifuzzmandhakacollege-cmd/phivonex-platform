@@ -64,15 +64,6 @@ async function startServer() {
   // 3. CSRF & untrusted origin protection for state-changing operations
   app.use('/api', csrfOriginProtection);
 
-  // Initialize Database Schema prior to accepting traffic
-  try {
-    await getDb();
-    console.log('[Server] Database and referral migrations initialized.');
-    startMatchingScheduler();
-  } catch (err) {
-    console.error('[Server] Failed to initialize database on startup:', err);
-  }
-
   // Database readiness middleware for all API requests
   app.use(async (req, res, next) => {
     if (req.path.startsWith('/api/') && !req.path.startsWith('/api/health') && !req.path.startsWith('/api/diagnostics')) {
@@ -146,8 +137,17 @@ async function startServer() {
     });
   }
 
+  // Start listening on PORT immediately so Cloud Run liveness/port check passes with zero delay
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`[PHIVONEX Server] Running on http://0.0.0.0:${PORT}`);
+  });
+
+  // Initialize Database Schema and background schedulers asynchronously
+  getDb().then(() => {
+    console.log('[Server] Database and referral migrations initialized.');
+    startMatchingScheduler();
+  }).catch((err) => {
+    console.error('[Server] Failed to initialize database on startup:', err);
   });
 }
 

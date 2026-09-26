@@ -14419,13 +14419,6 @@ async function startServer() {
   }));
   app.use(cookieParser());
   app.use("/api", csrfOriginProtection);
-  try {
-    await getDb();
-    console.log("[Server] Database and referral migrations initialized.");
-    startMatchingScheduler();
-  } catch (err) {
-    console.error("[Server] Failed to initialize database on startup:", err);
-  }
   app.use(async (req, res, next) => {
     if (req.path.startsWith("/api/") && !req.path.startsWith("/api/health") && !req.path.startsWith("/api/diagnostics")) {
       try {
@@ -14490,6 +14483,12 @@ async function startServer() {
   }
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`[PHIVONEX Server] Running on http://0.0.0.0:${PORT}`);
+  });
+  getDb().then(() => {
+    console.log("[Server] Database and referral migrations initialized.");
+    startMatchingScheduler();
+  }).catch((err) => {
+    console.error("[Server] Failed to initialize database on startup:", err);
   });
 }
 startServer().catch((err) => {
