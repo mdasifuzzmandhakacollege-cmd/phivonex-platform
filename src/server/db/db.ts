@@ -57,9 +57,10 @@ export async function getDb(): Promise<DatabaseClient> {
         }
 
         console.log('[DB] Connecting to Production PostgreSQL via DATABASE_URL...');
+        const isUnixSocket = databaseUrl.includes('host=/') || databaseUrl.includes('host=%2F');
         const pool = new Pool({
           connectionString: databaseUrl,
-          ssl: { rejectUnauthorized: false },
+          ssl: isUnixSocket ? false : { rejectUnauthorized: false },
         });
 
         client = {

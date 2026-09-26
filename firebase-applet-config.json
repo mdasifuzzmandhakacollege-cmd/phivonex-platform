@@ -1,12 +1,12 @@
 {
-  "projectId": "focal-script-wq6d2",
-  "appId": "1:788431034001:web:1511b226a574fa2bd09130",
-  "apiKey": "AIzaSyCh38NAOfQ-VkPjA9f0f6rLqKgHVYNtnag",
-  "authDomain": "focal-script-wq6d2.firebaseapp.com",
+  "projectId": "phivonex-production",
+  "appId": "1:1077670417334:web:ac3452016ecea9d1c9a717",
+  "apiKey": "AIzaSyBO6FmqRoCPxqCGSXsF5SkDqPWWqwkUouE",
+  "authDomain": "phivonex-production.firebaseapp.com",
   "firestoreDatabaseId": "ai-studio-phivonex-2c45abba-b586-4032-8cf4-6a039eec92bc",
-  "storageBucket": "focal-script-wq6d2.firebasestorage.app",
-  "messagingSenderId": "788431034001",
-  "measurementId": "G-32M5RQ7L5H",
-  "oAuthClientId": "788431034001-59f7qodnu0dbphl10a4eqn1ljnbf8o7k.apps.googleusercontent.com",
+  "storageBucket": "phivonex-production.firebasestorage.app",
+  "messagingSenderId": "1077670417334",
+  "measurementId": "",
+  "oAuthClientId": "1077670417334-bguriebp3b7qc2p7eoiln4r1agqfbq89.apps.googleusercontent.com",
   "recaptchaSiteKey": ""
 }
