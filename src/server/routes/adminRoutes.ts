@@ -18,11 +18,137 @@ import {
   getLatestReconciliationRun,
   getReconciliationIssues,
 } from '../services/reconciliationService';
+import { getIntegrationHealthStatus } from '../services/integrationHealthService';
+import {
+  getActiveMatchingConfig,
+  updateMatchingConfig,
+  getMatchingConfigAuditLogs
+} from '../services/binaryMatchingService';
 
 export const adminRouter = Router();
 
 // Enforce requireAdmin on ALL admin routes
 adminRouter.use(requireAdmin);
+
+/**
+ * GET /api/admin/integration-health
+ * Returns safe system integration health diagnostics (admin-only).
+ */
+adminRouter.get('/integration-health', async (req: AuthRequest, res: Response) => {
+  try {
+    const health = await getIntegrationHealthStatus();
+    return res.status(200).json({
+      success: true,
+      health,
+    });
+  } catch (err: any) {
+    console.error('[Admin API] Error fetching integration health status:', err);
+    return res.status(500).json({
+      error: 'SERVER_ERROR',
+      message: 'Failed to retrieve system integration health.',
+    });
+  }
+});
+
+/**
+ * GET /api/admin/matching-config
+ * Returns current binary matching configurations and its audit trail (admin-only).
+ */
+adminRouter.get('/matching-config', async (req: AuthRequest, res: Response) => {
+  try {
+    const config = await getActiveMatchingConfig();
+    const auditLogs = await getMatchingConfigAuditLogs();
+    return res.status(200).json({
+      success: true,
+      config,
+      auditLogs,
+    });
+  } catch (err: any) {
+    console.error('[Admin API] Error fetching matching configuration:', err);
+    return res.status(500).json({
+      error: 'SERVER_ERROR',
+      message: 'Failed to retrieve binary matching configurations.',
+    });
+  }
+});
+
+/**
+ * POST /api/admin/matching-config
+ * Updates current binary matching configuration dynamically (admin-only).
+ */
+adminRouter.post('/matching-config', async (req: AuthRequest, res: Response) => {
+  try {
+    const admin = req.user!;
+    const {
+      matchingEnabled,
+      dailyMaxPayout,
+      sponsorQualificationRequired,
+      carryForwardBehavior,
+      effectiveDate,
+      tiers,
+    } = req.body || {};
+
+    // Basic validation
+    if (typeof matchingEnabled !== 'boolean') {
+      return res.status(400).json({ error: 'INVALID_INPUT', message: 'matchingEnabled must be a boolean.' });
+    }
+    if (typeof dailyMaxPayout !== 'number' || dailyMaxPayout <= 0) {
+      return res.status(400).json({ error: 'INVALID_INPUT', message: 'dailyMaxPayout must be a positive number.' });
+    }
+    if (typeof sponsorQualificationRequired !== 'boolean') {
+      return res.status(400).json({ error: 'INVALID_INPUT', message: 'sponsorQualificationRequired must be a boolean.' });
+    }
+    if (!['DISCARD_WEAK_CARRY_STRONG', 'DEFAULT'].includes(carryForwardBehavior)) {
+      return res.status(400).json({ error: 'INVALID_INPUT', message: 'carryForwardBehavior is invalid.' });
+    }
+    if (!effectiveDate || typeof effectiveDate !== 'string') {
+      return res.status(400).json({ error: 'INVALID_INPUT', message: 'effectiveDate is required.' });
+    }
+    if (!Array.isArray(tiers) || tiers.length === 0) {
+      return res.status(400).json({ error: 'INVALID_INPUT', message: 'tiers must be a non-empty array.' });
+    }
+
+    // Ensure each tier has valid units and bonusUsd
+    for (const tier of tiers) {
+      if (typeof tier.units !== 'number' || tier.units <= 0) {
+        return res.status(400).json({ error: 'INVALID_INPUT', message: 'Each tier units must be a positive number.' });
+      }
+      if (typeof tier.bonusUsd !== 'number' || tier.bonusUsd <= 0) {
+        return res.status(400).json({ error: 'INVALID_INPUT', message: 'Each tier bonusUsd must be a positive number.' });
+      }
+    }
+
+    const updated = await updateMatchingConfig(admin.id, {
+      matchingEnabled,
+      dailyMaxPayout,
+      sponsorQualificationRequired,
+      carryForwardBehavior,
+      effectiveDate,
+      tiers,
+    });
+
+    // Log admin action to the general audit logs
+    await logAdminAction({
+      adminUserId: admin.id,
+      adminPublicId: admin.public_id,
+      action: 'UPDATE_MATCHING_CONFIG',
+      targetType: 'binary_matching_config',
+      targetId: updated.id,
+      details: `Updated binary matching configuration to version ${updated.version}`
+    });
+
+    return res.status(200).json({
+      success: true,
+      config: updated,
+    });
+  } catch (err: any) {
+    console.error('[Admin API] Error updating matching configuration:', err);
+    return res.status(500).json({
+      error: 'SERVER_ERROR',
+      message: 'Failed to update binary matching configuration.',
+    });
+  }
+});
 
 /**
  * GET /api/admin/summary

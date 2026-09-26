@@ -876,6 +876,47 @@ async function initSchema(client: DatabaseClient) {
       console.warn('[DB Migration] Task #21 Financial Reconciliation schema migration warning:', task21Err);
     }
 
+    // Task #23.3A: Dynamic Matching Configurations & Versioned Audit Trail Tables
+    try {
+      await client.exec(`
+        CREATE TABLE IF NOT EXISTS binary_matching_config (
+          id UUID PRIMARY KEY,
+          matching_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+          daily_max_payout NUMERIC(12, 2) NOT NULL DEFAULT 5000.00,
+          sponsor_qualification_required BOOLEAN NOT NULL DEFAULT TRUE,
+          carry_forward_behavior VARCHAR(50) NOT NULL DEFAULT 'DISCARD_WEAK_CARRY_STRONG',
+          effective_date DATE NOT NULL,
+          version INTEGER NOT NULL DEFAULT 1,
+          tiers_json TEXT NOT NULL,
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS binary_matching_config_audit (
+          id UUID PRIMARY KEY,
+          config_id UUID NOT NULL REFERENCES binary_matching_config(id) ON DELETE CASCADE,
+          admin_user_id UUID NULL REFERENCES users(id) ON DELETE SET NULL,
+          old_value_json TEXT NOT NULL,
+          new_value_json TEXT NOT NULL,
+          effective_time TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          version INTEGER NOT NULL,
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        );
+
+        -- Seed default matching configuration
+        INSERT INTO binary_matching_config (
+          id, matching_enabled, daily_max_payout, sponsor_qualification_required,
+          carry_forward_behavior, effective_date, version, tiers_json
+        )
+        SELECT 
+          '2c45abba-b586-4032-8cf4-6a039eec92bc', TRUE, 5000.00, TRUE,
+          'DISCARD_WEAK_CARRY_STRONG', CURRENT_DATE, 1,
+          '[{"units":2,"bonusUsd":500},{"units":4,"bonusUsd":1000},{"units":6,"bonusUsd":1500},{"units":8,"bonusUsd":2000},{"units":10,"bonusUsd":2500},{"units":12,"bonusUsd":3000},{"units":14,"bonusUsd":3500},{"units":16,"bonusUsd":4000},{"units":18,"bonusUsd":4500},{"units":20,"bonusUsd":5000}]'
+        WHERE NOT EXISTS (SELECT 1 FROM binary_matching_config);
+      `);
+    } catch (task233AErr) {
+      console.warn('[DB Migration] Task #23.3A Dynamic Matching schema migration warning:', task233AErr);
+    }
+
     // 3. Backfill existing users with missing public_id, user_referrals, and binary_placements
     await backfillExistingUsers(client);
 

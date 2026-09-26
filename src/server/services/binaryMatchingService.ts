@@ -10,7 +10,7 @@ import {
 } from '../utils/timezone';
 
 // ============================================================================
-// 1. Immutable Server-Side Matching Tiers Configuration
+// 1. Immutable Server-Side Matching Tiers Configuration & Dynamic Logic
 // ============================================================================
 
 export interface MatchingTier {
@@ -18,10 +18,146 @@ export interface MatchingTier {
   readonly bonusUsd: number;
 }
 
+export interface BinaryMatchingConfig {
+  id: string;
+  matchingEnabled: boolean;
+  dailyMaxPayout: number;
+  sponsorQualificationRequired: boolean;
+  carryForwardBehavior: string;
+  effectiveDate: string;
+  version: number;
+  tiers: MatchingTier[];
+}
+
+export async function getActiveMatchingConfig(dbClient?: DatabaseClient): Promise<BinaryMatchingConfig> {
+  const db = dbClient || await getDb();
+  try {
+    const res = await db.query<{
+      id: string;
+      matching_enabled: boolean;
+      daily_max_payout: string | number;
+      sponsor_qualification_required: boolean;
+      carry_forward_behavior: string;
+      effective_date: string | Date;
+      version: number;
+      tiers_json: string;
+    }>(
+      `SELECT * FROM binary_matching_config ORDER BY version DESC, effective_date DESC LIMIT 1`
+    );
+
+    const defaultTiers: MatchingTier[] = [
+      { units: 2, bonusUsd: 500 },
+      { units: 4, bonusUsd: 1000 },
+      { units: 6, bonusUsd: 1500 },
+      { units: 8, bonusUsd: 2000 },
+      { units: 10, bonusUsd: 2500 },
+      { units: 12, bonusUsd: 3000 },
+      { units: 14, bonusUsd: 3500 },
+      { units: 16, bonusUsd: 4000 },
+      { units: 18, bonusUsd: 4500 },
+      { units: 20, bonusUsd: 5000 }
+    ];
+
+    if (res.rows.length === 0) {
+      return {
+        id: 'default',
+        matchingEnabled: true,
+        dailyMaxPayout: 5000.00,
+        sponsorQualificationRequired: true,
+        carryForwardBehavior: 'DISCARD_WEAK_CARRY_STRONG',
+        effectiveDate: new Date().toISOString().split('T')[0],
+        version: 1,
+        tiers: defaultTiers
+      };
+    }
+
+    const row = res.rows[0];
+    let tiers: MatchingTier[] = defaultTiers;
+    try {
+      tiers = JSON.parse(row.tiers_json);
+    } catch (e) {
+      console.error('Failed to parse tiers_json, using default tiers:', e);
+    }
+
+    return {
+      id: row.id,
+      matchingEnabled: row.matching_enabled,
+      dailyMaxPayout: Number(row.daily_max_payout),
+      sponsorQualificationRequired: row.sponsor_qualification_required,
+      carryForwardBehavior: row.carry_forward_behavior,
+      effectiveDate: typeof row.effective_date === 'string' 
+        ? row.effective_date.split('T')[0] 
+        : new Date(row.effective_date).toISOString().split('T')[0],
+      version: row.version,
+      tiers: tiers
+    };
+  } catch (err) {
+    console.warn('[BinaryMatching] Failed to query binary_matching_config, using default configuration.', err);
+    return {
+      id: 'default_fallback',
+      matchingEnabled: true,
+      dailyMaxPayout: 5000.00,
+      sponsorQualificationRequired: true,
+      carryForwardBehavior: 'DISCARD_WEAK_CARRY_STRONG',
+      effectiveDate: new Date().toISOString().split('T')[0],
+      version: 1,
+      tiers: [
+        { units: 2, bonusUsd: 500 },
+        { units: 4, bonusUsd: 1000 },
+        { units: 6, bonusUsd: 1500 },
+        { units: 8, bonusUsd: 2000 },
+        { units: 10, bonusUsd: 2500 },
+        { units: 12, bonusUsd: 3000 },
+        { units: 14, bonusUsd: 3500 },
+        { units: 16, bonusUsd: 4000 },
+        { units: 18, bonusUsd: 4500 },
+        { units: 20, bonusUsd: 5000 }
+      ]
+    };
+  }
+}
+
+export async function checkSponsorQualification(dbClient: DatabaseClient, userId: string): Promise<boolean> {
+  const res = await dbClient.query<{ branch_side: 'LEFT' | 'RIGHT'; count: number }>(
+    `
+    WITH RECURSIVE binary_descendants AS (
+      SELECT user_id, side AS branch_side
+      FROM binary_placements
+      WHERE parent_user_id = $1 AND status = 'PLACED'
+
+      UNION ALL
+
+      SELECT bp.user_id, bd.branch_side
+      FROM binary_placements bp
+      INNER JOIN binary_descendants bd ON bp.parent_user_id = bd.user_id
+      WHERE bp.status = 'PLACED'
+    )
+    SELECT bd.branch_side, COUNT(ur.user_id)::int AS count
+    FROM user_referrals ur
+    INNER JOIN binary_descendants bd ON ur.user_id = bd.user_id
+    WHERE ur.sponsor_user_id = $1
+    GROUP BY bd.branch_side
+    `,
+    [userId]
+  );
+
+  let hasLeft = false;
+  let hasRight = false;
+
+  for (const row of res.rows) {
+    if (row.branch_side === 'LEFT' && row.count >= 1) {
+      hasLeft = true;
+    }
+    if (row.branch_side === 'RIGHT' && row.count >= 1) {
+      hasRight = true;
+    }
+  }
+
+  return hasLeft && hasRight;
+}
+
 /**
- * Server-side immutable matching tiers.
- * Processed greedily from largest (100) to smallest (2).
- * Frontend must NEVER submit tier, payout, matching amount, or carry.
+ * Server-side fallback/historical matching tiers.
  */
 export const MATCHING_TIERS: readonly MatchingTier[] = Object.freeze([
   { units: 100, bonusUsd: 10000 },
@@ -53,11 +189,7 @@ export interface MatchingDecompositionResult {
 }
 
 /**
- * Pure calculation function for matching tier decomposition.
- * - matchableUnits = MIN(availableLeft, availableRight)
- * - Decomposes greedily across configured tiers: 100, 50, 20, 8, 4, 2
- * - No matching block below 2/2 is created.
- * - Unconsumed units are carried forward.
+ * Historical calculation function for matching tier decomposition.
  */
 export function calculateMatchingDecomposition(
   availableLeft: number,
@@ -103,6 +235,107 @@ export function calculateMatchingDecomposition(
     carryLeftAfter,
     carryRightAfter,
     totalBonusUsd,
+    components,
+  };
+}
+
+/**
+ * Dynamic calculation function for versioned matching rules.
+ */
+export function calculateDynamicMatchingDecomposition(
+  availableLeft: number,
+  availableRight: number,
+  config: BinaryMatchingConfig,
+  sponsorQualified: boolean
+): MatchingDecompositionResult {
+  if (availableLeft < 0 || availableRight < 0) {
+    throw new Error('Available volume units cannot be negative');
+  }
+
+  // 1. Check if matching is disabled or user not qualified
+  if (!config.matchingEnabled || (config.sponsorQualificationRequired && !sponsorQualified)) {
+    return {
+      availableLeft,
+      availableRight,
+      matchableUnits: 0,
+      consumedLeft: 0,
+      consumedRight: 0,
+      carryLeftAfter: availableLeft,
+      carryRightAfter: availableRight,
+      totalBonusUsd: 0,
+      components: [],
+    };
+  }
+
+  // 2. Find highest eligible tier
+  const sortedTiers = [...config.tiers].sort((a, b) => b.units - a.units);
+  let selectedTier: MatchingTier | null = null;
+
+  for (const tier of sortedTiers) {
+    if (availableLeft >= tier.units && availableRight >= tier.units) {
+      selectedTier = tier;
+      break; // Pay ONLY the highest eligible daily tier
+    }
+  }
+
+  // 3. Calculate consumption and carry forward
+  if (!selectedTier) {
+    return {
+      availableLeft,
+      availableRight,
+      matchableUnits: 0,
+      consumedLeft: 0,
+      consumedRight: 0,
+      carryLeftAfter: availableLeft,
+      carryRightAfter: availableRight,
+      totalBonusUsd: 0,
+      components: [],
+    };
+  }
+
+  const consumedLeft = selectedTier.units;
+  const consumedRight = selectedTier.units;
+  
+  const tempLeftoverLeft = availableLeft - consumedLeft;
+  const tempLeftoverRight = availableRight - consumedRight;
+
+  let carryLeftAfter = tempLeftoverLeft;
+  let carryRightAfter = tempLeftoverRight;
+
+  if (config.carryForwardBehavior === 'DISCARD_WEAK_CARRY_STRONG') {
+    if (tempLeftoverLeft < tempLeftoverRight) {
+      carryLeftAfter = 0;
+      carryRightAfter = tempLeftoverRight;
+    } else if (tempLeftoverRight < tempLeftoverLeft) {
+      carryRightAfter = 0;
+      carryLeftAfter = tempLeftoverLeft;
+    } else {
+      carryLeftAfter = 0;
+      carryRightAfter = 0;
+    }
+  }
+
+  const payout = Math.min(selectedTier.bonusUsd, config.dailyMaxPayout);
+
+  const components: MatchingComponentPlan[] = [
+    {
+      sequenceNo: 1,
+      tierUnits: selectedTier.units,
+      leftUnits: selectedTier.units,
+      rightUnits: selectedTier.units,
+      bonusUsd: payout,
+    }
+  ];
+
+  return {
+    availableLeft,
+    availableRight,
+    matchableUnits: Math.min(availableLeft, availableRight),
+    consumedLeft,
+    consumedRight,
+    carryLeftAfter,
+    carryRightAfter,
+    totalBonusUsd: payout,
     components,
   };
 }
@@ -334,8 +567,11 @@ export async function settleUserMatchingForDate(
     const availableLeft = carryLeftBefore + newLeft;
     const availableRight = carryRightBefore + newRight;
 
-    // 2c. Decompose matching slots
-    const decomposition = calculateMatchingDecomposition(availableLeft, availableRight);
+    // 2c. Load active matching configuration and sponsor qualification dynamically
+    const config = await getActiveMatchingConfig(db);
+    const sponsorQualified = await checkSponsorQualification(db, userId);
+
+    const decomposition = calculateDynamicMatchingDecomposition(availableLeft, availableRight, config, sponsorQualified);
 
     // 2d. Create settlement record
     const settlementId = uuidv4();
@@ -934,4 +1170,125 @@ export async function reverseMatchingSettlement(settlementId: string): Promise<b
   }
 
   return true;
+}
+
+// ============================================================================
+// 7. Dynamic Admin Config Update & Audit Trail
+// ============================================================================
+
+export interface UpdateMatchingConfigParams {
+  matchingEnabled: boolean;
+  dailyMaxPayout: number;
+  sponsorQualificationRequired: boolean;
+  carryForwardBehavior: string;
+  effectiveDate: string;
+  tiers: MatchingTier[];
+}
+
+export async function updateMatchingConfig(
+  adminUserId: string,
+  params: UpdateMatchingConfigParams
+): Promise<BinaryMatchingConfig> {
+  const db = await getDb();
+
+  // Load current config to save in audit log
+  const currentConfig = await getActiveMatchingConfig(db);
+
+  await db.query('BEGIN');
+
+  try {
+    const nextVersion = currentConfig.version + 1;
+    const configId = uuidv4();
+
+    // Insert new configuration (prospectively versioned)
+    await db.query(
+      `
+      INSERT INTO binary_matching_config (
+        id, matching_enabled, daily_max_payout, sponsor_qualification_required,
+        carry_forward_behavior, effective_date, version, tiers_json
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      `,
+      [
+        configId,
+        params.matchingEnabled,
+        params.dailyMaxPayout,
+        params.sponsorQualificationRequired,
+        params.carryForwardBehavior,
+        params.effectiveDate,
+        nextVersion,
+        JSON.stringify(params.tiers)
+      ]
+    );
+
+    // Save audit log
+    const auditId = uuidv4();
+    await db.query(
+      `
+      INSERT INTO binary_matching_config_audit (
+        id, config_id, admin_user_id, old_value_json, new_value_json,
+        effective_time, version, created_at
+      )
+      VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP, $6, CURRENT_TIMESTAMP)
+      `,
+      [
+        auditId,
+        configId,
+        adminUserId,
+        JSON.stringify(currentConfig),
+        JSON.stringify({
+          id: configId,
+          matchingEnabled: params.matchingEnabled,
+          dailyMaxPayout: params.dailyMaxPayout,
+          sponsorQualificationRequired: params.sponsorQualificationRequired,
+          carryForwardBehavior: params.carryForwardBehavior,
+          effectiveDate: params.effectiveDate,
+          version: nextVersion,
+          tiers: params.tiers
+        }),
+        nextVersion
+      ]
+    );
+
+    await db.query('COMMIT');
+
+    return {
+      id: configId,
+      matchingEnabled: params.matchingEnabled,
+      dailyMaxPayout: params.dailyMaxPayout,
+      sponsorQualificationRequired: params.sponsorQualificationRequired,
+      carryForwardBehavior: params.carryForwardBehavior,
+      effectiveDate: params.effectiveDate,
+      version: nextVersion,
+      tiers: params.tiers
+    };
+  } catch (err) {
+    await db.query('ROLLBACK');
+    console.error('[BinaryMatching] Failed to update matching configuration:', err);
+    throw err;
+  }
+}
+
+export async function getMatchingConfigAuditLogs(): Promise<any[]> {
+  const db = await getDb();
+  const res = await db.query(
+    `
+    SELECT a.*, u.public_id as admin_public_id, u.full_name as admin_full_name
+    FROM binary_matching_config_audit a
+    LEFT JOIN users u ON a.admin_user_id = u.id
+    ORDER BY a.created_at DESC
+    `
+  );
+  return res.rows.map(r => ({
+    id: r.id,
+    configId: r.config_id,
+    adminUserId: r.admin_user_id,
+    adminPublicId: r.admin_public_id,
+    adminFullName: r.admin_full_name,
+    oldValue: JSON.parse(r.old_value_json),
+    newValue: JSON.parse(r.new_value_json),
+    effectiveTime: r.effective_time,
+    version: r.version,
+    createdAt: r.created_at
+  }));
 }
