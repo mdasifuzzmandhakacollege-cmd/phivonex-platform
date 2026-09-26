@@ -53,6 +53,11 @@ export interface WithdrawalSignResult {
   isMock: boolean;
 }
 
+export interface HealthStatus {
+  status: 'healthy' | 'degraded' | 'down';
+  details: string;
+}
+
 /**
  * 1. Blockchain RPC & Query Provider Interface
  */
@@ -63,6 +68,7 @@ export interface BlockchainProvider {
   getErc20Balance(contractAddress: string, walletAddress: string): Promise<bigint>;
   getTransactionReceipt(txHash: string): Promise<any>;
   isRpcHealthy(): Promise<{ primary: boolean; secondary: boolean; activeRpc: string }>;
+  getHealthStatus(): Promise<HealthStatus>;
 }
 
 /**

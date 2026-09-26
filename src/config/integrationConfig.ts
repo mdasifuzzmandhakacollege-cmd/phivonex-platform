@@ -67,12 +67,12 @@ export function getIntegrationConfig(): IntegrationEnvironmentConfig {
   const marketDataApiKey = process.env.MARKET_DATA_API_KEY || (isTest ? 'test_market_data_api_key_2026' : null);
 
   // Production withdrawal broadcast defaults strictly to OFF (false)
+  // May enable ONLY by explicit true configuration
   const withdrawalsEnabled =
-    (process.env.BNB_WITHDRAWALS_ENABLED === 'true' || process.env.WITHDRAWALS_ENABLED === 'true') &&
-    process.env.NODE_ENV !== 'production';
+    process.env.WITHDRAWALS_ENABLED === 'true' || process.env.BNB_WITHDRAWALS_ENABLED === 'true';
 
   const signerSecretReference =
-    process.env.SIGNER_SECRET_REFERENCE || process.env.BNB_TREASURY_PRIVATE_KEY || (isTest ? 'test_signer_secret_ref' : null);
+    process.env.SIGNER_SECRET_REFERENCE || (isTest ? 'test_signer_secret_ref' : null);
 
   const masterDerivationSecretReference =
     process.env.MASTER_DERIVATION_SECRET_REFERENCE || process.env.BNB_MASTER_SEED || (isTest ? 'phivonex_test_only_deterministic_derivation_seed_2026' : null);
