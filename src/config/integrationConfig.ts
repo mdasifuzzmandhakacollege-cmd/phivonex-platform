@@ -4,10 +4,13 @@
  * Strict Security Rules:
  * - Production secrets MUST have NO hard-coded raw private keys or seeds.
  * - Missing required production configuration = FAIL CLOSED.
- * - Public HD extended key (DEPOSIT_ADDRESS_XPUB) is used for address derivation.
+ * - Public HD extended key (DEPOSIT_ADDRESS_XPUB) is mandatory in production.
+ * - Authoritative TREASURY_WALLET_ADDRESS is mandatory in production.
  * - Private signing material is accessed via remote SIGNER_SECRET_REFERENCE.
  * - NEVER log secrets or expose them to frontend/API.
  */
+
+import { ethers } from 'ethers';
 
 export interface IntegrationEnvironmentConfig {
   appEnv: 'production' | 'staging' | 'test' | 'development';
@@ -25,28 +28,61 @@ export interface IntegrationEnvironmentConfig {
   marketDataApiKey: string | null;
 }
 
+/**
+ * Validate production environment variables and FAIL CLOSED if any required variable is missing/invalid.
+ */
+export function validateProductionConfig(): void {
+  const env = (process.env.APP_ENV || process.env.NODE_ENV || 'production').toLowerCase();
+  const isTest = env === 'test' || process.env.NODE_ENV === 'test' || process.env.VITEST === 'true';
+  const isProduction = env === 'production';
+
+  if (!isProduction || isTest) {
+    return;
+  }
+
+  const missingOrInvalid: string[] = [];
+
+  // 1. Validate DEPOSIT_ADDRESS_XPUB
+  const xpub = process.env.DEPOSIT_ADDRESS_XPUB?.trim();
+  if (!xpub || !xpub.startsWith('xpub')) {
+    missingOrInvalid.push('DEPOSIT_ADDRESS_XPUB (must be a valid extended public key starting with "xpub")');
+  } else {
+    try {
+      ethers.HDNodeWallet.fromExtendedKey(xpub);
+    } catch (err: any) {
+      missingOrInvalid.push(`DEPOSIT_ADDRESS_XPUB (invalid format: ${err.message})`);
+    }
+  }
+
+  // 2. Validate TREASURY_WALLET_ADDRESS
+  const treasury = process.env.TREASURY_WALLET_ADDRESS?.trim() || process.env.BNB_TREASURY_ADDRESS?.trim();
+  if (!treasury || !ethers.isAddress(treasury)) {
+    missingOrInvalid.push('TREASURY_WALLET_ADDRESS (must be a valid 0x EVM/BSC address)');
+  }
+
+  // 3. Validate RPC URLs
+  const rpcPrimary = process.env.BSC_RPC_URL_PRIMARY || process.env.BSC_RPC_URL;
+  if (!rpcPrimary || !rpcPrimary.startsWith('http')) {
+    missingOrInvalid.push('BSC_RPC_URL_PRIMARY (must be a valid HTTP/HTTPS RPC endpoint)');
+  }
+
+  if (missingOrInvalid.length > 0) {
+    const errorMsg = `[CRITICAL_STARTUP_ERROR] Production configuration validation failed (FAIL CLOSED):\n - ${missingOrInvalid.join('\n - ')}`;
+    console.error(errorMsg);
+    throw new Error(errorMsg);
+  }
+}
+
 export function getIntegrationConfig(): IntegrationEnvironmentConfig {
   const env = (process.env.APP_ENV || process.env.NODE_ENV || 'production').toLowerCase();
   const isTest = env === 'test' || process.env.NODE_ENV === 'test' || process.env.VITEST === 'true';
   const isProduction = env === 'production' || env === 'staging';
 
-  // 1. Mandatory Production Validation (Fail-Closed Pattern)
+  // In production, execute mandatory validation
   if (isProduction && !isTest) {
-    const missing: string[] = [];
-    if (!process.env.DEPOSIT_ADDRESS_XPUB && !process.env.TEST_ALLOW_DEV_XPUB) {
-      // In production without xpub
-      missing.push('DEPOSIT_ADDRESS_XPUB');
-    }
-    if (!process.env.TREASURY_WALLET_ADDRESS) missing.push('TREASURY_WALLET_ADDRESS');
-
-    if (missing.length > 0) {
-      console.warn(
-        `[CONFIG_WARN] Required production configuration parameter(s) missing: ${missing.join(', ')}. Please configure before going live.`
-      );
-    }
+    validateProductionConfig();
   }
 
-  // 2. Resolve Environment Variables with Safe Defaults
   const appEnv = isProduction ? (env as 'production' | 'staging') : isTest ? 'test' : 'development';
   const bscChainId = Number(process.env.BSC_CHAIN_ID) || 56;
 
@@ -66,19 +102,17 @@ export function getIntegrationConfig(): IntegrationEnvironmentConfig {
       : '0x337610d27c682e347c9cd60bd4b3b107c9d34ddd') // Testnet USDT
   ).toLowerCase();
 
-  const depositAddressXpub =
-    process.env.DEPOSIT_ADDRESS_XPUB ||
-    (isTest
-      ? 'xpub6BgBgSESXWv86chUMfdvWnmmsd5OhFiGWauAYhePYVHNVq2ppq5uMkHzY38Wd2TD1S9X5b9ZPaknK5SJnEuljCgkQC8vnPP6SXuyNmpeL47'
-      : null);
-
+  const depositAddressXpub = process.env.DEPOSIT_ADDRESS_XPUB?.trim() || null;
   const depositConfirmations = Number(process.env.DEPOSIT_CONFIRMATIONS) || 3;
+
   const treasuryWalletAddress = (
-    process.env.TREASURY_WALLET_ADDRESS || '0x71C8705E3473187F6c1aB3c4709d4352D7F338f0'
+    process.env.TREASURY_WALLET_ADDRESS?.trim() ||
+    process.env.BNB_TREASURY_ADDRESS?.trim() ||
+    (isTest ? '0x0000000000000000000000000000000000000001' : '')
   ).toLowerCase();
 
   const signerSecretReference =
-    process.env.SIGNER_SECRET_REFERENCE || 'gcp-kms://projects/phivonex/locations/global/keyRings/prod/cryptoKeys/bsc-signer';
+    process.env.SIGNER_SECRET_REFERENCE || 'gcp-kms://projects/PLACEHOLDER/locations/global/keyRings/prod/cryptoKeys/bsc-signer';
 
   // Production withdrawal broadcast defaults strictly to OFF (false)
   const withdrawalsEnabled = process.env.WITHDRAWALS_ENABLED === 'true';

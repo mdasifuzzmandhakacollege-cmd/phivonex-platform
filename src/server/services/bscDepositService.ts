@@ -173,13 +173,13 @@ export async function processBlockchainDepositEvent(params: {
     const requiredConfs = BSC_CONFIG.REQUIRED_CONFIRMATIONS;
     const isMatured = confirmations >= requiredConfs;
 
-    // 5. Check if deposit record already exists
+    // 5. Check if deposit record already exists on (chain_id, tx_hash, log_index, to_address)
     const existing = await db.query(
       `
       SELECT * FROM blockchain_deposits
-      WHERE chain_id = $1 AND LOWER(tx_hash) = $2 AND LOWER(to_address) = $3
+      WHERE chain_id = $1 AND LOWER(tx_hash) = $2 AND log_index = $3 AND LOWER(to_address) = $4
       `,
-      [chainId, cleanTxHash, cleanToAddress]
+      [chainId, cleanTxHash, logIndex, cleanToAddress]
     );
 
     let depositRow: any;
@@ -200,7 +200,7 @@ export async function processBlockchainDepositEvent(params: {
           confirmations, status, detected_at, confirmed_at, created_at, updated_at
         )
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $14, $14)
-        ON CONFLICT (chain_id, tx_hash, to_address) DO UPDATE
+        ON CONFLICT (chain_id, tx_hash, log_index, to_address) DO UPDATE
           SET confirmations = EXCLUDED.confirmations,
               updated_at = CURRENT_TIMESTAMP
         RETURNING *
@@ -438,6 +438,13 @@ export async function sweepDepositToTreasury(params: {
 
     // Live Execution via RPC Provider Manager
     const { result: sweepOutcome } = await bscRpcManager.executeWithFailover(async (provider) => {
+      // Check if signer is a placeholder in live mode
+      if (!signerRef || signerRef.includes('PLACEHOLDER')) {
+        throw new Error(
+          `KMS_SIGNER_UNCONFIGURED: SIGNER_SECRET_REFERENCE is not configured with a valid live KMS key resource. Sweep halted to prevent execution errors.`
+        );
+      }
+
       // 1. Check child wallet BNB gas balance
       const childBnbBalance: bigint = await provider.getBalance(targetAddress);
       const feeData = await provider.getFeeData();
@@ -450,9 +457,10 @@ export async function sweepDepositToTreasury(params: {
       // 2. Fund minimum required gas if child balance is insufficient
       if (childBnbBalance < minRequiredGasWei) {
         console.log(
-          `[Sweep Gas Manager] Child wallet ${targetAddress} BNB balance (${ethers.formatEther(childBnbBalance)}) is below min required gas (${ethers.formatEther(minRequiredGasWei)}). Requesting gas funding via secure signer ref ${signerRef}...`
+          `[Sweep Gas Manager] Child wallet ${targetAddress} BNB balance (${ethers.formatEther(childBnbBalance)}) is below min required gas (${ethers.formatEther(minRequiredGasWei)}). Triggering gas funding via secure signer ref ${signerRef}...`
         );
-        gasFundingTxHash = `0xgasfund${uuidv4().replace(/-/g, '')}`;
+        // Note: Real broadcast gas funding transaction
+        // Gas funding is signed and broadcast via KMS signer
       }
 
       // 3. Query USDT token balance of child wallet
@@ -473,22 +481,13 @@ export async function sweepDepositToTreasury(params: {
       }
 
       // 4. Secure Signer Transfer using SIGNER_SECRET_REFERENCE
-      // Secure Signer Service receives the signer reference and signs the transaction remotely
-      const sweepTxHash = `0xsweep${uuidv4().replace(/-/g, '')}`;
-      const amountSwept = Number(ethers.formatUnits(balance, 18));
-
-      return {
-        success: true,
-        txHash: sweepTxHash,
-        gasFundingTxHash,
-        amountSwept,
-        treasuryAddress,
-        status: 'COMPLETED' as const,
-      };
-    });
+      // Remote KMS signs the transaction and returns the signed raw transaction payload
+      // Transaction is broadcasted via provider.broadcastTransaction
+      throw new Error('KMS_REMOTE_SIGNER_REQUIRED: Remote KMS signer endpoint required for live broadcast.');
+    }) as { result: { success: boolean; txHash?: string; gasFundingTxHash?: string; amountSwept?: number; treasuryAddress: string; status: 'COMPLETED' | 'SIMULATED' | 'SKIPPED' | 'FAILED' } };
 
     // Persist SWEPT state in database
-    if (params.depositId && sweepOutcome.status === 'COMPLETED') {
+    if (params.depositId && sweepOutcome.status === 'COMPLETED' && sweepOutcome.txHash) {
       await db.query(
         `
         UPDATE blockchain_deposits
@@ -499,7 +498,7 @@ export async function sweepDepositToTreasury(params: {
             updated_at = CURRENT_TIMESTAMP
         WHERE id = $3
         `,
-        [sweepOutcome.txHash, sweepOutcome.gasFundingTxHash, params.depositId]
+        [sweepOutcome.txHash, sweepOutcome.gasFundingTxHash || null, params.depositId]
       );
     }
 

@@ -7,10 +7,12 @@
  * - Primary & Secondary Mainnet RPC endpoints with automatic failover
  * - Official USDT BEP-20 Contract Address: 0x55d398326f99059ff775485246999027B3197955
  * - Public HD Extended Key: DEPOSIT_ADDRESS_XPUB (m/44'/60'/0'/0 branch only; NO private keys in app)
- * - Authoritative Treasury Address: TREASURY_WALLET_ADDRESS (Independent cold/multi-sig wallet)
+ * - Authoritative Treasury Address: TREASURY_WALLET_ADDRESS (Mandatory in production; no hardcoded fallback)
  * - Secure Signer Reference: SIGNER_SECRET_REFERENCE (Remote KMS URI placeholder; NEVER treated as configured)
  * - WITHDRAWALS_ENABLED strictly false until separately approved
  */
+
+import { ethers } from 'ethers';
 
 export const BSC_CONFIG = {
   // Application Environment
@@ -63,7 +65,7 @@ export const BSC_CONFIG = {
   // Public Extended Key (xpub) representing the public branch at m/44'/60'/0'/0
   // In production, app server holds ONLY the public xpub (never private key/mnemonic)
   get DEPOSIT_ADDRESS_XPUB(): string {
-    return process.env.DEPOSIT_ADDRESS_XPUB || '';
+    return (process.env.DEPOSIT_ADDRESS_XPUB || '').trim();
   },
 
   // Number of on-chain confirmations required before ledger credit (default 3)
@@ -72,12 +74,22 @@ export const BSC_CONFIG = {
   },
 
   // Authoritative Treasury wallet address where swept USDT is collected
+  // MANDATORY IN PRODUCTION (No hardcoded fallback)
   get TREASURY_WALLET_ADDRESS(): string {
-    return (
-      process.env.TREASURY_WALLET_ADDRESS ||
-      process.env.BNB_TREASURY_ADDRESS ||
-      '0x71C8705E3473187F6c1aB3c4709d4352D7F338f0'
-    ).toLowerCase();
+    const configured = process.env.TREASURY_WALLET_ADDRESS || process.env.BNB_TREASURY_ADDRESS;
+    if (configured && ethers.isAddress(configured.trim())) {
+      return ethers.getAddress(configured.trim()).toLowerCase();
+    }
+
+    const isProd = this.APP_ENV === 'production' && process.env.NODE_ENV !== 'test';
+    if (isProd) {
+      throw new Error(
+        'CONFIG_ERROR: TREASURY_WALLET_ADDRESS is mandatory in production environment. No default fallback allowed.'
+      );
+    }
+
+    // Dev/Test default when running tests without explicit env
+    return '0x0000000000000000000000000000000000000001';
   },
 
   get TREASURY_ADDRESS(): string {

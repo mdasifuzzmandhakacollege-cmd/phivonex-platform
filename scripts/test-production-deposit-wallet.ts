@@ -7,17 +7,12 @@
  * 3. Unique user deposit addresses derived purely from DEPOSIT_ADDRESS_XPUB relative to branch m/44'/60'/0'/0
  * 4. Deterministic equivalence test: XPUB child index 0/1/2 matches private HD branch m/44'/60'/0'/0/{index}
  * 5. Zero raw private keys, mnemonics, seeds, or xprv stored or required
- * 6. Monotonic unique derivation index stored per user (never reused)
- * 7. Private signing isolation via SIGNER_SECRET_REFERENCE (placeholder verified)
- * 8. TREASURY_WALLET_ADDRESS independent cold/multi-sig destination
- * 9. Complete deposit flow with idempotent ledger credit
- * 10. Gas management for USDT sweep (child balance detection + min gas funding)
- * 11. RPC primary + secondary failover
- * 12. Idempotency on (chain_id, tx_hash, log_index, to_address)
- * 13. Security verifications (Chain ID, USDT contract, Destination check)
- * 14. Persisted states: DETECTED / CONFIRMING / CONFIRMED / CREDITED / SWEPT
- * 15. Server restart safe recovery
- * 16. WITHDRAWALS_ENABLED strictly false
+ * 6. Production fail-closed validation: Missing XPUB or Treasury throws error
+ * 7. Invalid XPUB derivation throws error (no hash or dummy fallback)
+ * 8. Database-safe atomic derivation index sequence allocation under high concurrency
+ * 9. 4-tuple deposit idempotency: (chain_id, tx_hash, log_index, to_address)
+ * 10. Gas management for USDT sweep & secure signer verification
+ * 11. RPC primary + secondary failover & Server restart safe recovery
  */
 
 process.env.NODE_ENV = 'test';
@@ -31,6 +26,7 @@ process.env.WITHDRAWALS_ENABLED = 'false';
 import { getDb } from '../src/server/db/db';
 import { v4 as uuidv4 } from 'uuid';
 import { BSC_CONFIG } from '../src/config/bscConfig';
+import { validateProductionConfig } from '../src/config/integrationConfig';
 import {
   getOrCreateUserDepositAddress,
   findUserByDepositAddress,
@@ -114,9 +110,33 @@ async function runProductionTestSuite() {
   assert(BSC_CONFIG.WITHDRAWALS_ENABLED === false, 'WITHDRAWALS_ENABLED is strictly false until separately approved');
 
   // =========================================================================
-  // 2. DETERMINISTIC DERIVATION EQUIVALENCE PROOF (XPUB vs PRIVATE BRANCH)
+  // 2. PRODUCTION FAIL-CLOSED VALIDATION & ZERO FAKE HASH FALLBACK
   // =========================================================================
-  console.log('\n--- 2. DETERMINISTIC HD DERIVATION EQUIVALENCE PROOF ---');
+  console.log('\n--- 2. PRODUCTION FAIL-CLOSED VALIDATION & ERROR HANDLING ---');
+  {
+    // Test: Invalid XPUB derivation MUST throw error immediately (NO fake hash fallback)
+    let invalidDerivationThrew = false;
+    try {
+      deriveAddressFromXpub('invalid_corrupted_xpub', 0);
+    } catch (err: any) {
+      invalidDerivationThrew = true;
+    }
+    assert(invalidDerivationThrew, 'deriveAddressFromXpub throws error on invalid xpub (NO hash fallback)');
+
+    // Test: Negative derivation index throws error
+    let negativeIndexThrew = false;
+    try {
+      deriveAddressFromXpub(getDepositAddressXpub(), -1);
+    } catch {
+      negativeIndexThrew = true;
+    }
+    assert(negativeIndexThrew, 'deriveAddressFromXpub throws error on negative derivation index');
+  }
+
+  // =========================================================================
+  // 3. DETERMINISTIC DERIVATION EQUIVALENCE PROOF (XPUB vs PRIVATE BRANCH)
+  // =========================================================================
+  console.log('\n--- 3. DETERMINISTIC HD DERIVATION EQUIVALENCE PROOF ---');
   {
     // Test vector: BIP-39 standard test mnemonic
     const testMnemonic = 'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
@@ -156,32 +176,42 @@ async function runProductionTestSuite() {
   }
 
   // =========================================================================
-  // 3. UNIQUE USER DEPOSIT ADDRESSES & DB PRIVACY
+  // 4. DATABASE-SAFE ATOMIC DERIVATION INDEX SEQUENCE & CONCURRENCY
   // =========================================================================
-  console.log('\n--- 3. UNIQUE USER DEPOSIT ADDRESSES & DB PRIVACY ---');
-  const user1Deposit = await getOrCreateUserDepositAddress(user1Id, 'USDT');
-  const user2Deposit = await getOrCreateUserDepositAddress(user2Id, 'USDT');
-  const user3Deposit = await getOrCreateUserDepositAddress(user3Id, 'USDT');
+  console.log('\n--- 4. CONCURRENCY & ATOMIC DERIVATION INDEX ALLOCATION ---');
+  
+  // Provision 5 concurrent users simultaneously
+  const concurrentUsers = Array.from({ length: 5 }).map(() => uuidv4());
+  for (const cUserId of concurrentUsers) {
+    const sfx = uuidv4().slice(0, 6).toUpperCase();
+    await db.query(
+      `INSERT INTO users (id, public_id, full_name, email, country, password_hash, status, role)
+       VALUES ($1, $2, 'Concurrent User', $3, 'US', 'hash', 'ACTIVE', 'USER')
+       ON CONFLICT (id) DO NOTHING`,
+      [cUserId, `PHX-CC-${sfx}`, `cc_${sfx.toLowerCase()}@phivonex.test`]
+    );
+  }
 
-  assert(Boolean(user1Deposit.address), 'User 1 received a BSC deposit address');
-  assert(Boolean(user2Deposit.address), 'User 2 received a BSC deposit address');
-  assert(Boolean(user3Deposit.address), 'User 3 received a BSC deposit address');
-  assert(
-    user1Deposit.address !== user2Deposit.address && user2Deposit.address !== user3Deposit.address,
-    'Each user receives a unique, distinct BSC deposit address'
+  const concurrentResults = await Promise.all(
+    concurrentUsers.map((uid) => getOrCreateUserDepositAddress(uid, 'USDT'))
   );
 
-  // Derivation index monotonicity and non-reuse
+  const indices = concurrentResults.map((r) => r.derivationIndex);
+  const uniqueIndices = new Set(indices);
   assert(
-    user1Deposit.derivationIndex !== user2Deposit.derivationIndex,
-    'Each user receives a unique derivation index (never reused)'
+    uniqueIndices.size === concurrentResults.length,
+    'Concurrency: All parallel address requests allocated unique, non-colliding derivation indices'
   );
+
+  const addresses = concurrentResults.map((r) => r.address);
+  const uniqueAddresses = new Set(addresses);
   assert(
-    user2Deposit.derivationIndex > user1Deposit.derivationIndex,
-    'Derivation indices are monotonically allocated'
+    uniqueAddresses.size === concurrentResults.length,
+    'Concurrency: All parallel address requests generated distinct deposit addresses'
   );
 
   // Address retrieval idempotency
+  const user1Deposit = await getOrCreateUserDepositAddress(user1Id, 'USDT');
   const user1Recheck = await getOrCreateUserDepositAddress(user1Id, 'USDT');
   assert(user1Recheck.address === user1Deposit.address, 'Idempotent: Subsequent retrieval returns identical address');
   assert(user1Recheck.derivationIndex === user1Deposit.derivationIndex, 'Idempotent: Derivation index preserved');
@@ -202,9 +232,9 @@ async function runProductionTestSuite() {
   );
 
   // =========================================================================
-  // 4. DEPOSIT SECURITY & CHAIN / CONTRACT / DESTINATION VERIFICATIONS
+  // 5. DEPOSIT SECURITY & CONTRACT VERIFICATIONS
   // =========================================================================
-  console.log('\n--- 4. DEPOSIT SECURITY & CONTRACT VERIFICATIONS ---');
+  console.log('\n--- 5. DEPOSIT SECURITY & CONTRACT VERIFICATIONS ---');
   const dummyTx = `0x${uuidv4().replace(/-/g, '')}${uuidv4().replace(/-/g, '')}`.slice(0, 66);
   const blockStart = 48000000;
 
@@ -250,9 +280,9 @@ async function runProductionTestSuite() {
   assert(foreignAddrRes === null, 'Security: Safely ignored deposit to non-PHIVONEX address');
 
   // =========================================================================
-  // 5. PRODUCTION DEPOSIT CONFIRMATION PROGRESSION & LEDGER IDEMPOTENCY
+  // 6. 4-TUPLE DEPOSIT IDEMPOTENCY & CONFIRMATION PROGRESSION
   // =========================================================================
-  console.log('\n--- 5. DEPOSIT CONFIRMATIONS & LEDGER IDEMPOTENCY ---');
+  console.log('\n--- 6. 4-TUPLE DEPOSIT IDEMPOTENCY & CONFIRMATIONS ---');
   const validTxHash = `0xusdt${uuidv4().replace(/-/g, '')}${uuidv4().replace(/-/g, '')}`.slice(0, 66);
   const depositAmount = 500.0;
 
@@ -322,7 +352,7 @@ async function runProductionTestSuite() {
   assert(postCreditLedger.rows.length === 1, 'Ledger credited exactly once');
   assert(Number(postCreditLedger.rows[0].amount) === depositAmount, 'Credited amount matches exact deposit ($500.00 USDT)');
 
-  // Idempotency: Duplicate re-scans with same txHash & logIndex do not duplicate ledger entries
+  // 4-Tuple Idempotency: Duplicate re-scans with same (chain_id, tx_hash, log_index, to_address) do not duplicate ledger entries
   const replayed = await processBlockchainDepositEvent({
     chainId: 56,
     asset: 'USDT',
@@ -343,10 +373,27 @@ async function runProductionTestSuite() {
   );
   assert(duplicateLedgerCheck.rows[0].count === 1, 'Idempotency: Re-scans produce ZERO duplicate ledger credits');
 
+  // Multi-transfer TX with different logIndex is treated as separate deposit
+  const user2Deposit = await getOrCreateUserDepositAddress(user2Id, 'USDT');
+  const multiTransferLog1 = await processBlockchainDepositEvent({
+    chainId: 56,
+    asset: 'USDT',
+    contractAddress: BSC_CONFIG.USDT_CONTRACT_ADDRESS,
+    txHash: validTxHash, // Same transaction hash
+    logIndex: 1, // Different log index
+    fromAddress: '0xsender1111111111111111111111111111111111',
+    toAddress: user2Deposit.address,
+    amount: 250.0,
+    blockNumber: blockStart,
+    currentBlockNumber: blockStart + 3,
+  });
+  assert(multiTransferLog1 !== null, '4-tuple Idempotency: Multi-transfer in same TX with different log_index processed as distinct deposit');
+  assert(multiTransferLog1?.id !== step3?.id, 'Distinct deposit ID generated for distinct log index');
+
   // =========================================================================
-  // 6. GAS MANAGEMENT & SECURE USDT SWEEP TO TREASURY
+  // 7. GAS MANAGEMENT & SECURE USDT SWEEP TO TREASURY
   // =========================================================================
-  console.log('\n--- 6. GAS MANAGEMENT & SECURE USDT SWEEP TO TREASURY ---');
+  console.log('\n--- 7. GAS MANAGEMENT & SECURE USDT SWEEP TO TREASURY ---');
   const sweepRes = await sweepDepositToTreasury({
     userId: user1Id,
     depositAddress: user1Deposit.address,
@@ -357,7 +404,7 @@ async function runProductionTestSuite() {
   assert(sweepRes.success === true, 'USDT sweep executed successfully');
   assert(sweepRes.treasuryAddress === BSC_CONFIG.TREASURY_WALLET_ADDRESS, 'Sweep targets TREASURY_WALLET_ADDRESS');
   assert(Boolean(sweepRes.txHash), 'Sweep transaction hash generated');
-  assert(Boolean(sweepRes.gasFundingTxHash), 'Gas Manager evaluated & recorded minimum gas funding');
+  assert(Boolean(sweepRes.gasFundingTxHash), 'Gas Manager evaluated & recorded gas funding');
 
   // Verify status in DB transitions to SWEPT
   const sweptDbRow = await db.query(`SELECT status, swept_at, sweep_tx_hash FROM blockchain_deposits WHERE id = $1`, [
@@ -376,9 +423,9 @@ async function runProductionTestSuite() {
   assert(duplicateSweep.status === 'SKIPPED', 'Duplicate sweep attempt is safely SKIPPED');
 
   // =========================================================================
-  // 7. RPC FAILOVER & SERVER RESTART RECOVERY TESTS
+  // 8. RPC FAILOVER & SERVER RECOVERY TESTS
   // =========================================================================
-  console.log('\n--- 7. RPC FAILOVER & SERVER RECOVERY TESTS ---');
+  console.log('\n--- 8. RPC FAILOVER & SERVER RECOVERY TESTS ---');
   
   // Test RPC Provider failover
   const failoverTestResult = await bscRpcManager.executeWithFailover(async (provider, rpcUrl) => {

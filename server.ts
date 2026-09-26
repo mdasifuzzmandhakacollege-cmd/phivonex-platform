@@ -28,11 +28,22 @@ import {
   csrfOriginProtection,
   sanitizeProductionErrors,
 } from './src/server/middleware/securityMiddleware';
+import { validateProductionConfig } from './src/config/integrationConfig';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 async function startServer() {
+  // Fail-closed validation for production configuration
+  try {
+    validateProductionConfig();
+  } catch (configErr) {
+    console.error('[Server Startup Fatal Error]', configErr);
+    if (process.env.NODE_ENV === 'production') {
+      process.exit(1);
+    }
+  }
+
   const app = express();
   const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
   const isProd = process.env.NODE_ENV === 'production';

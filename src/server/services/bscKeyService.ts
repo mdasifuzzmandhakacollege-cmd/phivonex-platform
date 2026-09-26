@@ -15,21 +15,37 @@ export interface UserDepositAddressRecord {
 }
 
 // Fallback test/development extended public key (strictly public xpub, contains NO private key)
-// Exported from public branch m/44'/60'/0'/0
+// ONLY used during test execution or local dev mode.
 const DEV_FALLBACK_XPUB =
   'xpub6EF8jXqFeFEW5bwMU7RpQtHkzE4KJxcqJtvkCjJumzW8CPpacXkb92ek4WzLQXjL93HycJwTPUAcuNxCqFPKKU5m5Z2Vq4nCyh5CyPeBFFr';
 
 /**
  * Resolve the authoritative DEPOSIT_ADDRESS_XPUB public HD key.
  * 
- * SECURITY GUARANTEE:
- * The application server holds ONLY the public HD key (xpub at branch m/44'/60'/0'/0).
- * It NEVER generates or stores raw private keys, mnemonics, seeds, or xprv.
+ * SECURITY GUARANTEES:
+ * 1. The application server holds ONLY the public HD key (xpub at branch m/44'/60'/0'/0).
+ * 2. It NEVER generates or stores raw private keys, mnemonics, seeds, or xprv.
+ * 3. In production: DEPOSIT_ADDRESS_XPUB is mandatory. Missing or invalid XPUB = FAIL CLOSED.
  */
 export function getDepositAddressXpub(): string {
+  const isProd = (BSC_CONFIG.APP_ENV === 'production' || process.env.NODE_ENV === 'production') && process.env.NODE_ENV !== 'test';
   const xpub = BSC_CONFIG.DEPOSIT_ADDRESS_XPUB;
-  if (xpub && xpub.trim().startsWith('xpub')) {
-    return xpub.trim();
+
+  if (xpub && xpub.startsWith('xpub')) {
+    try {
+      ethers.HDNodeWallet.fromExtendedKey(xpub);
+      return xpub;
+    } catch (err: any) {
+      if (isProd) {
+        throw new Error(`CRITICAL_SECURITY_ERROR: Corrupted or invalid DEPOSIT_ADDRESS_XPUB in production: ${err.message}`);
+      }
+    }
+  }
+
+  if (isProd) {
+    throw new Error(
+      'CRITICAL_SECURITY_ERROR: DEPOSIT_ADDRESS_XPUB is mandatory in production environment. Refusing to operate with fallback (FAIL CLOSED).'
+    );
   }
 
   // If in test or dev mode, use safe public deterministic test xpub
@@ -42,6 +58,10 @@ export function getDepositAddressXpub(): string {
  * DEPOSIT_ADDRESS_XPUB represents the public branch at m/44'/60'/0'/0.
  * Addresses are derived relative to that branch via:
  * HDNodeWallet.fromExtendedKey(DEPOSIT_ADDRESS_XPUB).deriveChild(index)
+ * 
+ * STRICT INVARIANT:
+ * Invalid XPUB derivation throws an explicit error immediately.
+ * Zero hash fallbacks or dummy address fallbacks are permitted.
  */
 export function deriveAddressFromXpub(
   xpub: string,
@@ -51,29 +71,23 @@ export function deriveAddressFromXpub(
     throw new Error(`INVALID_DERIVATION_INDEX: Derivation index must be a non-negative integer (got: ${derivationIndex})`);
   }
 
-  try {
-    // 1. Load the public branch at m/44'/60'/0'/0
-    const branchRoot = ethers.HDNodeWallet.fromExtendedKey(xpub);
-    // 2. Derive child index relative to this branch (unhardened index)
-    const childNode = branchRoot.deriveChild(derivationIndex);
-    const checksumAddress = ethers.getAddress(childNode.address);
-    const derivationReference = `m/44'/60'/0'/0/${derivationIndex}`;
-
-    return {
-      address: checksumAddress,
-      derivationReference,
-    };
-  } catch (err: any) {
-    // If xpub is non-standard, compute deterministic fallback mapping
-    const hashed = ethers.keccak256(
-      ethers.toUtf8Bytes(`phivonex_xpub_derivation:${xpub}:${derivationIndex}:${BSC_CONFIG.CHAIN_ID}`)
-    );
-    const dummyAddr = ethers.computeAddress(hashed);
-    return {
-      address: ethers.getAddress(dummyAddr),
-      derivationReference: `m/44'/60'/0'/0/${derivationIndex}`,
-    };
+  if (!xpub || !xpub.trim().startsWith('xpub')) {
+    throw new Error(`INVALID_XPUB: Expected valid extended public key starting with 'xpub' (got: ${xpub ? xpub.slice(0, 8) + '...' : 'empty'})`);
   }
+
+  // 1. Load the public branch at m/44'/60'/0'/0
+  // ethers.HDNodeWallet.fromExtendedKey will throw if xpub is malformed or invalid
+  const branchRoot = ethers.HDNodeWallet.fromExtendedKey(xpub.trim());
+
+  // 2. Derive child index relative to this branch (unhardened index)
+  const childNode = branchRoot.deriveChild(derivationIndex);
+  const checksumAddress = ethers.getAddress(childNode.address);
+  const derivationReference = `m/44'/60'/0'/0/${derivationIndex}`;
+
+  return {
+    address: checksumAddress,
+    derivationReference,
+  };
 }
 
 /**
@@ -87,26 +101,15 @@ export function deriveUserBnbAddress(
   return deriveAddressFromXpub(xpub, index);
 }
 
-// In-memory mutex lock for atomic monotonic derivation index assignment
-let derivationIndexLock: Promise<any> = Promise.resolve();
-
-function withDerivationLock<T>(fn: () => Promise<T>): Promise<T> {
-  const next = derivationIndexLock.then(
-    () => fn(),
-    () => fn()
-  );
-  derivationIndexLock = next.catch(() => {});
-  return next;
-}
-
 /**
  * Get or provision a user's unique BSC deposit address.
  * 
- * INVARIANTS:
+ * PRODUCTION DATABASE-SAFE ATOMIC INVARIANTS:
  * 1. Each user receives a unique BSC deposit address derived from DEPOSIT_ADDRESS_XPUB.
- * 2. Derivation index is monotonically increasing and NEVER reused.
- * 3. Stores: derivation index, deposit address, user ID, creation timestamp.
- * 4. Zero private keys / mnemonics / seeds stored or required.
+ * 2. Derivation index is atomically allocated via a database sequence (safe across multiple server instances).
+ * 3. Derivation indices are strictly monotonic and never reused.
+ * 4. Stores: derivation_index, deposit address, user ID, creation timestamp.
+ * 5. Zero private keys / mnemonics / seeds stored or required.
  */
 export async function getOrCreateUserDepositAddress(
   userId: string,
@@ -141,76 +144,43 @@ export async function getOrCreateUserDepositAddress(
     };
   }
 
-  // 2. Allocate next derivation index with atomic lock
-  return withDerivationLock(async () => {
-    // Re-verify inside lock to handle race condition
-    const doubleCheck = await db.query<any>(
-      `
-      SELECT id, user_id, chain_id, asset, address, derivation_index, derivation_reference, created_at
-      FROM user_deposit_addresses
-      WHERE user_id = $1 AND chain_id = $2
-      LIMIT 1
-      `,
-      [userId, chainId]
-    );
+  // 2. Database-safe atomic index allocation via sequence
+  // Works across multiple concurrent server instances
+  const seqRes = await db.query<{ next_val: string | number }>(
+    `SELECT nextval('bsc_deposit_derivation_index_seq') AS next_val`
+  );
+  const derivationIndex = Number(seqRes.rows[0]?.next_val ?? 0);
 
-    if (doubleCheck.rows.length > 0) {
-      const row = doubleCheck.rows[0];
-      return {
-        id: row.id,
-        userId: row.user_id,
-        chainId: Number(row.chain_id),
-        asset: row.asset || assetName,
-        address: row.address,
-        derivationIndex: Number(row.derivation_index || 0),
-        derivationReference: row.derivation_reference,
-        createdAt: new Date(row.created_at).toISOString(),
-      };
-    }
+  // 3. Derive unique child public address from DEPOSIT_ADDRESS_XPUB relative to m/44'/60'/0'/0
+  const xpub = getDepositAddressXpub();
+  const { address, derivationReference } = deriveAddressFromXpub(xpub, derivationIndex);
+  const id = uuidv4();
 
-    // Monotonic next derivation index query
-    const indexRes = await db.query<{ next_index: string | number }>(
-      `
-      SELECT COALESCE(MAX(derivation_index), -1) + 1 AS next_index
-      FROM user_deposit_addresses
-      WHERE chain_id = $1
-      `,
-      [chainId]
-    );
+  // 4. Persist in database with conflict handling
+  const insertRes = await db.query<any>(
+    `
+    INSERT INTO user_deposit_addresses (
+      id, user_id, chain_id, asset, address, derivation_index, derivation_reference, created_at
+    )
+    VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP)
+    ON CONFLICT (user_id, chain_id, asset) DO UPDATE
+      SET address = EXCLUDED.address
+    RETURNING id, user_id, chain_id, asset, address, derivation_index, derivation_reference, created_at
+    `,
+    [id, userId, chainId, assetName, address, derivationIndex, derivationReference]
+  );
 
-    const derivationIndex = Number(indexRes.rows[0]?.next_index || 0);
-
-    // 3. Derive unique child public address from DEPOSIT_ADDRESS_XPUB relative to m/44'/60'/0'/0
-    const xpub = getDepositAddressXpub();
-    const { address, derivationReference } = deriveAddressFromXpub(xpub, derivationIndex);
-    const id = uuidv4();
-
-    // 4. Persist in database (Stores user_id, address, derivation_index, created_at)
-    const insertRes = await db.query<any>(
-      `
-      INSERT INTO user_deposit_addresses (
-        id, user_id, chain_id, asset, address, derivation_index, derivation_reference, created_at
-      )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP)
-      ON CONFLICT (user_id, chain_id, asset) DO UPDATE
-        SET address = EXCLUDED.address
-      RETURNING id, user_id, chain_id, asset, address, derivation_index, derivation_reference, created_at
-      `,
-      [id, userId, chainId, assetName, address, derivationIndex, derivationReference]
-    );
-
-    const row = insertRes.rows[0];
-    return {
-      id: row.id,
-      userId: row.user_id,
-      chainId: Number(row.chain_id),
-      asset: row.asset,
-      address: row.address,
-      derivationIndex: Number(row.derivation_index),
-      derivationReference: row.derivation_reference,
-      createdAt: new Date(row.created_at).toISOString(),
-    };
-  });
+  const row = insertRes.rows[0];
+  return {
+    id: row.id,
+    userId: row.user_id,
+    chainId: Number(row.chain_id),
+    asset: row.asset,
+    address: row.address,
+    derivationIndex: Number(row.derivation_index),
+    derivationReference: row.derivation_reference,
+    createdAt: new Date(row.created_at).toISOString(),
+  };
 }
 
 /**

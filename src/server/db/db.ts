@@ -629,6 +629,9 @@ async function initSchema(client: DatabaseClient) {
     // Task #17.1: BNB Smart Chain Deposit & On-Chain Withdrawal Tables
     try {
       await client.exec(`
+        -- 0. Atomic Derivation Index Sequence (Multi-instance safe)
+        CREATE SEQUENCE IF NOT EXISTS bsc_deposit_derivation_index_seq START WITH 0 MINVALUE 0 INCREMENT BY 1;
+
         -- 1. User Deposit Addresses
         CREATE TABLE IF NOT EXISTS user_deposit_addresses (
           id UUID PRIMARY KEY,
@@ -682,7 +685,7 @@ async function initSchema(client: DatabaseClient) {
           gas_funding_tx_hash VARCHAR(100) NULL,
           created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
           updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
-          CONSTRAINT uq_bcd_chain_tx_to UNIQUE (chain_id, tx_hash, to_address),
+          CONSTRAINT uq_bcd_chain_tx_log_to UNIQUE (chain_id, tx_hash, log_index, to_address),
           CONSTRAINT chk_bcd_status CHECK (status IN ('DETECTED', 'CONFIRMING', 'CONFIRMED', 'CREDITED', 'SWEPT', 'REORGED', 'FAILED')),
           CONSTRAINT chk_bcd_amount CHECK (amount > 0)
         );
@@ -698,7 +701,9 @@ async function initSchema(client: DatabaseClient) {
       await client.exec(`ALTER TABLE blockchain_deposits ADD COLUMN IF NOT EXISTS gas_funding_tx_hash VARCHAR(100) NULL;`);
       await client.exec(`ALTER TABLE blockchain_deposits DROP CONSTRAINT IF EXISTS chk_bcd_status;`);
       await client.exec(`ALTER TABLE blockchain_deposits ADD CONSTRAINT chk_bcd_status CHECK (status IN ('DETECTED', 'CONFIRMING', 'CONFIRMED', 'CREDITED', 'SWEPT', 'REORGED', 'FAILED'));`);
+      await client.exec(`ALTER TABLE blockchain_deposits DROP CONSTRAINT IF EXISTS uq_bcd_chain_tx_to;`);
       await client.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_bcd_public_id ON blockchain_deposits (public_deposit_id);`);
+      await client.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_bcd_idempotency ON blockchain_deposits (chain_id, tx_hash, log_index, to_address);`);
       await client.exec(`CREATE INDEX IF NOT EXISTS idx_bcd_user_id ON blockchain_deposits (user_id);`);
       await client.exec(`CREATE INDEX IF NOT EXISTS idx_bcd_tx_hash ON blockchain_deposits (tx_hash);`);
       await client.exec(`CREATE INDEX IF NOT EXISTS idx_bcd_to_address ON blockchain_deposits (to_address);`);

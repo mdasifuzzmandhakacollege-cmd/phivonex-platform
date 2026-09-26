@@ -488,3 +488,84 @@ CREATE INDEX IF NOT EXISTS idx_fri_issue_type ON financial_reconciliation_issues
 CREATE INDEX IF NOT EXISTS idx_fri_asset ON financial_reconciliation_issues (asset);
 CREATE INDEX IF NOT EXISTS idx_fri_created ON financial_reconciliation_issues (created_at DESC);
 
+-- Task #17.1: Production BSC HD Deposit Wallets & On-Chain Tables
+CREATE SEQUENCE IF NOT EXISTS bsc_deposit_derivation_index_seq START WITH 0 MINVALUE 0 INCREMENT BY 1;
+
+CREATE TABLE IF NOT EXISTS user_deposit_addresses (
+  id UUID PRIMARY KEY,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  chain_id INTEGER NOT NULL DEFAULT 56,
+  asset VARCHAR(20) NOT NULL DEFAULT 'USDT',
+  address VARCHAR(100) NOT NULL,
+  derivation_index INTEGER NOT NULL DEFAULT 0,
+  derivation_reference VARCHAR(100) NOT NULL,
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT uq_user_deposit_chain_asset UNIQUE (user_id, chain_id, asset),
+  CONSTRAINT uq_deposit_chain_address UNIQUE (chain_id, address)
+);
+
+CREATE INDEX IF NOT EXISTS idx_uda_user_id ON user_deposit_addresses (user_id);
+CREATE INDEX IF NOT EXISTS idx_uda_address ON user_deposit_addresses (address);
+CREATE INDEX IF NOT EXISTS idx_uda_chain_asset ON user_deposit_addresses (chain_id, asset);
+CREATE INDEX IF NOT EXISTS idx_uda_chain_index ON user_deposit_addresses (chain_id, derivation_index);
+
+CREATE TABLE IF NOT EXISTS blockchain_deposits (
+  id UUID PRIMARY KEY,
+  public_deposit_id VARCHAR(50) UNIQUE NOT NULL,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  chain_id INTEGER NOT NULL DEFAULT 56,
+  asset VARCHAR(20) NOT NULL DEFAULT 'USDT',
+  tx_hash VARCHAR(100) NOT NULL,
+  log_index INTEGER NOT NULL DEFAULT 0,
+  from_address VARCHAR(100) NOT NULL,
+  to_address VARCHAR(100) NOT NULL,
+  amount NUMERIC(28, 18) NOT NULL,
+  block_number BIGINT NOT NULL,
+  confirmations INTEGER NOT NULL DEFAULT 0,
+  status VARCHAR(20) NOT NULL DEFAULT 'DETECTED',
+  detected_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  confirmed_at TIMESTAMP WITH TIME ZONE NULL,
+  credited_at TIMESTAMP WITH TIME ZONE NULL,
+  swept_at TIMESTAMP WITH TIME ZONE NULL,
+  sweep_tx_hash VARCHAR(100) NULL,
+  gas_funding_tx_hash VARCHAR(100) NULL,
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT uq_bcd_chain_tx_log_to UNIQUE (chain_id, tx_hash, log_index, to_address),
+  CONSTRAINT chk_bcd_status CHECK (status IN ('DETECTED', 'CONFIRMING', 'CONFIRMED', 'CREDITED', 'SWEPT', 'REORGED', 'FAILED')),
+  CONSTRAINT chk_bcd_amount CHECK (amount > 0)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_bcd_public_id ON blockchain_deposits (public_deposit_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_bcd_idempotency ON blockchain_deposits (chain_id, tx_hash, log_index, to_address);
+CREATE INDEX IF NOT EXISTS idx_bcd_user_id ON blockchain_deposits (user_id);
+CREATE INDEX IF NOT EXISTS idx_bcd_tx_hash ON blockchain_deposits (tx_hash);
+CREATE INDEX IF NOT EXISTS idx_bcd_to_address ON blockchain_deposits (to_address);
+CREATE INDEX IF NOT EXISTS idx_bcd_status ON blockchain_deposits (status);
+CREATE INDEX IF NOT EXISTS idx_bcd_created ON blockchain_deposits (created_at DESC);
+
+CREATE TABLE IF NOT EXISTS blockchain_withdrawals (
+  id UUID PRIMARY KEY,
+  withdrawal_id UUID UNIQUE NOT NULL REFERENCES withdrawals(id) ON DELETE CASCADE,
+  chain_id INTEGER NOT NULL DEFAULT 56,
+  tx_hash VARCHAR(100) NULL,
+  nonce INTEGER NOT NULL,
+  from_address VARCHAR(100) NOT NULL,
+  destination VARCHAR(100) NOT NULL,
+  amount_bnb NUMERIC(28, 18) NOT NULL,
+  gas_price_gwei NUMERIC(10, 4) NULL,
+  gas_used BIGINT NULL,
+  status VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+  broadcast_at TIMESTAMP WITH TIME ZONE NULL,
+  confirmed_at TIMESTAMP WITH TIME ZONE NULL,
+  error_message TEXT NULL,
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT chk_bcw_status CHECK (status IN ('PENDING', 'BROADCASTED', 'CONFIRMED', 'FAILED'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_bcw_withdrawal_id ON blockchain_withdrawals (withdrawal_id);
+CREATE INDEX IF NOT EXISTS idx_bcw_tx_hash ON blockchain_withdrawals (tx_hash);
+CREATE INDEX IF NOT EXISTS idx_bcw_status ON blockchain_withdrawals (status);
+
+
