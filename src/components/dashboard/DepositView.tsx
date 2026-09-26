@@ -13,7 +13,9 @@ import {
   Radio,
   Info,
   Layers,
-  Search
+  Search,
+  Send,
+  Loader2
 } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 import { UserProfile } from '../../context/AuthContext';
@@ -80,6 +82,12 @@ export const DepositView: React.FC<DepositViewProps> = ({ user, onNavigateTab })
   const [searchQuery, setSearchQuery] = useState('');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+
+  // Manual TxHash Verification State
+  const [inputTxHash, setInputTxHash] = useState('');
+  const [submittingTx, setSubmittingTx] = useState(false);
+  const [txVerifySuccess, setTxVerifySuccess] = useState<string | null>(null);
+  const [txVerifyError, setTxVerifyError] = useState<string | null>(null);
 
   // Fetch Deposit Address & Transaction History
   const fetchData = useCallback(async () => {
@@ -160,6 +168,61 @@ export const DepositView: React.FC<DepositViewProps> = ({ user, onNavigateTab })
       setErrorMessage(err?.message || 'Error during on-chain scan');
     } finally {
       setRescanning(false);
+    }
+  };
+
+  // Submit on-chain Transaction Hash for instant verification
+  const handleSubmitTxHash = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setTxVerifyError(null);
+    setTxVerifySuccess(null);
+
+    const cleanHash = inputTxHash.trim();
+    if (!cleanHash) {
+      setTxVerifyError('Please enter the transaction hash (TxHash / TxID) from your wallet or exchange.');
+      return;
+    }
+
+    if (!/^0x[a-fA-F0-9]{64}$/.test(cleanHash)) {
+      setTxVerifyError('Invalid TxHash format. Must be a 66-character hex string starting with 0x.');
+      return;
+    }
+
+    try {
+      setSubmittingTx(true);
+      const res = await fetch('/api/deposits/submit-txhash', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          txHash: cleanHash,
+          asset: selectedAsset,
+        }),
+      });
+
+      const data = await res.json();
+
+      if (res.ok && data.success) {
+        setTxVerifySuccess(data.message || `Deposit verified and credited successfully!`);
+        setInputTxHash('');
+        await fetchData();
+      } else {
+        throw new Error(data.message || 'Transaction verification failed.');
+      }
+    } catch (err: any) {
+      setTxVerifyError(err.message || 'Failed to verify transaction hash.');
+    } finally {
+      setSubmittingTx(false);
+    }
+  };
+
+  const handlePasteTx = async () => {
+    try {
+      const text = await navigator.clipboard.readText();
+      if (text) {
+        setInputTxHash(text.trim());
+      }
+    } catch {
+      // Ignore clipboard read errors
     }
   };
 
@@ -448,6 +511,102 @@ export const DepositView: React.FC<DepositViewProps> = ({ user, onNavigateTab })
             Scan using <strong className="text-white">Binance App</strong>, <strong className="text-white">Trust Wallet</strong>, or <strong className="text-white">MetaMask</strong> on BNB Smart Chain.
           </p>
         </div>
+      </div>
+
+      {/* 2.5 INSTANT TXHASH VERIFICATION & CREDIT SECTION */}
+      <div className="p-6 lg:p-8 rounded-2xl border border-white/[0.08] bg-gradient-to-b from-[#0B1527] to-[#07101D] space-y-6">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div>
+            <div className="flex items-center gap-2 mb-1">
+              <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-[#F0B90B]/10 border border-[#F0B90B]/30 text-[#F0B90B]">
+                INSTANT AUTO-CREDIT
+              </span>
+              <span className="text-xs text-[#98A2B3] font-mono">BNB Smart Chain (BEP-20)</span>
+            </div>
+            <h2 className="text-lg lg:text-xl font-bold text-white flex items-center gap-2">
+              <Send className="w-5 h-5 text-[#F0B90B]" />
+              Submit Transaction Hash (TxHash / TxID)
+            </h2>
+            <p className="text-xs text-[#98A2B3] mt-1 max-w-2xl">
+              Sent funds from your Binance, Trust Wallet, or MetaMask? Paste your on-chain transaction hash below. Our node listener will instantly verify the blockchain receipt and credit your balance within seconds.
+            </p>
+          </div>
+        </div>
+
+        {/* Verification Success / Error alerts */}
+        {txVerifySuccess && (
+          <div className="p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 flex items-start gap-3 animate-in fade-in">
+            <CheckCircle2 className="w-5 h-5 flex-shrink-0 mt-0.5 text-emerald-400" />
+            <div className="text-xs">
+              <p className="font-bold text-emerald-200">Deposit Verified &amp; Credited!</p>
+              <p className="mt-0.5 text-emerald-300/90">{txVerifySuccess}</p>
+            </div>
+          </div>
+        )}
+
+        {txVerifyError && (
+          <div className="p-4 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 flex items-start gap-3 animate-in fade-in">
+            <AlertTriangle className="w-5 h-5 flex-shrink-0 mt-0.5 text-rose-400" />
+            <div className="text-xs">
+              <p className="font-bold text-rose-200">Verification Alert</p>
+              <p className="mt-0.5 text-rose-300/90">{txVerifyError}</p>
+            </div>
+          </div>
+        )}
+
+        {/* TxHash Input Form */}
+        <form onSubmit={handleSubmitTxHash} className="space-y-4">
+          <div className="flex flex-col sm:flex-row items-stretch gap-3">
+            <div className="relative flex-1">
+              <input
+                type="text"
+                value={inputTxHash}
+                onChange={(e) => setInputTxHash(e.target.value)}
+                placeholder="Paste transaction hash: 0x1234567890abcdef..."
+                disabled={submittingTx}
+                className="w-full px-4 py-3 rounded-xl bg-black/50 border border-white/[0.12] text-sm text-white placeholder-[#98A2B3]/60 font-mono focus:outline-none focus:border-[#F0B90B] transition-colors pr-24"
+              />
+              <button
+                type="button"
+                onClick={handlePasteTx}
+                disabled={submittingTx}
+                className="absolute right-2 top-2 px-3 py-1.5 rounded-lg bg-white/[0.06] hover:bg-white/[0.12] text-[#98A2B3] hover:text-white text-xs font-mono font-medium transition-all"
+              >
+                Paste
+              </button>
+            </div>
+
+            <button
+              type="submit"
+              disabled={submittingTx || !inputTxHash.trim()}
+              className="px-6 py-3 rounded-xl bg-gradient-to-r from-[#F0B90B] to-amber-500 hover:from-[#f5c52c] hover:to-amber-400 text-slate-950 text-sm font-bold flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed shrink-0 shadow-lg shadow-amber-500/20 active:scale-95"
+            >
+              {submittingTx ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <span>Verifying on BSC...</span>
+                </>
+              ) : (
+                <>
+                  <Check className="w-4 h-4" />
+                  <span>Verify &amp; Credit Deposit</span>
+                </>
+              )}
+            </button>
+          </div>
+
+          <div className="flex flex-wrap items-center justify-between text-[11px] text-[#98A2B3] gap-2 pt-1">
+            <span>
+              Network: <strong className="text-white">BNB Smart Chain (Mainnet BSC)</strong>
+            </span>
+            <span>
+              Target: <strong className={isBnbSelected ? 'text-amber-300' : 'text-emerald-300'}>{selectedAsset} Deposit</strong>
+            </span>
+            <span>
+              Expected Confirmations: <strong className="text-white">3 Blocks</strong>
+            </span>
+          </div>
+        </form>
       </div>
 
       {/* 3. DEPOSIT HISTORY & SUMMARY TABLE */}

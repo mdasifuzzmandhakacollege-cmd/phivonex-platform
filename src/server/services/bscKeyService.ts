@@ -118,6 +118,24 @@ export async function getOrCreateUserDepositAddress(
   const db = await getDb();
   const assetName = requestedAsset.toUpperCase() === 'BNB' ? 'BNB' : 'USDT';
   const chainId = BSC_CONFIG.CHAIN_ID;
+  const treasury = BSC_CONFIG.TREASURY_WALLET_ADDRESS || process.env.TREASURY_WALLET_ADDRESS;
+  const xpub = BSC_CONFIG.DEPOSIT_ADDRESS_XPUB;
+
+  // Direct Treasury Deposit Mode (no XPUB required):
+  // Returns authoritative Treasury wallet address for direct user deposits
+  if (!xpub && treasury && ethers.isAddress(treasury)) {
+    const checksumTreasury = ethers.getAddress(treasury);
+    return {
+      id: `treasury-${userId}-${assetName}`,
+      userId,
+      chainId,
+      asset: assetName,
+      address: checksumTreasury,
+      derivationIndex: 0,
+      derivationReference: 'direct-treasury',
+      createdAt: new Date().toISOString(),
+    };
+  }
 
   // 1. Check existing address for user on this chain
   const existing = await db.query<any>(
@@ -152,8 +170,8 @@ export async function getOrCreateUserDepositAddress(
   const derivationIndex = Number(seqRes.rows[0]?.next_val ?? 0);
 
   // 3. Derive unique child public address from DEPOSIT_ADDRESS_XPUB relative to m/44'/60'/0'/0
-  const xpub = getDepositAddressXpub();
-  const { address, derivationReference } = deriveAddressFromXpub(xpub, derivationIndex);
+  const derivedXpub = getDepositAddressXpub();
+  const { address, derivationReference } = deriveAddressFromXpub(derivedXpub, derivationIndex);
   const id = uuidv4();
 
   // 4. Persist in database with conflict handling

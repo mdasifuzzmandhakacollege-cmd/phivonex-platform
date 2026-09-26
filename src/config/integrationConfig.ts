@@ -54,15 +54,17 @@ export function validateProductionConfig(): void {
     missingOrInvalid.push('DATABASE_URL must be a valid PostgreSQL connection string starting with postgresql:// or postgres://');
   }
 
-  // 2. Validate DEPOSIT_ADDRESS_XPUB
+  // 2. Validate DEPOSIT_ADDRESS_XPUB (Optional if using direct Treasury deposits, must be valid if provided)
   const xpub = process.env.DEPOSIT_ADDRESS_XPUB?.trim();
-  if (!xpub || !xpub.startsWith('xpub')) {
-    missingOrInvalid.push('DEPOSIT_ADDRESS_XPUB (must be a valid extended public key starting with "xpub")');
-  } else {
-    try {
-      ethers.HDNodeWallet.fromExtendedKey(xpub);
-    } catch (err: any) {
-      missingOrInvalid.push(`DEPOSIT_ADDRESS_XPUB (invalid format: ${err.message})`);
+  if (xpub) {
+    if (!xpub.startsWith('xpub')) {
+      missingOrInvalid.push('DEPOSIT_ADDRESS_XPUB (must be a valid extended public key starting with "xpub")');
+    } else {
+      try {
+        ethers.HDNodeWallet.fromExtendedKey(xpub);
+      } catch (err: any) {
+        missingOrInvalid.push(`DEPOSIT_ADDRESS_XPUB (invalid format: ${err.message})`);
+      }
     }
   }
 

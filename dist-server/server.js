@@ -10796,6 +10796,9 @@ var BscRpcProviderManager = class {
   getSecondaryProvider() {
     return this.secondaryProvider;
   }
+  getProvider() {
+    return this.primaryHealthy ? this.primaryProvider : this.secondaryProvider;
+  }
   /**
    * Execute an async RPC operation with automatic primary-to-secondary failover.
    */
@@ -12028,13 +12031,15 @@ function validateProductionConfig() {
     missingOrInvalid.push("DATABASE_URL must be a valid PostgreSQL connection string starting with postgresql:// or postgres://");
   }
   const xpub = process.env.DEPOSIT_ADDRESS_XPUB?.trim();
-  if (!xpub || !xpub.startsWith("xpub")) {
-    missingOrInvalid.push('DEPOSIT_ADDRESS_XPUB (must be a valid extended public key starting with "xpub")');
-  } else {
-    try {
-      ethers4.HDNodeWallet.fromExtendedKey(xpub);
-    } catch (err) {
-      missingOrInvalid.push(`DEPOSIT_ADDRESS_XPUB (invalid format: ${err.message})`);
+  if (xpub) {
+    if (!xpub.startsWith("xpub")) {
+      missingOrInvalid.push('DEPOSIT_ADDRESS_XPUB (must be a valid extended public key starting with "xpub")');
+    } else {
+      try {
+        ethers4.HDNodeWallet.fromExtendedKey(xpub);
+      } catch (err) {
+        missingOrInvalid.push(`DEPOSIT_ADDRESS_XPUB (invalid format: ${err.message})`);
+      }
     }
   }
   const treasury = process.env.TREASURY_WALLET_ADDRESS?.trim() || process.env.BNB_TREASURY_ADDRESS?.trim();
@@ -13037,6 +13042,21 @@ async function getOrCreateUserDepositAddress(userId, requestedAsset = "USDT") {
   const db = await getDb();
   const assetName = requestedAsset.toUpperCase() === "BNB" ? "BNB" : "USDT";
   const chainId = BSC_CONFIG.CHAIN_ID;
+  const treasury = BSC_CONFIG.TREASURY_WALLET_ADDRESS || process.env.TREASURY_WALLET_ADDRESS;
+  const xpub = BSC_CONFIG.DEPOSIT_ADDRESS_XPUB;
+  if (!xpub && treasury && ethers6.isAddress(treasury)) {
+    const checksumTreasury = ethers6.getAddress(treasury);
+    return {
+      id: `treasury-${userId}-${assetName}`,
+      userId,
+      chainId,
+      asset: assetName,
+      address: checksumTreasury,
+      derivationIndex: 0,
+      derivationReference: "direct-treasury",
+      createdAt: (/* @__PURE__ */ new Date()).toISOString()
+    };
+  }
   const existing = await db.query(
     `
     SELECT id, user_id, chain_id, asset, address, derivation_index, derivation_reference, created_at
@@ -13063,8 +13083,8 @@ async function getOrCreateUserDepositAddress(userId, requestedAsset = "USDT") {
     `SELECT nextval('bsc_deposit_derivation_index_seq') AS next_val`
   );
   const derivationIndex = Number(seqRes.rows[0]?.next_val ?? 0);
-  const xpub = getDepositAddressXpub();
-  const { address, derivationReference } = deriveAddressFromXpub(xpub, derivationIndex);
+  const derivedXpub = getDepositAddressXpub();
+  const { address, derivationReference } = deriveAddressFromXpub(derivedXpub, derivationIndex);
   const id = uuidv421();
   const insertRes = await db.query(
     `
@@ -13440,6 +13460,10 @@ async function rescanUserDepositStatus(userId) {
 }
 
 // src/server/routes/depositRoutes.ts
+init_db();
+init_idGenerator();
+import { ethers as ethers9 } from "ethers";
+import { v4 as uuidv423 } from "uuid";
 var depositRouter = Router15();
 depositRouter.get("/address", requireAuth, depositLimiter, async (req, res) => {
   try {
@@ -13548,6 +13572,189 @@ depositRouter.post("/simulate-test-deposit", requireAuth, async (req, res) => {
       success: false,
       error: "SIMULATION_FAILED",
       message: err?.message || "Failed to simulate deposit"
+    });
+  }
+});
+depositRouter.post("/submit-txhash", requireAuth, depositLimiter, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { txHash, asset } = req.body;
+    if (!txHash || typeof txHash !== "string") {
+      res.status(400).json({
+        success: false,
+        error: "INVALID_TX_HASH",
+        message: "Please provide a valid transaction hash (TxHash / TxID)."
+      });
+      return;
+    }
+    const cleanTxHash = txHash.trim().toLowerCase();
+    const txHashRegex = /^0x[a-f0-9]{64}$/;
+    if (!txHashRegex.test(cleanTxHash)) {
+      res.status(400).json({
+        success: false,
+        error: "INVALID_TX_FORMAT",
+        message: "Transaction hash must be a 66-character hex string starting with 0x."
+      });
+      return;
+    }
+    const requestedAsset = (asset || "USDT").toUpperCase() === "BNB" ? "BNB" : "USDT";
+    const db = await getDb();
+    const existing = await db.query(
+      `SELECT id, user_id, status, amount, asset FROM blockchain_deposits WHERE LOWER(tx_hash) = $1 LIMIT 1`,
+      [cleanTxHash]
+    );
+    if (existing.rows.length > 0) {
+      const row = existing.rows[0];
+      if (row.status === "CREDITED") {
+        res.status(409).json({
+          success: false,
+          error: "TX_ALREADY_CREDITED",
+          message: "This transaction hash has already been credited to an account."
+        });
+        return;
+      }
+    }
+    const provider = bscRpcManager.getProvider();
+    let receipt = null;
+    let tx = null;
+    try {
+      receipt = await provider.getTransactionReceipt(cleanTxHash);
+      tx = await provider.getTransaction(cleanTxHash);
+    } catch (rpcErr) {
+      console.warn("[Deposit API] RPC error querying tx:", rpcErr);
+    }
+    if (!receipt || !tx) {
+      res.status(404).json({
+        success: false,
+        error: "TX_NOT_FOUND",
+        message: "Transaction not found on BNB Smart Chain yet. Please wait a few seconds for BSC miners to process the transaction and try again."
+      });
+      return;
+    }
+    if (receipt.status !== 1) {
+      res.status(400).json({
+        success: false,
+        error: "TX_FAILED_ON_CHAIN",
+        message: "This transaction failed or was reverted on the BNB Smart Chain blockchain."
+      });
+      return;
+    }
+    const currentBlock = await provider.getBlockNumber();
+    const blockNumber = receipt.blockNumber;
+    const confirmations = Math.max(1, currentBlock - blockNumber + 1);
+    const treasury = (BSC_CONFIG.TREASURY_WALLET_ADDRESS || process.env.TREASURY_WALLET_ADDRESS || "").toLowerCase();
+    let detectedAmount = 0;
+    let detectedAsset = requestedAsset;
+    let fromAddress = tx.from.toLowerCase();
+    let toAddress = "";
+    const transferEventSignature = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
+    const usdtContractLower = BSC_CONFIG.USDT_CONTRACT_ADDRESS.toLowerCase();
+    for (const log of receipt.logs) {
+      if (log.topics[0] === transferEventSignature && log.topics.length >= 3) {
+        const logContract = log.address.toLowerCase();
+        const recipientTopic = "0x" + log.topics[2].slice(26);
+        const recipientAddress = recipientTopic.toLowerCase();
+        if (recipientAddress === treasury || logContract === usdtContractLower) {
+          try {
+            const rawAmount = BigInt(log.data);
+            const formatted = Number(ethers9.formatUnits(rawAmount, 18));
+            if (formatted > 0) {
+              detectedAmount = formatted;
+              detectedAsset = "USDT";
+              toAddress = recipientAddress;
+              fromAddress = ("0x" + log.topics[1].slice(26)).toLowerCase();
+              break;
+            }
+          } catch (parseErr) {
+            console.error("[Deposit API] Error parsing ERC-20 transfer log:", parseErr);
+          }
+        }
+      }
+    }
+    if (detectedAmount === 0 && tx.value > 0n) {
+      const recipientAddress = (tx.to || "").toLowerCase();
+      if (!treasury || recipientAddress === treasury) {
+        detectedAmount = Number(ethers9.formatEther(tx.value));
+        detectedAsset = "BNB";
+        toAddress = recipientAddress;
+      }
+    }
+    if (detectedAmount <= 0) {
+      res.status(400).json({
+        success: false,
+        error: "NO_VALID_TRANSFER",
+        message: `No qualifying ${requestedAsset} transfer to the platform treasury was found in this transaction. Please ensure you sent to the correct address.`
+      });
+      return;
+    }
+    const depositId = uuidv423();
+    const publicDepositId = generateDepositPublicId();
+    const now = /* @__PURE__ */ new Date();
+    await db.query(
+      `
+      INSERT INTO blockchain_deposits (
+        id, public_deposit_id, user_id, chain_id, asset,
+        tx_hash, log_index, from_address, to_address, amount, block_number,
+        confirmations, status, detected_at, confirmed_at, credited_at, created_at, updated_at
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'CREDITED', $13, $13, $13, $13, $13)
+      ON CONFLICT (chain_id, tx_hash, log_index, to_address) DO UPDATE
+        SET status = 'CREDITED',
+            credited_at = EXCLUDED.credited_at,
+            updated_at = CURRENT_TIMESTAMP
+      `,
+      [
+        depositId,
+        publicDepositId,
+        userId,
+        BSC_CONFIG.CHAIN_ID,
+        detectedAsset,
+        cleanTxHash,
+        0,
+        fromAddress,
+        toAddress || treasury,
+        detectedAmount,
+        blockNumber,
+        confirmations,
+        now
+      ]
+    );
+    await postLedgerCredit({
+      userId,
+      sourceType: "BLOCKCHAIN_DEPOSIT",
+      sourceId: depositId,
+      sourceRef: publicDepositId,
+      amount: detectedAmount,
+      description: `On-chain ${detectedAsset} deposit verified via TxHash ${cleanTxHash.slice(0, 10)}...`,
+      currency: detectedAsset
+    });
+    try {
+      await notifyUsdtDepositConfirmed({
+        userId,
+        amountUsdt: detectedAmount,
+        depositId,
+        txHash: cleanTxHash
+      });
+    } catch {
+    }
+    res.status(200).json({
+      success: true,
+      message: `Deposit verified successfully! Credited ${detectedAmount} ${detectedAsset} to your account.`,
+      data: {
+        publicDepositId,
+        amount: detectedAmount,
+        asset: detectedAsset,
+        txHash: cleanTxHash,
+        confirmations,
+        status: "CREDITED"
+      }
+    });
+  } catch (err) {
+    console.error("[Deposit API] Error processing submitted TxHash:", err);
+    res.status(500).json({
+      success: false,
+      error: "VERIFICATION_ERROR",
+      message: err?.message || "Failed to verify transaction hash."
     });
   }
 });
@@ -13674,7 +13881,7 @@ import { Router as Router17 } from "express";
 // src/server/services/coinSwapService.ts
 init_db();
 init_idGenerator();
-import { v4 as uuidv423 } from "uuid";
+import { v4 as uuidv424 } from "uuid";
 var userSwapLocks = /* @__PURE__ */ new Map();
 async function runWithUserLock(userId, fn) {
   const currentLock = userSwapLocks.get(userId) || Promise.resolve();
@@ -13820,7 +14027,7 @@ async function executeCoinToUsdtSwap(params) {
     if (usdtAmount <= 0) {
       throw new Error("INVALID_SWAP_CALCULATION: Resulting USDT amount must be greater than zero.");
     }
-    const id = uuidv423();
+    const id = uuidv424();
     const publicSwapId = generateSwapPublicId();
     const now = /* @__PURE__ */ new Date();
     const insertRes = await db.query(

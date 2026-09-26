@@ -12,9 +12,19 @@ env:
     value: "production"
   - variable: BSC_CHAIN_ID
     value: "56"
-  - variable: DEPOSIT_CONFIRMATIONS
-    value: "3"
+  - variable: BSC_RPC_URL_PRIMARY
+    value: "https://bsc-dataseed.binance.org"
+  - variable: BSC_RPC_URL_SECONDARY
+    value: "https://bsc-dataseed1.defibit.io"
   - variable: USDT_CONTRACT_ADDRESS
     value: "0x55d398326f99059ff775485246999027b3197955"
+  - variable: DEPOSIT_CONFIRMATIONS
+    value: "3"
   - variable: WITHDRAWALS_ENABLED
     value: "false"
+
+  # Production Secrets managed in Google Secret Manager & Firebase App Hosting:
+  - variable: DATABASE_URL
+    secret: DATABASE_URL
+  - variable: TREASURY_WALLET_ADDRESS
+    secret: TREASURY_WALLET_ADDRESS

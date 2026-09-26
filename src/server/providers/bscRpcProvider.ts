@@ -65,6 +65,10 @@ class BscRpcProviderManager {
     return this.secondaryProvider;
   }
 
+  public getProvider(): ethers.JsonRpcProvider {
+    return this.primaryHealthy ? this.primaryProvider : this.secondaryProvider;
+  }
+
   /**
    * Execute an async RPC operation with automatic primary-to-secondary failover.
    */
