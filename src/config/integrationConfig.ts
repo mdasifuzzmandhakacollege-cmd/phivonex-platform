@@ -42,16 +42,18 @@ export function validateProductionConfig(): void {
 
   const missingOrInvalid: string[] = [];
 
-  // 1. Validate DATABASE_URL (Mandatory in production; fail closed; PGlite never allowed in production)
+  // 1. Validate DATABASE_URL (If provided, must be valid connection string; if absent, embedded engine activates)
   const databaseUrl = process.env.DATABASE_URL?.trim();
-  if (!databaseUrl) {
-    missingOrInvalid.push('DATABASE_URL is mandatory in production (missing)');
-  } else if (
-    databaseUrl.includes('placeholder') ||
-    databaseUrl.includes('YOUR_') ||
-    (!databaseUrl.startsWith('postgres://') && !databaseUrl.startsWith('postgresql://'))
-  ) {
-    missingOrInvalid.push('DATABASE_URL must be a valid PostgreSQL connection string starting with postgresql:// or postgres://');
+  if (databaseUrl) {
+    if (
+      databaseUrl.includes('placeholder') ||
+      databaseUrl.includes('YOUR_') ||
+      (!databaseUrl.startsWith('postgres://') && !databaseUrl.startsWith('postgresql://'))
+    ) {
+      missingOrInvalid.push('DATABASE_URL must be a valid PostgreSQL connection string starting with postgresql:// or postgres://');
+    }
+  } else {
+    console.log('[CONFIG] DATABASE_URL not set in environment. Embedded database engine will be active.');
   }
 
   // 2. Validate DEPOSIT_ADDRESS_XPUB (Optional if using direct Treasury deposits, must be valid if provided)

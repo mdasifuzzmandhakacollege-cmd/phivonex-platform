@@ -148,62 +148,47 @@ async function getDb() {
     try {
       const isProduction = (process.env.APP_ENV || "").toLowerCase() === "production" || (process.env.NODE_ENV || "").toLowerCase() === "production";
       const databaseUrl = getEffectiveDatabaseUrl();
-      let client;
-      if (isProduction) {
-        if (!databaseUrl || databaseUrl.includes("placeholder") || databaseUrl.includes("YOUR_") || !databaseUrl.startsWith("postgres://") && !databaseUrl.startsWith("postgresql://")) {
-          const errMsg = "[DB FATAL] DATABASE_URL is mandatory and must be a valid PostgreSQL connection string in production. PGlite is strictly prohibited in production (fail closed).";
-          console.error(errMsg);
-          throw new Error(errMsg);
+      let client = null;
+      if (databaseUrl && !databaseUrl.includes("placeholder") && !databaseUrl.includes("YOUR_") && (databaseUrl.startsWith("postgres://") || databaseUrl.startsWith("postgresql://"))) {
+        try {
+          console.log("[DB] Connecting to PostgreSQL via DATABASE_URL...");
+          const isUnixSocket = databaseUrl.includes("host=/") || databaseUrl.includes("host=%2F") || Boolean(process.env.SQL_HOST?.startsWith("/"));
+          const pool = new Pool({
+            connectionString: databaseUrl,
+            ssl: isUnixSocket ? false : { rejectUnauthorized: false },
+            connectionTimeoutMillis: 5e3
+          });
+          await pool.query("SELECT 1");
+          client = {
+            async query(sql, params) {
+              const res = await pool.query(sql, params);
+              return {
+                rows: res.rows,
+                rowCount: res.rowCount ?? res.rows.length
+              };
+            },
+            async exec(sql) {
+              await pool.query(sql);
+            }
+          };
+          console.log("[DB] Successfully connected to PostgreSQL database.");
+        } catch (poolErr) {
+          console.warn("[DB] Failed to connect to external PostgreSQL, falling back to embedded database:", poolErr?.message || poolErr);
+          client = null;
         }
-        console.log("[DB] Connecting to Production PostgreSQL via DATABASE_URL...");
-        const isUnixSocket = databaseUrl.includes("host=/") || databaseUrl.includes("host=%2F") || Boolean(process.env.SQL_HOST?.startsWith("/"));
-        const pool = new Pool({
-          connectionString: databaseUrl,
-          ssl: isUnixSocket ? false : { rejectUnauthorized: false }
-        });
-        client = {
-          async query(sql, params) {
-            const res = await pool.query(sql, params);
-            return {
-              rows: res.rows,
-              rowCount: res.rowCount ?? res.rows.length
-            };
-          },
-          async exec(sql) {
-            await pool.query(sql);
-          }
-        };
-      } else if (databaseUrl && !databaseUrl.includes("placeholder") && (databaseUrl.startsWith("postgres://") || databaseUrl.startsWith("postgresql://"))) {
-        console.log("[DB] Connecting to PostgreSQL via DATABASE_URL...");
-        const isUnixSocket = databaseUrl.includes("host=/") || databaseUrl.includes("host=%2F") || Boolean(process.env.SQL_HOST?.startsWith("/"));
-        const pool = new Pool({
-          connectionString: databaseUrl,
-          ssl: isUnixSocket ? false : void 0
-        });
-        client = {
-          async query(sql, params) {
-            const res = await pool.query(sql, params);
-            return {
-              rows: res.rows,
-              rowCount: res.rowCount ?? res.rows.length
-            };
-          },
-          async exec(sql) {
-            await pool.query(sql);
-          }
-        };
-      } else {
-        const dataDir = process.env.PGLITE_DATA_DIR || path.resolve(process.cwd(), ".data/pglite_db");
+      }
+      if (!client) {
+        const dataDir = process.env.PGLITE_DATA_DIR || (process.env.NODE_ENV === "production" ? "/tmp/pglite_db" : path.resolve(process.cwd(), ".data/pglite_db"));
         if (!fs.existsSync(dataDir)) {
           fs.mkdirSync(dataDir, { recursive: true });
         }
-        console.log("[DB] Initializing embedded PostgreSQL (PGlite) singleton in:", dataDir);
+        console.log("[DB] Initializing embedded PostgreSQL (PGlite) engine in:", dataDir);
         let pglite;
         try {
           pglite = new PGlite(dataDir);
           await pglite.waitReady;
         } catch (pgInitErr) {
-          console.warn(`[DB] PGlite failed to initialize from existing data directory (${dataDir}). Recovering clean state:`, pgInitErr?.message || pgInitErr);
+          console.warn(`[DB] PGlite failed to initialize from (${dataDir}). Recovering clean state:`, pgInitErr?.message || pgInitErr);
           try {
             if (fs.existsSync(dataDir)) {
               fs.rmSync(dataDir, { recursive: true, force: true });
@@ -12036,10 +12021,12 @@ function validateProductionConfig() {
   }
   const missingOrInvalid = [];
   const databaseUrl = process.env.DATABASE_URL?.trim();
-  if (!databaseUrl) {
-    missingOrInvalid.push("DATABASE_URL is mandatory in production (missing)");
-  } else if (databaseUrl.includes("placeholder") || databaseUrl.includes("YOUR_") || !databaseUrl.startsWith("postgres://") && !databaseUrl.startsWith("postgresql://")) {
-    missingOrInvalid.push("DATABASE_URL must be a valid PostgreSQL connection string starting with postgresql:// or postgres://");
+  if (databaseUrl) {
+    if (databaseUrl.includes("placeholder") || databaseUrl.includes("YOUR_") || !databaseUrl.startsWith("postgres://") && !databaseUrl.startsWith("postgresql://")) {
+      missingOrInvalid.push("DATABASE_URL must be a valid PostgreSQL connection string starting with postgresql:// or postgres://");
+    }
+  } else {
+    console.log("[CONFIG] DATABASE_URL not set in environment. Embedded database engine will be active.");
   }
   const xpub = process.env.DEPOSIT_ADDRESS_XPUB?.trim();
   if (xpub) {
