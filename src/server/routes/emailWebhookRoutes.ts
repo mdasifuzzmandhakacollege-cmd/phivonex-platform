@@ -89,8 +89,16 @@ export function verifyCryptographicSignature(
  */
 emailWebhookRouter.post('/', async (req: Request, res: Response) => {
   try {
-    const secret = process.env.EMAIL_WEBHOOK_SECRET || 'test_secret_key';
-    const rawBody = JSON.stringify(req.body);
+    const isTest = process.env.NODE_ENV === 'test';
+    const secret = process.env.EMAIL_WEBHOOK_SECRET || (isTest ? 'test_secret_key' : '');
+
+    if (!secret) {
+      console.error('[Webhook API] Missing EMAIL_WEBHOOK_SECRET in production/staging. Failing closed.');
+      return res.status(401).json({ error: 'UNAUTHORIZED', message: 'Webhook configuration error. Request rejected.' });
+    }
+
+    // Capture exact raw HTTP request body bytes
+    const rawBody = (req as any).rawBody || JSON.stringify(req.body);
 
     const isAuthorized = verifyCryptographicSignature(rawBody, req.headers as any, secret);
 

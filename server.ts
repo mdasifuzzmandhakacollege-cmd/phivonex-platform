@@ -41,7 +41,12 @@ async function startServer() {
   app.use(securityHeadersMiddleware);
 
   // 2. Body and cookie parsing with payload limit
-  app.use(express.json({ limit: '1mb' }));
+  app.use(express.json({
+    limit: '1mb',
+    verify: (req: any, res, buf) => {
+      req.rawBody = buf.toString('utf-8');
+    }
+  }));
   app.use(cookieParser());
 
   // 3. CSRF & untrusted origin protection for state-changing operations

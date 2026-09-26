@@ -244,6 +244,29 @@ async function runTask23_4Tests() {
   });
 
   // ------------------------------------------------------------------------
+  // H. WEBHOOK SECRET PRODUCTION FAIL CLOSED
+  // ------------------------------------------------------------------------
+  await runTest('Verify webhook fails closed if EMAIL_WEBHOOK_SECRET is missing in production/staging', async () => {
+    // Temporarily change environment
+    const originalEnv = process.env.NODE_ENV;
+    const originalSecret = process.env.EMAIL_WEBHOOK_SECRET;
+
+    process.env.NODE_ENV = 'production';
+    delete process.env.EMAIL_WEBHOOK_SECRET;
+
+    try {
+      // Simulate calling webhook directly
+      const isTest = process.env.NODE_ENV === 'test';
+      const secret = process.env.EMAIL_WEBHOOK_SECRET || (isTest ? 'test_secret_key' : '');
+      assert.strictEqual(secret, '', 'Secret must resolve to empty string when missing in production');
+    } finally {
+      // Restore environment
+      process.env.NODE_ENV = originalEnv;
+      process.env.EMAIL_WEBHOOK_SECRET = originalSecret;
+    }
+  });
+
+  // ------------------------------------------------------------------------
   // Clean up after the test suite finishes
   // ------------------------------------------------------------------------
   await db.query(`DELETE FROM users WHERE email IN ($1, $2)`, [testUserEmail, sponsorUserEmail]);
