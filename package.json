@@ -7,7 +7,7 @@
     "dev": "tsx server.ts",
     "build": "vite build",
     "start": "tsx server.ts",
-    "test": "tsx scripts/test-auth.ts && tsx scripts/test-task6-nodes.ts && tsx scripts/test-task10-volume.ts && tsx scripts/test-task14-rewards.ts && tsx scripts/test-task17-withdrawals.ts && tsx scripts/test-task18-admin.ts && tsx scripts/test-task17-1-bsc.ts && tsx scripts/test-task20-notifications.ts && tsx scripts/test-task21-reconciliation.ts && tsx scripts/test-task22-security.ts && tsx scripts/test-task23-e2e.ts",
+    "test": "tsx scripts/test-auth.ts && tsx scripts/test-task6-nodes.ts && tsx scripts/test-task10-volume.ts && tsx scripts/test-task14-rewards.ts && tsx scripts/test-task17-withdrawals.ts && tsx scripts/test-task18-admin.ts && tsx scripts/test-task17-1-bsc.ts && tsx scripts/test-task20-notifications.ts && tsx scripts/test-task21-reconciliation.ts && tsx scripts/test-task22-security.ts && tsx scripts/test-task23-e2e.ts && tsx scripts/test-task23-3a-matching.ts && tsx scripts/test-task23-3b-promotional.ts && tsx scripts/test-task23-4-email.ts",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit"

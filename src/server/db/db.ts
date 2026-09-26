@@ -984,8 +984,12 @@ async function initSchema(client: DatabaseClient) {
           provider_message_id VARCHAR(255) NULL,
           error_message TEXT NULL,
           sent_at TIMESTAMP WITH TIME ZONE NULL,
+          scheduled_send_at TIMESTAMP WITH TIME ZONE NULL,
           created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
         );
+
+        -- Ensure column exists for already created tables
+        ALTER TABLE email_queue ADD COLUMN IF NOT EXISTS scheduled_send_at TIMESTAMP WITH TIME ZONE NULL;
 
         CREATE TABLE IF NOT EXISTS automation_rules (
           id UUID PRIMARY KEY,

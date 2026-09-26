@@ -1,27 +1,21 @@
 {
   "entities": {
-    "UserProfile": {
-      "title": "User Profile",
-      "description": "Registered PHIVONEX operator and user accounts",
+    "UserSession": {
+      "title": "User Session",
+      "description": "Transient user session metadata cache",
       "type": "object",
       "properties": {
-        "uid": { "type": "string", "description": "Firebase Auth UID" },
-        "fullName": { "type": "string", "description": "User legal full name" },
-        "email": { "type": "string", "format": "email", "description": "Primary email address" },
-        "phone": { "type": "string", "description": "Mobile contact number with country code" },
-        "country": { "type": "string", "description": "Country of residence" },
-        "referralCode": { "type": "string", "description": "User own referral code" },
-        "referredBy": { "type": "string", "description": "Sponsor referral code" },
-        "role": { "type": "string", "enum": ["user", "admin"], "description": "Account role" },
-        "createdAt": { "type": "string", "format": "date-time", "description": "Timestamp created" }
+        "userId": { "type": "string", "description": "Unique identifier of the user" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "active": { "type": "boolean" }
       },
-      "required": ["uid", "fullName", "email", "createdAt"]
+      "required": ["userId", "createdAt", "active"]
     }
   },
   "firestore": {
-    "/users/{userId}": {
-      "schema": "UserProfile",
-      "description": "User profile documents keyed by Auth UID"
+    "/sessions/{sessionId}": {
+      "schema": "UserSession",
+      "description": "Collection storing transient user session logs"
     }
   }
 }

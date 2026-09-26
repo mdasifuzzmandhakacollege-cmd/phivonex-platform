@@ -104,7 +104,8 @@ export interface AutomationRule {
 export async function queueEventEmail(
   toEmail: string,
   eventName: string,
-  templateData: Record<string, string>
+  templateData: Record<string, string>,
+  scheduledSendAt?: Date
 ): Promise<string> {
   const db = await getDb();
 
@@ -133,10 +134,10 @@ export async function queueEventEmail(
   const queueId = uuidv4();
   await db.query(
     `
-    INSERT INTO email_queue (id, to_email, subject, body_html, status)
-    VALUES ($1, $2, $3, $4, 'QUEUED')
+    INSERT INTO email_queue (id, to_email, subject, body_html, status, scheduled_send_at)
+    VALUES ($1, $2, $3, $4, 'QUEUED', $5)
     `,
-    [queueId, toEmail, subject, bodyHtml]
+    [queueId, toEmail, subject, bodyHtml, scheduledSendAt || null]
   );
 
   // Trigger non-blocking async execution
@@ -153,9 +154,11 @@ export async function queueEventEmail(
 export async function processEmailQueue(): Promise<void> {
   const db = await getDb();
 
-  // Find all queued messages
+  // Find all queued messages that are scheduled for now or earlier (or not scheduled)
   const res = await db.query(
-    `SELECT * FROM email_queue WHERE status = 'QUEUED' ORDER BY created_at ASC`
+    `SELECT * FROM email_queue 
+     WHERE status = 'QUEUED' AND (scheduled_send_at IS NULL OR scheduled_send_at <= CURRENT_TIMESTAMP) 
+     ORDER BY created_at ASC`
   );
 
   if (res.rows.length === 0) {
@@ -263,7 +266,12 @@ export async function triggerAutomationRule(
       ...templateData
     };
 
-    await queueEventEmail(user.email, eventName, mergedData);
+    // Calculate delay hour offset
+    const scheduledSendAt = rule.delay_hours > 0 
+      ? new Date(Date.now() + rule.delay_hours * 60 * 60 * 1000)
+      : undefined;
+
+    await queueEventEmail(user.email, eventName, mergedData, scheduledSendAt);
 
     // 4. Update Cooldown record
     await db.query(

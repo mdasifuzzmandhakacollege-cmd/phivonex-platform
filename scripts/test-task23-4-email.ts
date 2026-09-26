@@ -166,6 +166,84 @@ async function runTask23_4Tests() {
   });
 
   // ------------------------------------------------------------------------
+  // F. WEBHOOK CRYPTOGRAPHIC SIGNATURE VERIFICATION
+  // ------------------------------------------------------------------------
+  await runTest('Verify webhook cryptographic signature validation works and fails closed on bad signature', async () => {
+    const { verifyCryptographicSignature } = await import('../src/server/routes/emailWebhookRoutes');
+
+    const rawBody = JSON.stringify({ messageId: 'msg_123', status: 'delivered' });
+    const secret = 'test_webhook_secret_key';
+
+    const timestamp = Math.floor(Date.now() / 1000).toString();
+    const svixId = 'msg_id_123';
+
+    // Calculate valid HMAC-SHA256 signature
+    const crypto = await import('crypto');
+    const hmac = crypto.createHmac('sha256', secret);
+    hmac.update(`${svixId}.${timestamp}.${rawBody}`);
+    const validSignature = `v1,${hmac.digest('hex')}`;
+
+    // Test with correct credentials
+    const headersValid = {
+      'svix-id': svixId,
+      'svix-timestamp': timestamp,
+      'svix-signature': validSignature
+    };
+
+    const resultValid = verifyCryptographicSignature(rawBody, headersValid, secret);
+    assert.strictEqual(resultValid, true, 'Cryptographically correct signature must be successfully validated');
+
+    // Test with incorrect credentials (bad signature)
+    const headersInvalid = {
+      'svix-id': svixId,
+      'svix-timestamp': timestamp,
+      'svix-signature': 'v1,invalid_signature_hex'
+    };
+
+    const resultInvalid = verifyCryptographicSignature(rawBody, headersInvalid, secret);
+    assert.strictEqual(resultInvalid, false, 'Invalid signature must be strictly rejected (fail closed)');
+  });
+
+  // ------------------------------------------------------------------------
+  // G. DELAY HOURS ENFORCEMENT
+  // ------------------------------------------------------------------------
+  await runTest('Verify automation rule delayHours delays sending', async () => {
+    // 1. Fetch template
+    const templates = await getEmailTemplates();
+    const welcomeTemplate = templates.find(t => t.eventName === 'WELCOME');
+    assert(welcomeTemplate, 'Default WELCOME template must be seeded');
+
+    // 2. Create an automation rule with 5 hours delay
+    const delayedRule = await createAutomationRule(sponsorUserId, 'U_SPONSOR', {
+      name: 'Delayed Growth Automation',
+      enabled: true,
+      triggerCriteria: 'STRONG_GROWTH',
+      delayHours: 5, // 5 hours delay
+      cooldownDays: 0,
+      templateId: welcomeTemplate.id
+    });
+
+    // 3. Trigger it
+    const triggered = await triggerAutomationRule(testUserId, 'STRONG_GROWTH', {
+      amount: '5000'
+    });
+    assert.strictEqual(triggered, true, 'Rule with delay should trigger successfully');
+
+    // 4. Verify in outbox that it is NOT processed immediately by processEmailQueue (due to scheduled_send_at being in the future)
+    const pendingRes = await db.query(
+      `SELECT * FROM email_queue WHERE to_email = $1 AND status = 'QUEUED' AND scheduled_send_at IS NOT NULL`,
+      [testUserEmail]
+    );
+    assert.strictEqual(pendingRes.rows.length, 1, 'Should find 1 queued email with future scheduled_send_at');
+
+    const scheduledDate = new Date(pendingRes.rows[0].scheduled_send_at);
+    assert(scheduledDate.getTime() > Date.now() + 4 * 60 * 60 * 1000, 'scheduled_send_at must be scheduled approximately 5 hours in the future');
+
+    // Cleanup delayed rule
+    await db.query(`DELETE FROM automation_rules WHERE id = $1`, [delayedRule.id]);
+  });
+
+  // ------------------------------------------------------------------------
   // Clean up after the test suite finishes
   // ------------------------------------------------------------------------
   await db.query(`DELETE FROM users WHERE email IN ($1, $2)`, [testUserEmail, sponsorUserEmail]);
