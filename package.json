@@ -3,6 +3,9 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "engines": {
+    "node": ">=20.0.0"
+  },
   "scripts": {
     "dev": "tsx server.ts",
     "build:client": "vite build",
@@ -35,6 +38,7 @@
     "qrcode.react": "^4.2.0",
     "react": "^19.0.1",
     "react-dom": "^19.0.1",
+    "react-is": "^19.0.1",
     "recharts": "^3.10.1",
     "uuid": "^14.0.2",
     "vite": "^8.3.0"
