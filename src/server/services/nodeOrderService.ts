@@ -644,6 +644,36 @@ export async function settleNodeOrder(
     console.warn('[PublicEvent] Could not broadcast public node activation event:', pubErr);
   }
 
+  // Task #23.4: Send NODE_ACTIVATION email and trigger potential automation rules
+  try {
+    const userRes = await db.query<{ email: string; full_name: string; public_id: string }>(
+      `SELECT email, full_name, public_id FROM users WHERE id = $1`,
+      [order.user_id]
+    );
+    if (userRes.rowCount > 0) {
+      const user = userRes.rows[0];
+      const { queueEventEmail, triggerAutomationRule } = await import('./emailService');
+      
+      // Queue email
+      await queueEventEmail(user.email, 'NODE_ACTIVATION', {
+        displayName: user.full_name,
+        publicId: user.public_id,
+        nodeNumber: String(finalNode.node_number),
+        publicNodeId: finalNode.public_node_id,
+        amount: String(finalOrder.amount_usd)
+      });
+
+      // Trigger automation rule check for NODE_SALES
+      await triggerAutomationRule(order.user_id, 'NODE_SALES', {
+        nodeNumber: String(finalNode.node_number),
+        publicNodeId: finalNode.public_node_id,
+        amount: String(finalOrder.amount_usd)
+      });
+    }
+  } catch (emailErr) {
+    console.warn('[EmailEngine] Failed to send Node Activation email/automation trigger:', emailErr);
+  }
+
   return {
     order: {
       publicOrderId: finalOrder.public_order_id,

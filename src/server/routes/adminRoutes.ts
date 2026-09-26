@@ -24,6 +24,15 @@ import {
   updateMatchingConfig,
   getMatchingConfigAuditLogs
 } from '../services/binaryMatchingService';
+import {
+  getEmailTemplates,
+  updateEmailTemplate,
+  sendBroadcastCampaign,
+  getAutomationRules,
+  createAutomationRule,
+  updateAutomationRule,
+  deleteAutomationRule
+} from '../services/emailService';
 
 export const adminRouter = Router();
 
@@ -460,4 +469,162 @@ adminRouter.get('/reconciliation/issues', async (req: AuthRequest, res: Response
     });
   }
 });
+
+// ----------------------------------------------------------------------------
+// ADMIN DYNAMIC EMAIL & TEMPLATES MANAGEMENT
+// ----------------------------------------------------------------------------
+
+/**
+ * GET /api/admin/email/templates
+ * Retrieves all email templates (admin-only).
+ */
+adminRouter.get('/email/templates', async (req: AuthRequest, res: Response) => {
+  try {
+    const templates = await getEmailTemplates();
+    return res.status(200).json({ success: true, templates });
+  } catch (err: any) {
+    console.error('[Admin API] Error retrieving email templates:', err);
+    return res.status(500).json({ error: 'SERVER_ERROR', message: 'Failed to retrieve email templates.' });
+  }
+});
+
+/**
+ * PUT /api/admin/email/templates/:id
+ * Updates an existing email template (admin-only).
+ */
+adminRouter.put('/email/templates/:id', async (req: AuthRequest, res: Response) => {
+  try {
+    const admin = req.user!;
+    const { id } = req.params;
+    const { subject, bodyHtml, enabled } = req.body || {};
+
+    if (!subject || !bodyHtml || typeof enabled !== 'boolean') {
+      return res.status(400).json({ error: 'INVALID_INPUT', message: 'Subject, bodyHtml, and enabled are required.' });
+    }
+
+    const updated = await updateEmailTemplate(admin.id, admin.public_id, id, { subject, bodyHtml, enabled });
+    return res.status(200).json({ success: true, template: updated });
+  } catch (err: any) {
+    console.error('[Admin API] Error updating email template:', err);
+    return res.status(500).json({ error: 'SERVER_ERROR', message: 'Failed to update email template.' });
+  }
+});
+
+/**
+ * POST /api/admin/email/campaign
+ * Sends an on-demand broadcast campaign to target audiences (admin-only).
+ */
+adminRouter.post('/email/campaign', async (req: AuthRequest, res: Response) => {
+  try {
+    const admin = req.user!;
+    const { subject, bodyHtml, audience } = req.body || {};
+
+    if (!subject || !bodyHtml || !audience || !['ALL', 'ACTIVE_USERS', 'NODE_HOLDERS'].includes(audience)) {
+      return res.status(400).json({ error: 'INVALID_INPUT', message: 'Subject, bodyHtml, and a valid audience are required.' });
+    }
+
+    const result = await sendBroadcastCampaign(admin.id, admin.public_id, { subject, bodyHtml, audience });
+    return res.status(200).json({ success: true, queuedCount: result.queuedCount });
+  } catch (err: any) {
+    console.error('[Admin API] Error broadcasting email campaign:', err);
+    return res.status(500).json({ error: 'SERVER_ERROR', message: 'Failed to dispatch email campaign.' });
+  }
+});
+
+// ----------------------------------------------------------------------------
+// ADMIN AUTOMATED PERFORMANCE FOLLOW-UP RULES
+// ----------------------------------------------------------------------------
+
+/**
+ * GET /api/admin/email/automation
+ * Retrieves all configured automated performance follow-up rules (admin-only).
+ */
+adminRouter.get('/email/automation', async (req: AuthRequest, res: Response) => {
+  try {
+    const rules = await getAutomationRules();
+    return res.status(200).json({ success: true, rules });
+  } catch (err: any) {
+    console.error('[Admin API] Error retrieving automation rules:', err);
+    return res.status(500).json({ error: 'SERVER_ERROR', message: 'Failed to retrieve automation rules.' });
+  }
+});
+
+/**
+ * POST /api/admin/email/automation
+ * Creates a new performance follow-up rule (admin-only).
+ */
+adminRouter.post('/email/automation', async (req: AuthRequest, res: Response) => {
+  try {
+    const admin = req.user!;
+    const { name, enabled, triggerCriteria, delayHours, cooldownDays, templateId } = req.body || {};
+
+    if (!name || typeof enabled !== 'boolean' || !triggerCriteria || typeof delayHours !== 'number' || typeof cooldownDays !== 'number' || !templateId) {
+      return res.status(400).json({ error: 'INVALID_INPUT', message: 'All rule configuration parameters are required.' });
+    }
+
+    const created = await createAutomationRule(admin.id, admin.public_id, {
+      name,
+      enabled,
+      triggerCriteria,
+      delayHours,
+      cooldownDays,
+      templateId
+    });
+
+    return res.status(201).json({ success: true, rule: created });
+  } catch (err: any) {
+    console.error('[Admin API] Error creating automation rule:', err);
+    return res.status(500).json({ error: 'SERVER_ERROR', message: 'Failed to create automation rule.' });
+  }
+});
+
+/**
+ * PUT /api/admin/email/automation/:id
+ * Updates an existing automation rule (admin-only).
+ */
+adminRouter.put('/email/automation/:id', async (req: AuthRequest, res: Response) => {
+  try {
+    const admin = req.user!;
+    const { id } = req.params;
+    const { name, enabled, triggerCriteria, delayHours, cooldownDays, templateId } = req.body || {};
+
+    if (!name || typeof enabled !== 'boolean' || !triggerCriteria || typeof delayHours !== 'number' || typeof cooldownDays !== 'number' || !templateId) {
+      return res.status(400).json({ error: 'INVALID_INPUT', message: 'All rule parameters are required.' });
+    }
+
+    const updated = await updateAutomationRule(admin.id, admin.public_id, id, {
+      name,
+      enabled,
+      triggerCriteria,
+      delayHours,
+      cooldownDays,
+      templateId
+    });
+
+    return res.status(200).json({ success: true, rule: updated });
+  } catch (err: any) {
+    console.error('[Admin API] Error updating automation rule:', err);
+    return res.status(500).json({ error: 'SERVER_ERROR', message: 'Failed to update automation rule.' });
+  }
+});
+
+/**
+ * DELETE /api/admin/email/automation/:id
+ * Deletes an automation rule (admin-only).
+ */
+adminRouter.delete('/email/automation/:id', async (req: AuthRequest, res: Response) => {
+  try {
+    const admin = req.user!;
+    const { id } = req.params;
+    const deleted = await deleteAutomationRule(admin.id, admin.public_id, id);
+    if (!deleted) {
+      return res.status(404).json({ error: 'NOT_FOUND', message: 'Automation rule not found.' });
+    }
+    return res.status(200).json({ success: true, id });
+  } catch (err: any) {
+    console.error('[Admin API] Error deleting automation rule:', err);
+    return res.status(500).json({ error: 'SERVER_ERROR', message: 'Failed to delete automation rule.' });
+  }
+});
+
 

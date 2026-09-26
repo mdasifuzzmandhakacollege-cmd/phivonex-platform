@@ -303,6 +303,28 @@ export async function executeCoinToUsdtSwap(params: {
       console.warn('[Notification] Error triggering coin swap notification:', notifErr);
     }
 
+    // Task #23.4: Send SWAP_COMPLETE email
+    try {
+      const userRes = await db.query<{ email: string; full_name: string; public_id: string }>(
+        `SELECT email, full_name, public_id FROM users WHERE id = $1`,
+        [userId]
+      );
+      if (userRes.rowCount > 0) {
+        const user = userRes.rows[0];
+        const { queueEventEmail } = await import('./emailService');
+        
+        await queueEventEmail(user.email, 'SWAP_COMPLETE', {
+          displayName: user.full_name,
+          publicId: user.public_id,
+          fromAmount: String(coinAmount),
+          toAmount: String(usdtAmount),
+          rate: String(rateUsdt)
+        });
+      }
+    } catch (emailErr) {
+      console.warn('[EmailEngine] Failed to send Swap Complete email:', emailErr);
+    }
+
     return {
       success: true,
       swap: {

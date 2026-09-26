@@ -318,6 +318,33 @@ export async function closeAndSettleEpoch(
     } catch (notifErr) {
       console.warn('[Notification] Error triggering node reward notification:', notifErr);
     }
+
+    // Task #23.4: Send REWARD email and trigger potential automation rules
+    try {
+      const userRes = await db.query<{ email: string; full_name: string; public_id: string }>(
+        `SELECT email, full_name, public_id FROM users WHERE id = $1`,
+        [node.owner_user_id]
+      );
+      if (userRes.rowCount > 0) {
+        const user = userRes.rows[0];
+        const { queueEventEmail, triggerAutomationRule } = await import('./emailService');
+        
+        await queueEventEmail(user.email, 'REWARD', {
+          displayName: user.full_name,
+          publicId: user.public_id,
+          amount: String(actualAmount),
+          epochId,
+          publicEpochId
+        });
+
+        // Trigger matching activity automation rule
+        await triggerAutomationRule(node.owner_user_id, 'MATCHING_ACTIVITY', {
+          amount: String(actualAmount)
+        });
+      }
+    } catch (emailErr) {
+      console.warn('[EmailEngine] Failed to send Reward email:', emailErr);
+    }
   }
 
   return {

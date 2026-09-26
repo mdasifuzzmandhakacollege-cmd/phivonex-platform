@@ -917,6 +917,112 @@ async function initSchema(client: DatabaseClient) {
       console.warn('[DB Migration] Task #23.3A Dynamic Matching schema migration warning:', task233AErr);
     }
 
+    // Task #23.3B: Dynamic Offers, Banners, and Settings Tables
+    try {
+      await client.exec(`
+        CREATE TABLE IF NOT EXISTS promotional_offers (
+          id UUID PRIMARY KEY,
+          title TEXT NOT NULL,
+          description TEXT NOT NULL,
+          banner_image TEXT NOT NULL,
+          start_date TIMESTAMP WITH TIME ZONE NOT NULL,
+          end_date TIMESTAMP WITH TIME ZONE NOT NULL,
+          status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE',
+          target_audience VARCHAR(20) NOT NULL DEFAULT 'ALL',
+          priority_order INTEGER NOT NULL DEFAULT 0,
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS promotional_banners (
+          id UUID PRIMARY KEY,
+          content TEXT NOT NULL,
+          image_url TEXT NOT NULL,
+          cta_text VARCHAR(100) NOT NULL,
+          cta_destination VARCHAR(255) NOT NULL,
+          display_order INTEGER NOT NULL DEFAULT 0,
+          status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE',
+          start_date TIMESTAMP WITH TIME ZONE NOT NULL,
+          end_date TIMESTAMP WITH TIME ZONE NOT NULL,
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS promotional_settings (
+          key VARCHAR(100) PRIMARY KEY,
+          value TEXT NOT NULL,
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        );
+
+        -- Seed default settings if they don't exist
+        INSERT INTO promotional_settings (key, value)
+        VALUES 
+          ('leaderboard_metric', '"DIRECT_REFERRALS"'),
+          ('performance_popup', '{"enabled":true,"metric":"DIRECT_REFERRALS","topCount":3,"durationSeconds":5}')
+        ON CONFLICT (key) DO NOTHING;
+      `);
+    } catch (task233BErr) {
+      console.warn('[DB Migration] Task #23.3B Promotional schema migration warning:', task233BErr);
+    }
+
+    // Task #23.4: Dynamic Email & Automation Engine Tables
+    try {
+      await client.exec(`
+        CREATE TABLE IF NOT EXISTS email_templates (
+          id UUID PRIMARY KEY,
+          event_name VARCHAR(100) UNIQUE NOT NULL,
+          subject TEXT NOT NULL,
+          body_html TEXT NOT NULL,
+          enabled BOOLEAN NOT NULL DEFAULT TRUE,
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS email_queue (
+          id UUID PRIMARY KEY,
+          to_email VARCHAR(255) NOT NULL,
+          subject TEXT NOT NULL,
+          body_html TEXT NOT NULL,
+          status VARCHAR(20) NOT NULL DEFAULT 'QUEUED',
+          provider_message_id VARCHAR(255) NULL,
+          error_message TEXT NULL,
+          sent_at TIMESTAMP WITH TIME ZONE NULL,
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS automation_rules (
+          id UUID PRIMARY KEY,
+          name VARCHAR(255) NOT NULL,
+          enabled BOOLEAN NOT NULL DEFAULT TRUE,
+          trigger_criteria VARCHAR(100) NOT NULL,
+          delay_hours INTEGER NOT NULL DEFAULT 0,
+          cooldown_days INTEGER NOT NULL DEFAULT 7,
+          template_id UUID NOT NULL REFERENCES email_templates(id) ON DELETE CASCADE,
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS automation_cooldowns (
+          id UUID PRIMARY KEY,
+          user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          rule_id UUID NOT NULL REFERENCES automation_rules(id) ON DELETE CASCADE,
+          last_triggered_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          CONSTRAINT uq_user_rule UNIQUE (user_id, rule_id)
+        );
+
+        -- Seed default templates
+        INSERT INTO email_templates (id, event_name, subject, body_html, enabled)
+        VALUES 
+          ('e0011111-1111-1111-1111-111111111111', 'WELCOME', 'Welcome to Phivonex!', '<h1>Welcome to Phivonex</h1><p>Thank you for joining our elite node network.</p>', TRUE),
+          ('e0022222-2222-2222-2222-222222222222', 'REFERRAL_SIGNUP', 'New Referral Registration Notification', '<h1>New Referral Signup</h1><p>A user has registered using your referral code: {{displayName}} (ID: {{publicId}}).</p>', TRUE),
+          ('e0033333-3333-3333-3333-333333333333', 'NODE_ACTIVATION', 'Node Activation Successful', '<h1>Node Activated</h1><p>Your node has been successfully activated and has begun mining rewards.</p>', TRUE),
+          ('e0044444-4444-4444-4444-444444444444', 'DEPOSIT_CONFIRM', 'USDT Deposit Confirmed', '<h1>Deposit Confirmed</h1><p>Your deposit of {{amount}} USDT is completed.</p>', TRUE),
+          ('e0055555-5555-5555-5555-555555555555', 'REWARD', 'PHIVO Reward Accrued', '<h1>PHIVO Reward Accrued</h1><p>You have received a new PHIVO mining reward of {{amount}} PHIVO.</p>', TRUE),
+          ('e0066666-6666-6666-6666-666666666666', 'SWAP_COMPLETE', 'PHIVO to USDT Swap Completed', '<h1>Swap Successful</h1><p>Your swap of {{fromAmount}} PHIVO for {{toAmount}} USDT is complete.</p>', TRUE),
+          ('e0077777-7777-7777-7777-777777777777', 'WITHDRAWAL_STATUS', 'Withdrawal Request Update', '<h1>Withdrawal status updated</h1><p>Your withdrawal is now: {{status}}.</p>', TRUE),
+          ('e0088888-8888-8888-8888-888888888888', 'SECURITY_ALERT', 'Security Alert: Account Modified', '<h1>Security Alert</h1><p>Your account security parameters have been updated.</p>', TRUE)
+        ON CONFLICT (event_name) DO NOTHING;
+      `);
+    } catch (task234Err) {
+      console.warn('[DB Migration] Task #23.4 Email & Automation schema migration warning:', task234Err);
+    }
+
     // 3. Backfill existing users with missing public_id, user_referrals, and binary_placements
     await backfillExistingUsers(client);
 

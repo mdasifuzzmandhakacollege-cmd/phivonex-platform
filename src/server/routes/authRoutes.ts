@@ -190,6 +190,40 @@ router.post('/register', registrationLimiter, async (req: Request, res: Response
       userAgent,
     });
 
+    // Send Welcome and Sponsor Notifications via Email Automation Engine
+    try {
+      const { queueEventEmail } = await import('../services/emailService');
+      // Queue Welcome Email
+      await queueEventEmail(normalizedEmail, 'WELCOME', {
+        displayName: fullName.trim(),
+        publicId,
+        signupTime: new Date().toISOString()
+      });
+
+      // Queue Sponsor Notification
+      if (sponsorUserId) {
+        const sponsorRes = await db.query<{ email: string }>(
+          `SELECT email FROM users WHERE id = $1`,
+          [sponsorUserId]
+        );
+        if (sponsorRes.rowCount > 0) {
+          // Send privacy-safe sponsor notification containing only safe display name, public ID, and signup time.
+          const nameParts = fullName.trim().split(' ');
+          const safeDisplayName = nameParts.length > 1 
+            ? `${nameParts[0]} ${nameParts[nameParts.length - 1][0]}.` 
+            : nameParts[0];
+
+          await queueEventEmail(sponsorRes.rows[0].email, 'REFERRAL_SIGNUP', {
+            displayName: safeDisplayName,
+            publicId,
+            signupTime: new Date().toISOString()
+          });
+        }
+      }
+    } catch (emailErr) {
+      console.error('[Auth API] Failed to queue welcome/sponsor emails:', emailErr);
+    }
+
     setSessionCookie(res, rawSessionToken, true);
 
     res.status(201).json({

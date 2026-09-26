@@ -277,6 +277,34 @@ export async function processBlockchainDepositEvent(params: {
       } catch (notifErr) {
         console.warn('[Notification] Error triggering deposit confirmed notification:', notifErr);
       }
+
+      // Task #23.4: Send DEPOSIT_CONFIRM email and trigger potential automation rules
+      try {
+        const userRes = await db.query<{ email: string; full_name: string; public_id: string }>(
+          `SELECT email, full_name, public_id FROM users WHERE id = $1`,
+          [userId]
+        );
+        if (userRes.rowCount > 0) {
+          const user = userRes.rows[0];
+          const { queueEventEmail, triggerAutomationRule } = await import('./emailService');
+          
+          await queueEventEmail(user.email, 'DEPOSIT_CONFIRM', {
+            displayName: user.full_name,
+            publicId: user.public_id,
+            amount: String(depAmount),
+            txHash: cleanTxHash
+          });
+
+          // Trigger strong growth criteria trigger if deposit amount is significant (e.g. >= 100)
+          if (depAmount >= 100) {
+            await triggerAutomationRule(userId, 'STRONG_GROWTH', {
+              amount: String(depAmount)
+            });
+          }
+        }
+      } catch (emailErr) {
+        console.warn('[EmailEngine] Failed to send Deposit Confirmation email:', emailErr);
+      }
     }
 
     return mapRowToDepositRecord(depositRow);

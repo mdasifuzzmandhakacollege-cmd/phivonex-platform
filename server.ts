@@ -20,6 +20,7 @@ import { depositRouter } from './src/server/routes/depositRoutes';
 import { economicRouter } from './src/server/routes/economicRoutes';
 import { swapRouter } from './src/server/routes/swapRoutes';
 import { notificationRouter } from './src/server/routes/notificationRoutes';
+import { emailWebhookRouter } from './src/server/routes/emailWebhookRoutes';
 import { getDb } from './src/server/db/db';
 import { startMatchingScheduler } from './src/server/services/binaryMatchingScheduler';
 import {
@@ -92,6 +93,7 @@ async function startServer() {
   app.use('/api/swap', swapRouter);
   app.use('/api/notifications', notificationRouter);
   app.use('/api/admin/economics', economicRouter);
+  app.use('/api/webhooks/email', emailWebhookRouter);
   app.use('/api/admin', adminRouter);
 
   // Health check

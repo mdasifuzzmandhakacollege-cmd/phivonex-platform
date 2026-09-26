@@ -204,6 +204,28 @@ export async function createWithdrawalRequest(params: {
       console.warn('[Notification] Error triggering withdrawal pending notification:', notifErr);
     }
 
+    // Task #23.4: Send WITHDRAWAL_STATUS email with PENDING status
+    try {
+      const userRes = await db.query<{ email: string; full_name: string; public_id: string }>(
+        `SELECT email, full_name, public_id FROM users WHERE id = $1`,
+        [userId]
+      );
+      if (userRes.rowCount > 0) {
+        const user = userRes.rows[0];
+        const { queueEventEmail } = await import('./emailService');
+        
+        await queueEventEmail(user.email, 'WITHDRAWAL_STATUS', {
+          displayName: user.full_name,
+          publicId: user.public_id,
+          amount: String(cleanAmount),
+          status: 'PENDING',
+          withdrawalId: withdrawal.id
+        });
+      }
+    } catch (emailErr) {
+      console.warn('[EmailEngine] Failed to send Withdrawal Pending email:', emailErr);
+    }
+
     return withdrawal;
   });
 }
@@ -437,6 +459,28 @@ export async function settleWithdrawalAction(params: {
     } catch (notifErr) {
       console.warn('[Notification] Error triggering withdrawal completed notification:', notifErr);
     }
+
+    // Task #23.4: Send COMPLETED withdrawal email
+    try {
+      const userRes = await db.query<{ email: string; full_name: string; public_id: string }>(
+        `SELECT email, full_name, public_id FROM users WHERE id = $1`,
+        [completedRec.userId]
+      );
+      if (userRes.rowCount > 0) {
+        const user = userRes.rows[0];
+        const { queueEventEmail } = await import('./emailService');
+        await queueEventEmail(user.email, 'WITHDRAWAL_STATUS', {
+          displayName: user.full_name,
+          publicId: user.public_id,
+          amount: String(completedRec.amount),
+          status: 'COMPLETED',
+          withdrawalId: completedRec.id
+        });
+      }
+    } catch (emailErr) {
+      console.warn('[EmailEngine] Failed to send Withdrawal Completed email:', emailErr);
+    }
+
     return completedRec;
   }
 
@@ -483,6 +527,28 @@ export async function settleWithdrawalAction(params: {
       console.warn('[Notification] Error triggering withdrawal rejected notification:', notifErr);
     }
 
+    // Task #23.4: Send REJECTED withdrawal email
+    try {
+      const userRes = await db.query<{ email: string; full_name: string; public_id: string }>(
+        `SELECT email, full_name, public_id FROM users WHERE id = $1`,
+        [updated.userId]
+      );
+      if (userRes.rowCount > 0) {
+        const user = userRes.rows[0];
+        const { queueEventEmail } = await import('./emailService');
+        await queueEventEmail(user.email, 'WITHDRAWAL_STATUS', {
+          displayName: user.full_name,
+          publicId: user.public_id,
+          amount: String(updated.amount),
+          status: 'REJECTED',
+          withdrawalId: updated.id,
+          reason
+        });
+      }
+    } catch (emailErr) {
+      console.warn('[EmailEngine] Failed to send Withdrawal Rejected email:', emailErr);
+    }
+
     return updated;
   }
 
@@ -516,6 +582,28 @@ export async function settleWithdrawalAction(params: {
       description: `Withdrawal Transfer Failed - Funds Released (${updated.publicWithdrawalId})`,
       createdAt: now,
     });
+
+    // Task #23.4: Send FAILED withdrawal email
+    try {
+      const userRes = await db.query<{ email: string; full_name: string; public_id: string }>(
+        `SELECT email, full_name, public_id FROM users WHERE id = $1`,
+        [updated.userId]
+      );
+      if (userRes.rowCount > 0) {
+        const user = userRes.rows[0];
+        const { queueEventEmail } = await import('./emailService');
+        await queueEventEmail(user.email, 'WITHDRAWAL_STATUS', {
+          displayName: user.full_name,
+          publicId: user.public_id,
+          amount: String(updated.amount),
+          status: 'FAILED',
+          withdrawalId: updated.id,
+          reason
+        });
+      }
+    } catch (emailErr) {
+      console.warn('[EmailEngine] Failed to send Withdrawal Failed email:', emailErr);
+    }
 
     return updated;
   }
