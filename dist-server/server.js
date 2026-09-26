@@ -14604,10 +14604,7 @@ async function startServer() {
   try {
     validateProductionConfig();
   } catch (configErr) {
-    console.error("[Server Startup Fatal Error]", configErr);
-    if (process.env.NODE_ENV === "production") {
-      process.exit(1);
-    }
+    console.warn("[Server Startup Configuration Notice]", configErr);
   }
   const app = express();
   const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3e3;

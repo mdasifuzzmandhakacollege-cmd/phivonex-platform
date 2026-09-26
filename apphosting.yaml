@@ -22,13 +22,3 @@ env:
     value: "3"
   - variable: WITHDRAWALS_ENABLED
     value: "false"
-
-  # Production Secrets managed in Google Secret Manager & Firebase App Hosting:
-  - variable: DATABASE_URL
-    secret: DATABASE_URL
-    availability:
-      - RUNTIME
-  - variable: TREASURY_WALLET_ADDRESS
-    secret: TREASURY_WALLET_ADDRESS
-    availability:
-      - RUNTIME

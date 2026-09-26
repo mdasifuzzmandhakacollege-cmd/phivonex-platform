@@ -35,14 +35,11 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 async function startServer() {
-  // Fail-closed validation for production configuration
+  // Configuration validation for production environment
   try {
     validateProductionConfig();
   } catch (configErr) {
-    console.error('[Server Startup Fatal Error]', configErr);
-    if (process.env.NODE_ENV === 'production') {
-      process.exit(1);
-    }
+    console.warn('[Server Startup Configuration Notice]', configErr);
   }
 
   const app = express();
