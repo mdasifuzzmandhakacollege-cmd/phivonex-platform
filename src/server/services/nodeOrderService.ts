@@ -382,7 +382,8 @@ export async function createNodeReservation(
 export async function settleNodeOrder(
   userId: string | null,
   orderIdentifier: string,
-  paymentReference?: string
+  paymentReference?: string,
+  dbClient?: DatabaseClient
 ): Promise<{
   order: SafeNodeOrder;
   node: {
@@ -394,7 +395,7 @@ export async function settleNodeOrder(
   referralCommission?: SafeReferralCommission | null;
   isDuplicate?: boolean;
 }> {
-  const db = await getDb();
+  const db = dbClient || (await getDb());
 
   // 1. Sweep expired reservations first
   await cleanupExpiredReservations(db);

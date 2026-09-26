@@ -350,6 +350,19 @@ export async function getNodeBasePrice(): Promise<number> {
   return 1000.00;
 }
 
+export async function getBnbPriceUsd(): Promise<number | null> {
+  const cfg = await getEconomicConfigByKey('BNB_PRICE_USD');
+  if (cfg && cfg.status === 'ACTIVE' && cfg.configValue !== null && cfg.configValue !== undefined) {
+    const price = Number(cfg.configValue);
+    if (!isNaN(price) && price > 0) return price;
+  }
+  if (process.env.BNB_PRICE_USD) {
+    const envPrice = Number(process.env.BNB_PRICE_USD);
+    if (!isNaN(envPrice) && envPrice > 0) return envPrice;
+  }
+  return null;
+}
+
 export async function isNodeSalesEnabled(): Promise<boolean> {
   const cfg = await getEconomicConfigByKey('NODE_SALES_ENABLED');
   if (cfg) {
@@ -419,14 +432,14 @@ export async function getInternalCoinPrice(): Promise<{
   const cfg = await getEconomicConfigByKey('INTERNAL_COIN_PRICE_USDT');
   if (cfg && typeof cfg.configValue === 'object' && cfg.configValue !== null) {
     return {
-      coinSymbol: cfg.configValue.coinSymbol || 'PHIVO',
+      coinSymbol: cfg.configValue.coinSymbol || 'PHX',
       priceUsdt: Number(cfg.configValue.priceUsdt || 0.10),
       effectiveFrom: cfg.configValue.effectiveFrom || cfg.effectiveFrom,
       swapEnabled: cfg.configValue.swapEnabled !== false,
     };
   }
   return {
-    coinSymbol: 'PHIVO',
+    coinSymbol: 'PHX',
     priceUsdt: 0.10,
     effectiveFrom: new Date().toISOString(),
     swapEnabled: true,

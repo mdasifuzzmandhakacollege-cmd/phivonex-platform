@@ -1173,6 +1173,12 @@ async function seedEconomicConfigs(client: DatabaseClient) {
         category: 'GATEWAY',
         description: 'Automated on-chain broadcast for approved withdrawals without manual admin signing',
       },
+      {
+        key: 'BNB_PRICE_USD',
+        value: JSON.stringify(450.0),
+        category: 'PRICING',
+        description: 'Authoritative server-side exchange rate for 1 BNB in USD',
+      },
     ];
 
     for (const cfg of defaultConfigs) {

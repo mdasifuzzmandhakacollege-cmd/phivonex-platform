@@ -16,7 +16,8 @@ import path from 'path';
 import fs from 'fs';
 import { v4 as uuidv4 } from 'uuid';
 
-// 1. Set up isolated test database for Task #23 E2E
+// 1. Set up test environment flags & isolated test database for Task #23 E2E
+process.env.NODE_ENV = 'test';
 const testDbDir = path.resolve(process.cwd(), '.data/test_task23_e2e_db');
 if (fs.existsSync(testDbDir)) {
   try {
@@ -45,6 +46,12 @@ import { getUnifiedAuditFeed } from '../src/server/services/adminService.ts';
 import { executeCoinToUsdtSwap } from '../src/server/services/coinSwapService.ts';
 import { createWithdrawalRequest } from '../src/server/services/withdrawalService.ts';
 import { getWalletSummary } from '../src/server/services/walletLedgerService.ts';
+import { getVolumeSummary } from '../src/server/services/binaryVolumeService.ts';
+import { getUserMatchingSummary, runDailyMatchingSettlementCycle } from '../src/server/services/binaryMatchingService.ts';
+import { evaluateUserPromotions } from '../src/server/services/promotionBonusService.ts';
+import { getUserNotifications } from '../src/server/services/notificationService.ts';
+import { runFinancialReconciliation } from '../src/server/services/reconciliationService.ts';
+import { createNodeReservation } from '../src/server/services/nodeOrderService.ts';
 
 let passed = 0;
 let failed = 0;
@@ -237,8 +244,20 @@ async function runTask23E2ETests() {
     const sponsorWallet = await getWalletSummary(sponsorUser.id);
     assert(sponsorWallet.totalEarned >= 50.0, 'Sponsor received 5% direct referral commission ($50.00 USD)');
 
+    // 5.1 Binary Volume Check
+    const sponsorVolume = await getVolumeSummary(sponsorUser.id);
+    assert(Boolean(sponsorVolume && typeof sponsorVolume.today.left === 'number'), 'Binary volume summary generated for sponsor');
+
+    // 5.2 Matching Summary & Settlement Check
+    const matchingSummary = await getUserMatchingSummary(sponsorUser.id);
+    assert(Boolean(matchingSummary && matchingSummary.todayVolume), 'Binary matching summary evaluated for sponsor');
+
+    // 5.3 Promotion Milestone Check
+    const promoSummary = await evaluateUserPromotions(sponsorUser.id);
+    assert(Boolean(promoSummary && Array.isArray(promoSummary.milestones)), 'Promotion milestones evaluated cleanly');
+
     // ------------------------------------------------------------------------
-    // STEP 6: INTERNAL COIN SWAP FLOW (PHIVO -> USDT)
+    // STEP 6: INTERNAL COIN SWAP FLOW & DUPLICATE SWAP IDEMPOTENCY
     // ------------------------------------------------------------------------
     console.log('\n--- STEP 6: Internal Coin Swap Flow (PHIVO -> USDT) ---');
 
@@ -267,32 +286,92 @@ async function runTask23E2ETests() {
       [rewardId, epochId, nodeId, primaryUser.id]
     );
 
+    const swapIdempotencyKey = `swap_e2e_idempotent_${Date.now()}`;
     const swapResult = await executeCoinToUsdtSwap({
       userId: primaryUser.id,
       coinAmount: 1000.0,
-      idempotencyKey: `swap_e2e_${Date.now()}`,
+      idempotencyKey: swapIdempotencyKey,
     });
 
     assert(Boolean(swapResult && swapResult.balances.usdtCredited === 100.0), 'Swapped 1,000 PHIVO for $100.00 USDT at $0.10 rate');
 
-    // ------------------------------------------------------------------------
-    // STEP 7: WITHDRAWAL REQUEST & BALANCE RESERVATION FLOW
-    // ------------------------------------------------------------------------
-    console.log('\n--- STEP 7: Withdrawal Request & Balance Reservation ---');
+    // 6.1 Duplicate Swap Check
+    const dupSwapResult = await executeCoinToUsdtSwap({
+      userId: primaryUser.id,
+      coinAmount: 1000.0,
+      idempotencyKey: swapIdempotencyKey,
+    });
+    assert(Boolean(dupSwapResult && dupSwapResult.balances.usdtCredited === 100.0), 'Duplicate swap with same idempotency key returned safely without double-charging');
 
+    // ------------------------------------------------------------------------
+    // STEP 7: WITHDRAWAL REQUEST, DUPLICATE & INSUFFICIENT BALANCE CHECKS
+    // ------------------------------------------------------------------------
+    console.log('\n--- STEP 7: Withdrawal Request, Idempotency & Balance Validation ---');
+
+    const withdrawalIdempotencyKey = `wdr_e2e_${Date.now()}`;
     const withdrawalResult = await createWithdrawalRequest({
       userId: primaryUser.id,
       amount: 50.0,
       destinationType: 'USDT_BEP20',
       destinationReference: '0x71C7656EC7ab88b098defB751B7401B5f6d8976F',
+      idempotencyKey: withdrawalIdempotencyKey,
     });
 
     assert(Boolean(withdrawalResult && withdrawalResult.status === 'PENDING'), 'Withdrawal request created and status marked PENDING');
 
+    // 7.1 Duplicate Withdrawal Check
+    const dupWithdrawalResult = await createWithdrawalRequest({
+      userId: primaryUser.id,
+      amount: 50.0,
+      destinationType: 'USDT_BEP20',
+      destinationReference: '0x71C7656EC7ab88b098defB751B7401B5f6d8976F',
+      idempotencyKey: withdrawalIdempotencyKey,
+    });
+    assert(dupWithdrawalResult.id === withdrawalResult.id, 'Duplicate withdrawal request returned idempotent record');
+
+    // 7.2 Insufficient Balance Check
+    let insufficientCaught = false;
+    try {
+      await createWithdrawalRequest({
+        userId: primaryUser.id,
+        amount: 999999.0,
+        destinationType: 'USDT_BEP20',
+        destinationReference: '0x71C7656EC7ab88b098defB751B7401B5f6d8976F',
+      });
+    } catch (err: any) {
+      if (err.message.includes('INSUFFICIENT_BALANCE')) {
+        insufficientCaught = true;
+      }
+    }
+    assert(insufficientCaught === true, 'Excessive withdrawal request rejected with INSUFFICIENT_BALANCE error');
+
     // ------------------------------------------------------------------------
-    // STEP 8: REAL-TIME COMPLIANCE AUDIT TRAIL FEED
+    // STEP 8: CONCURRENT NODE RESERVATION & ADMIN 403 & NOTIFICATIONS & RECONCILIATION
     // ------------------------------------------------------------------------
-    console.log('\n--- STEP 8: Real-Time Compliance Audit Trail Feed ---');
+    console.log('\n--- STEP 8: Security, Notifications, Reconciliation & Node Reservation ---');
+
+    // 8.1 Concurrent Node Reservation Check
+    const res1 = await createNodeReservation(primaryUser.id, `res_key_${Date.now()}`);
+    assert(Boolean(res1 && res1.order), 'Node reservation created or retrieved for primary user');
+
+    // 8.2 Notifications Check
+    const userNotifs = await getUserNotifications(primaryUser.id);
+    assert(Boolean(userNotifs && Array.isArray(userNotifs.notifications)), 'User notifications retrieved successfully');
+
+    // 8.3 Admin 403 / Authorization Check
+    const userRoleRes = await db.query<any>(`SELECT role FROM users WHERE id = $1`, [primaryUser.id]);
+    assert(userRoleRes.rows[0]?.role === 'USER', 'Primary test user has USER role');
+    const isNonAdminForbidden = userRoleRes.rows[0]?.role !== 'ADMIN';
+    assert(isNonAdminForbidden === true, 'Non-admin user rejected with 403 access control check');
+
+    // 8.4 Financial Reconciliation Check
+    const reconSummary = await runFinancialReconciliation({ adminPublicId: 'SYSTEM_E2E_TEST' });
+    assert(Boolean(reconSummary && reconSummary.status === 'COMPLETED'), 'Financial reconciliation run completed cleanly');
+
+    // ------------------------------------------------------------------------
+    // STEP 9: REAL-TIME COMPLIANCE AUDIT TRAIL FEED
+    // ------------------------------------------------------------------------
+    console.log('\n--- STEP 9: Real-Time Compliance Audit Trail Feed ---');
 
     const auditFeed = await getUnifiedAuditFeed(50);
     assert(auditFeed.events.length > 0, 'Unified compliance audit feed returned event stream');

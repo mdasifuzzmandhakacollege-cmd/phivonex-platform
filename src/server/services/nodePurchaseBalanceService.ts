@@ -1,11 +1,8 @@
 import { getDb } from '../db/db';
 import { v4 as uuidv4 } from 'uuid';
 import { generateLedgerTransactionPublicId } from '../utils/idGenerator';
-import { getNodeBasePrice } from './economicService';
+import { getNodeBasePrice, getBnbPriceUsd } from './economicService';
 import { createNodeReservation, settleNodeOrder, getUserOrders } from './nodeOrderService';
-
-// Server-authoritative exchange rate for BNB node valuation
-const DEFAULT_BNB_PRICE_USD = 450.0; // 1 BNB = $450 USD (~2.222 BNB for $1,000 node)
 
 export interface AssetBalanceInfo {
   available: number;
@@ -17,13 +14,25 @@ export interface AssetBalanceInfo {
 export interface NodeBalanceValidationResult {
   userId: string;
   nodePriceUsd: number;
-  bnbPriceUsd: number;
+  bnbPriceUsd: number | null;
   bnbRequired: number;
   usdtRequired: number;
   usdtBalance: AssetBalanceInfo;
   bnbBalance: AssetBalanceInfo;
   canActivateWithUsdt: boolean;
   canActivateWithBnb: boolean;
+}
+
+const userLocks = new Map<string, Promise<any>>();
+
+function withUserLock<T>(userId: string, fn: () => Promise<T>): Promise<T> {
+  const previousLock = userLocks.get(userId) || Promise.resolve();
+  const res = previousLock.then(
+    () => fn(),
+    () => fn()
+  );
+  userLocks.set(userId, res.catch(() => {}));
+  return res;
 }
 
 /**
@@ -35,10 +44,10 @@ export async function validateUserNodePurchaseBalances(
 ): Promise<NodeBalanceValidationResult> {
   const db = await getDb();
 
-  // 1. Get Node Price in USD
+  // 1. Get Node Price & BNB Price from authoritative economic service
   const nodePriceUsd = await getNodeBasePrice(); // e.g. 1000
-  const bnbPriceUsd = DEFAULT_BNB_PRICE_USD;
-  const bnbRequired = Number((nodePriceUsd / bnbPriceUsd).toFixed(4)); // e.g. ~2.2222
+  const bnbPriceUsd = await getBnbPriceUsd(); // e.g. 450 or null if unconfigured
+  const bnbRequired = bnbPriceUsd && bnbPriceUsd > 0 ? Number((nodePriceUsd / bnbPriceUsd).toFixed(4)) : 0;
   const usdtRequired = nodePriceUsd;
 
   // 2. Compute USDT Credited Deposits vs Node Purchase Debits
@@ -85,9 +94,9 @@ export async function validateUserNodePurchaseBalances(
   const totalBnbDebits = Number(bnbDebitsRes.rows[0]?.total || 0);
   const availableBnb = Math.max(0, totalBnbDeposits - totalBnbDebits);
 
-  // 4. Balance sufficiency checks
+  // 4. Balance sufficiency checks (BNB purchases blocked if BNB valuation rate is unconfigured)
   const usdtSufficient = availableUsdt >= usdtRequired;
-  const bnbSufficient = availableBnb >= bnbRequired;
+  const bnbSufficient = Boolean(bnbPriceUsd && bnbPriceUsd > 0 && bnbRequired > 0 && availableBnb >= bnbRequired);
 
   return {
     userId,
@@ -105,7 +114,7 @@ export async function validateUserNodePurchaseBalances(
       available: availableBnb,
       required: bnbRequired,
       sufficient: bnbSufficient,
-      missing: bnbSufficient ? 0 : Number((bnbRequired - availableBnb).toFixed(4)),
+      missing: bnbSufficient ? 0 : (bnbRequired > 0 ? Number((bnbRequired - availableBnb).toFixed(4)) : 0),
     },
     canActivateWithUsdt: usdtSufficient,
     canActivateWithBnb: bnbSufficient,
@@ -114,7 +123,8 @@ export async function validateUserNodePurchaseBalances(
 
 /**
  * Validates internal balance and processes Genesis Node activation for a specific asset (BNB or USDT).
- * Atomically records a DEBIT in financial_ledger_entries and settles node order.
+ * ATOMIC GUARANTEE: Ledger debit and node settlement occur inside a single DB transaction.
+ * Rolls back debit completely if settlement fails. Idempotency guarantees prevent duplicate debits.
  */
 export async function processNodePurchaseWithAssetBalance(
   userId: string,
@@ -126,99 +136,147 @@ export async function processNodePurchaseWithAssetBalance(
   remainingAssetBalance: number;
   order: any;
   node: { publicNodeId: string; nodeNumber: number; status: string; activatedAt: string };
+  isDuplicate?: boolean;
 }> {
-  const db = await getDb();
-  const selectedAsset = asset.toUpperCase() === 'BNB' ? 'BNB' : 'USDT';
+  return withUserLock(userId, async () => {
+    const db = await getDb();
+    const selectedAsset = asset.toUpperCase() === 'BNB' ? 'BNB' : 'USDT';
 
-  // 1. Perform balance validation
-  const validation = await validateUserNodePurchaseBalances(userId);
+    // 1. Perform balance & rate validation
+    const validation = await validateUserNodePurchaseBalances(userId);
 
-  let requiredAmount = 0;
-  let availableBalance = 0;
-  let isSufficient = false;
+    if (selectedAsset === 'BNB' && (validation.bnbPriceUsd === null || validation.bnbPriceUsd <= 0)) {
+      const error: any = new Error(
+        'BNB_VALUATION_NOT_CONFIGURED: BNB-based node purchase is currently blocked because BNB valuation rate is not configured in economic parameters.'
+      );
+      error.code = 'BNB_VALUATION_NOT_CONFIGURED';
+      error.statusCode = 400;
+      throw error;
+    }
 
-  if (selectedAsset === 'BNB') {
-    requiredAmount = validation.bnbRequired;
-    availableBalance = validation.bnbBalance.available;
-    isSufficient = validation.canActivateWithBnb;
-  } else {
-    requiredAmount = validation.usdtRequired;
-    availableBalance = validation.usdtBalance.available;
-    isSufficient = validation.canActivateWithUsdt;
-  }
+    let requiredAmount = 0;
+    let availableBalance = 0;
+    let isSufficient = false;
 
-  // 2. Reject if insufficient balance for selected asset
-  if (!isSufficient) {
-    const error: any = new Error(
-      `Insufficient ${selectedAsset} deposit balance. You have ${availableBalance} ${selectedAsset}, but node activation requires ${requiredAmount} ${selectedAsset}.`
-    );
-    error.code = 'INSUFFICIENT_ASSET_BALANCE';
-    error.statusCode = 400;
-    error.selectedAsset = selectedAsset;
-    error.availableBalance = availableBalance;
-    error.requiredAmount = requiredAmount;
-    error.missingAmount = Number((requiredAmount - availableBalance).toFixed(4));
-    error.redirectToDeposit = true;
-    throw error;
-  }
-
-  // 3. Create or acquire active reservation
-  let reservation: any;
-  try {
-    reservation = await createNodeReservation(
-      userId,
-      `node_bal_req_${selectedAsset}_${userId}_${Date.now()}`,
-      `DEPOSIT_${selectedAsset}`
-    );
-  } catch (err: any) {
-    const existingOrders = await getUserOrders(userId);
-    const pending = existingOrders.find((o) => o.status === 'PENDING' && o.secondsRemaining > 0);
-    if (pending) {
-      reservation = { order: pending, isExisting: true };
+    if (selectedAsset === 'BNB') {
+      requiredAmount = validation.bnbRequired;
+      availableBalance = validation.bnbBalance.available;
+      isSufficient = validation.canActivateWithBnb;
     } else {
+      requiredAmount = validation.usdtRequired;
+      availableBalance = validation.usdtBalance.available;
+      isSufficient = validation.canActivateWithUsdt;
+    }
+
+    // 2. Reject if insufficient balance for selected asset
+    if (!isSufficient) {
+      const error: any = new Error(
+        `Insufficient ${selectedAsset} deposit balance. You have ${availableBalance} ${selectedAsset}, but node activation requires ${requiredAmount} ${selectedAsset}.`
+      );
+      error.code = 'INSUFFICIENT_ASSET_BALANCE';
+      error.statusCode = 400;
+      error.selectedAsset = selectedAsset;
+      error.availableBalance = availableBalance;
+      error.requiredAmount = requiredAmount;
+      error.missingAmount = Number((requiredAmount - availableBalance).toFixed(4));
+      error.redirectToDeposit = true;
+      throw error;
+    }
+
+    // 3. Create or acquire active reservation
+    let reservation: any;
+    try {
+      reservation = await createNodeReservation(
+        userId,
+        `node_bal_req_${selectedAsset}_${userId}_${Date.now()}`,
+        `DEPOSIT_${selectedAsset}`
+      );
+    } catch (err: any) {
+      const existingOrders = await getUserOrders(userId);
+      const pending = existingOrders.find((o) => o.status === 'PENDING' && o.secondsRemaining > 0);
+      if (pending) {
+        reservation = { order: pending, isExisting: true };
+      } else {
+        throw err;
+      }
+    }
+
+    // Check if order was already completed (duplicate settlement guard)
+    if (reservation.order.status === 'COMPLETED') {
+      const settlement = await settleNodeOrder(userId, reservation.order.publicOrderId);
+      return {
+        success: true,
+        assetUsed: selectedAsset,
+        deductedAmount: requiredAmount,
+        remainingAssetBalance: availableBalance,
+        order: settlement.order,
+        node: settlement.node,
+        isDuplicate: true,
+      };
+    }
+
+    // 4. Atomic Execution: DB Transaction containing Ledger Debit + Settlement
+    await db.query('BEGIN');
+    try {
+      const orderId = reservation.order.id || reservation.order.publicOrderId;
+
+      // Duplicate debit check inside transaction
+      const existingDebitRes = await db.query(
+        `SELECT id FROM financial_ledger_entries WHERE source_id = $1 AND source_type = 'NODE_PURCHASE'`,
+        [orderId]
+      );
+
+      let debitTxnId = uuidv4();
+      let publicTxnId = generateLedgerTransactionPublicId();
+
+      if (existingDebitRes.rows.length === 0) {
+        await db.query(
+          `
+          INSERT INTO financial_ledger_entries (
+            id, public_txn_id, user_id, entry_type, source_type, source_id,
+            source_ref, description, amount, currency, status, created_at
+          )
+          VALUES ($1, $2, $3, 'DEBIT', 'NODE_PURCHASE', $4, $5, $6, $7, $8, 'SETTLED', CURRENT_TIMESTAMP)
+          `,
+          [
+            debitTxnId,
+            publicTxnId,
+            userId,
+            orderId,
+            reservation.order.publicNodeId,
+            `Genesis Node ${reservation.order.publicNodeId} activation paid via ${selectedAsset} deposit balance`,
+            requiredAmount,
+            selectedAsset,
+          ]
+        );
+      } else {
+        debitTxnId = existingDebitRes.rows[0].id;
+      }
+
+      // Settle node order contract inside same transaction
+      const settlement = await settleNodeOrder(
+        userId,
+        reservation.order.publicOrderId,
+        `DEPOSIT_PAYMENT_${selectedAsset}_${publicTxnId}`,
+        db
+      );
+
+      await db.query('COMMIT');
+
+      const remainingBalance = Math.max(0, Number((availableBalance - requiredAmount).toFixed(4)));
+
+      return {
+        success: true,
+        assetUsed: selectedAsset,
+        deductedAmount: requiredAmount,
+        remainingAssetBalance: remainingBalance,
+        order: settlement.order,
+        node: settlement.node,
+        isDuplicate: settlement.isDuplicate,
+      };
+    } catch (err) {
+      await db.query('ROLLBACK');
       throw err;
     }
-  }
-
-  // 4. Record DEBIT transaction in financial_ledger_entries
-  const debitTxnId = uuidv4();
-  const publicTxnId = generateLedgerTransactionPublicId();
-
-  await db.query(
-    `
-    INSERT INTO financial_ledger_entries (
-      id, public_txn_id, user_id, entry_type, source_type, source_id,
-      source_ref, description, amount, currency, status, created_at
-    )
-    VALUES ($1, $2, $3, 'DEBIT', 'NODE_PURCHASE', $4, $5, $6, $7, $8, 'SETTLED', CURRENT_TIMESTAMP)
-    `,
-    [
-      debitTxnId,
-      publicTxnId,
-      userId,
-      reservation.order.id || debitTxnId,
-      reservation.order.publicNodeId,
-      `Genesis Node ${reservation.order.publicNodeId} activation paid via ${selectedAsset} deposit balance`,
-      requiredAmount,
-      selectedAsset,
-    ]
-  );
-
-  // 5. Settle node order activation contract
-  const settlement = await settleNodeOrder(
-    userId,
-    reservation.order.publicOrderId,
-    `DEPOSIT_PAYMENT_${selectedAsset}_${publicTxnId}`
-  );
-
-  const remainingBalance = Math.max(0, Number((availableBalance - requiredAmount).toFixed(4)));
-
-  return {
-    success: true,
-    assetUsed: selectedAsset,
-    deductedAmount: requiredAmount,
-    remainingAssetBalance: remainingBalance,
-    order: settlement.order,
-    node: settlement.node,
-  };
+  });
 }

@@ -26,11 +26,28 @@ export const BSC_CONFIG = {
   TREASURY_ADDRESS: (process.env.BNB_TREASURY_ADDRESS || '0x71C8705E3473187F6c1aB3c4709d4352D7F338f0').toLowerCase(),
 
   // Switch to control on-chain broadcast withdrawal execution
-  WITHDRAWALS_ENABLED: process.env.BNB_WITHDRAWALS_ENABLED !== 'false',
+  get WITHDRAWALS_ENABLED(): boolean {
+    if (process.env.BNB_WITHDRAWALS_ENABLED === 'true' || process.env.ENABLE_WITHDRAWALS === 'true') {
+      return true;
+    }
+    if (process.env.NODE_ENV === 'test' || process.env.VITEST === 'true') {
+      return true;
+    }
+    return false;
+  },
 
   // Master Root Seed / Secret for deterministic user deposit address derivation
   // In production, loaded from secure HSM / KMS / Secret Manager
-  MASTER_DERIVATION_SEED: process.env.BNB_MASTER_SEED || 'phivonex_protocol_secure_derivation_master_seed_2026',
+  get MASTER_DERIVATION_SEED(): string {
+    const seed = process.env.BNB_MASTER_SEED;
+    if (seed && seed.trim().length > 0) {
+      return seed.trim();
+    }
+    if (process.env.NODE_ENV === 'test' || process.env.VITEST === 'true') {
+      return 'phivonex_test_only_deterministic_derivation_seed_2026';
+    }
+    throw new Error('FATAL_SECURITY_ERROR: BNB_MASTER_SEED environment variable is required in production mode. System failing closed.');
+  },
 
   // Block explorer URLs
   get EXPLORER_TX_URL(): string {
