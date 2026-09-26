@@ -26,6 +26,7 @@ async function runTest() {
     BSC_CHAIN_ID: '56',
     DEPOSIT_CONFIRMATIONS: '3',
     WITHDRAWALS_ENABLED: 'false',
+    DATABASE_URL: 'postgresql://phivonex_prod_user:SecurePass123!@127.0.0.1:5432/phivonex_prod',
     BSC_RPC_URL_PRIMARY: 'https://bsc-dataseed.binance.org',
     BSC_RPC_URL_SECONDARY: 'https://bsc-dataseed1.defibit.io',
     DEPOSIT_ADDRESS_XPUB: 'xpub6EF8jXqFeFEW5bwMU7RpQtHkzE4KJxcqJtvkCjJumzW8CPpacXkb92ek4WzLQXjL93HycJwTPUAcuNxCqFPKKU5m5Z2Vq4nCyh5CyPeBFFr',

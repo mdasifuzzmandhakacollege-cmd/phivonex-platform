@@ -42,7 +42,19 @@ export function validateProductionConfig(): void {
 
   const missingOrInvalid: string[] = [];
 
-  // 1. Validate DEPOSIT_ADDRESS_XPUB
+  // 1. Validate DATABASE_URL (Mandatory in production; fail closed; PGlite never allowed in production)
+  const databaseUrl = process.env.DATABASE_URL?.trim();
+  if (!databaseUrl) {
+    missingOrInvalid.push('DATABASE_URL is mandatory in production (missing)');
+  } else if (
+    databaseUrl.includes('placeholder') ||
+    databaseUrl.includes('YOUR_') ||
+    (!databaseUrl.startsWith('postgres://') && !databaseUrl.startsWith('postgresql://'))
+  ) {
+    missingOrInvalid.push('DATABASE_URL must be a valid PostgreSQL connection string starting with postgresql:// or postgres://');
+  }
+
+  // 2. Validate DEPOSIT_ADDRESS_XPUB
   const xpub = process.env.DEPOSIT_ADDRESS_XPUB?.trim();
   if (!xpub || !xpub.startsWith('xpub')) {
     missingOrInvalid.push('DEPOSIT_ADDRESS_XPUB (must be a valid extended public key starting with "xpub")');

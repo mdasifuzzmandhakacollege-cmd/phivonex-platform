@@ -140,13 +140,37 @@ async function getDb() {
   }
   globalThis.__phivonexDbPromise = (async () => {
     try {
-      const databaseUrl = process.env.DATABASE_URL;
+      const isProduction = (process.env.APP_ENV || "").toLowerCase() === "production" || (process.env.NODE_ENV || "").toLowerCase() === "production";
+      const databaseUrl = process.env.DATABASE_URL?.trim();
       let client;
-      if (databaseUrl && !databaseUrl.includes("placeholder")) {
+      if (isProduction) {
+        if (!databaseUrl || databaseUrl.includes("placeholder") || databaseUrl.includes("YOUR_") || !databaseUrl.startsWith("postgres://") && !databaseUrl.startsWith("postgresql://")) {
+          const errMsg = "[DB FATAL] DATABASE_URL is mandatory and must be a valid PostgreSQL connection string in production. PGlite is strictly prohibited in production (fail closed).";
+          console.error(errMsg);
+          throw new Error(errMsg);
+        }
+        console.log("[DB] Connecting to Production PostgreSQL via DATABASE_URL...");
+        const pool = new Pool({
+          connectionString: databaseUrl,
+          ssl: { rejectUnauthorized: false }
+        });
+        client = {
+          async query(sql, params) {
+            const res = await pool.query(sql, params);
+            return {
+              rows: res.rows,
+              rowCount: res.rowCount ?? res.rows.length
+            };
+          },
+          async exec(sql) {
+            await pool.query(sql);
+          }
+        };
+      } else if (databaseUrl && !databaseUrl.includes("placeholder") && (databaseUrl.startsWith("postgres://") || databaseUrl.startsWith("postgresql://"))) {
         console.log("[DB] Connecting to PostgreSQL via DATABASE_URL...");
         const pool = new Pool({
           connectionString: databaseUrl,
-          ssl: process.env.NODE_ENV === "production" ? { rejectUnauthorized: false } : void 0
+          ssl: void 0
         });
         client = {
           async query(sql, params) {
@@ -11772,6 +11796,12 @@ function validateProductionConfig() {
     return;
   }
   const missingOrInvalid = [];
+  const databaseUrl = process.env.DATABASE_URL?.trim();
+  if (!databaseUrl) {
+    missingOrInvalid.push("DATABASE_URL is mandatory in production (missing)");
+  } else if (databaseUrl.includes("placeholder") || databaseUrl.includes("YOUR_") || !databaseUrl.startsWith("postgres://") && !databaseUrl.startsWith("postgresql://")) {
+    missingOrInvalid.push("DATABASE_URL must be a valid PostgreSQL connection string starting with postgresql:// or postgres://");
+  }
   const xpub = process.env.DEPOSIT_ADDRESS_XPUB?.trim();
   if (!xpub || !xpub.startsWith("xpub")) {
     missingOrInvalid.push('DEPOSIT_ADDRESS_XPUB (must be a valid extended public key starting with "xpub")');

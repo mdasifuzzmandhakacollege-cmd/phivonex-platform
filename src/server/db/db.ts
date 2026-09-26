@@ -37,14 +37,52 @@ export async function getDb(): Promise<DatabaseClient> {
   // 3. Initiate single initialization lifecycle
   globalThis.__phivonexDbPromise = (async () => {
     try {
-      const databaseUrl = process.env.DATABASE_URL;
+      const isProduction =
+        (process.env.APP_ENV || '').toLowerCase() === 'production' ||
+        (process.env.NODE_ENV || '').toLowerCase() === 'production';
+      const databaseUrl = process.env.DATABASE_URL?.trim();
       let client: DatabaseClient;
 
-      if (databaseUrl && !databaseUrl.includes('placeholder')) {
+      if (isProduction) {
+        // In production: DATABASE_URL is mandatory; fail closed; NEVER use PGlite.
+        if (
+          !databaseUrl ||
+          databaseUrl.includes('placeholder') ||
+          databaseUrl.includes('YOUR_') ||
+          (!databaseUrl.startsWith('postgres://') && !databaseUrl.startsWith('postgresql://'))
+        ) {
+          const errMsg = '[DB FATAL] DATABASE_URL is mandatory and must be a valid PostgreSQL connection string in production. PGlite is strictly prohibited in production (fail closed).';
+          console.error(errMsg);
+          throw new Error(errMsg);
+        }
+
+        console.log('[DB] Connecting to Production PostgreSQL via DATABASE_URL...');
+        const pool = new Pool({
+          connectionString: databaseUrl,
+          ssl: { rejectUnauthorized: false },
+        });
+
+        client = {
+          async query<T = any>(sql: string, params?: any[]): Promise<QueryResult<T>> {
+            const res = await pool.query(sql, params);
+            return {
+              rows: res.rows as T[],
+              rowCount: res.rowCount ?? res.rows.length,
+            };
+          },
+          async exec(sql: string): Promise<void> {
+            await pool.query(sql);
+          },
+        };
+      } else if (
+        databaseUrl &&
+        !databaseUrl.includes('placeholder') &&
+        (databaseUrl.startsWith('postgres://') || databaseUrl.startsWith('postgresql://'))
+      ) {
         console.log('[DB] Connecting to PostgreSQL via DATABASE_URL...');
         const pool = new Pool({
           connectionString: databaseUrl,
-          ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : undefined,
+          ssl: undefined,
         });
 
         client = {
@@ -60,7 +98,7 @@ export async function getDb(): Promise<DatabaseClient> {
           },
         };
       } else {
-        // Embedded WebAssembly PostgreSQL (PGLite)
+        // Embedded WebAssembly PostgreSQL (PGlite) - STRICTLY for development and local testing ONLY
         const dataDir = process.env.PGLITE_DATA_DIR || path.resolve(process.cwd(), '.data/pglite_db');
         if (!fs.existsSync(dataDir)) {
           fs.mkdirSync(dataDir, { recursive: true });

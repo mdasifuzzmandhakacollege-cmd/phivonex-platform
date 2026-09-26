@@ -29,31 +29,57 @@ async function runStartupSmokeTest() {
   console.log('🚀 PHIVONEX — PRODUCTION STARTUP SMOKE TEST');
   console.log('===============================================================\n');
 
-  // TEST 1: Fail Closed on missing DEPOSIT_ADDRESS_XPUB in production
+  // TEST 1: Fail Closed on missing DATABASE_URL or DEPOSIT_ADDRESS_XPUB in production
   console.log('--- TEST GROUP 1: Fail-Closed Validation Tests ---');
   {
     const prevEnv = process.env.APP_ENV;
     const prevNodeEnv = process.env.NODE_ENV;
+    const prevDbUrl = process.env.DATABASE_URL;
     const prevXpub = process.env.DEPOSIT_ADDRESS_XPUB;
     const prevTreasury = process.env.TREASURY_WALLET_ADDRESS;
     const prevRpc = process.env.BSC_RPC_URL_PRIMARY;
 
     process.env.APP_ENV = 'production';
     process.env.NODE_ENV = 'production';
-    delete process.env.DEPOSIT_ADDRESS_XPUB;
-    delete process.env.TREASURY_WALLET_ADDRESS;
+    delete process.env.DATABASE_URL;
+    process.env.DEPOSIT_ADDRESS_XPUB = 'xpub6EF8jXqFeFEW5bwMU7RpQtHkzE4KJxcqJtvkCjJumzW8CPpacXkb92ek4WzLQXjL93HycJwTPUAcuNxCqFPKKU5m5Z2Vq4nCyh5CyPeBFFr';
+    process.env.TREASURY_WALLET_ADDRESS = '0x71c8705e3473187f6c1ab3c4709d4352d7f338f0';
+    process.env.BSC_RPC_URL_PRIMARY = 'https://bsc-dataseed.binance.org';
 
-    let threwMissing = false;
+    let threwMissingDb = false;
     try {
       validateProductionConfig();
     } catch {
-      threwMissing = true;
+      threwMissingDb = true;
     }
-    assert(threwMissing, 'Production startup fails closed when DEPOSIT_ADDRESS_XPUB and TREASURY_WALLET_ADDRESS are missing');
+    assert(threwMissingDb, 'Production startup fails closed when DATABASE_URL is missing');
+
+    // Invalid DATABASE_URL
+    process.env.DATABASE_URL = 'mysql://invalid-url';
+    let threwInvalidDb = false;
+    try {
+      validateProductionConfig();
+    } catch {
+      threwInvalidDb = true;
+    }
+    assert(threwInvalidDb, 'Production startup fails closed when DATABASE_URL is invalid format');
+
+    delete process.env.DEPOSIT_ADDRESS_XPUB;
+    delete process.env.TREASURY_WALLET_ADDRESS;
+    delete process.env.DATABASE_URL;
+
+    let threwMissingAll = false;
+    try {
+      validateProductionConfig();
+    } catch {
+      threwMissingAll = true;
+    }
+    assert(threwMissingAll, 'Production startup fails closed when mandatory secrets are missing');
 
     // Restore test env
     process.env.APP_ENV = prevEnv;
     process.env.NODE_ENV = prevNodeEnv;
+    process.env.DATABASE_URL = prevDbUrl;
     process.env.DEPOSIT_ADDRESS_XPUB = prevXpub;
     process.env.TREASURY_WALLET_ADDRESS = prevTreasury;
     process.env.BSC_RPC_URL_PRIMARY = prevRpc;
@@ -64,6 +90,7 @@ async function runStartupSmokeTest() {
   {
     process.env.APP_ENV = 'production';
     process.env.NODE_ENV = 'production';
+    process.env.DATABASE_URL = 'postgresql://phivonex_prod_user:SecurePass123!@db.internal.phivonex.network:5432/phivonex_mainnet';
     process.env.DEPOSIT_ADDRESS_XPUB = 'xpub6EF8jXqFeFEW5bwMU7RpQtHkzE4KJxcqJtvkCjJumzW8CPpacXkb92ek4WzLQXjL93HycJwTPUAcuNxCqFPKKU5m5Z2Vq4nCyh5CyPeBFFr';
     process.env.TREASURY_WALLET_ADDRESS = '0x71c8705e3473187f6c1ab3c4709d4352d7f338f0';
     process.env.BSC_RPC_URL_PRIMARY = 'https://bsc-dataseed.binance.org';

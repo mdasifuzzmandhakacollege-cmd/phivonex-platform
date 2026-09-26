@@ -9,6 +9,8 @@ runConfig:
     USDT_CONTRACT_ADDRESS: "0x55d398326f99059ff775485246999027b3197955"
     WITHDRAWALS_ENABLED: "false"
   secrets:
+    - variable: DATABASE_URL
+      secret: DATABASE_URL
     - variable: DEPOSIT_ADDRESS_XPUB
       secret: DEPOSIT_ADDRESS_XPUB
     - variable: TREASURY_WALLET_ADDRESS
