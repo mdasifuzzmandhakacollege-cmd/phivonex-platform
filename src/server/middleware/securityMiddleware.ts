@@ -40,41 +40,65 @@ export function securityHeadersMiddleware(req: Request, res: Response, next: Nex
 /**
  * Trusted origin patterns for state-changing requests
  */
-function isTrustedOrigin(origin: string, hostHeader?: string): boolean {
+function isTrustedOrigin(origin: string, hostHeader?: string, forwardedHost?: string): boolean {
   if (!origin) return true;
 
   try {
     const url = new URL(origin);
     const originHost = url.host.toLowerCase();
+    const originHostname = url.hostname.toLowerCase();
 
-    // 1. Same-host match
-    if (hostHeader && originHost === hostHeader.toLowerCase()) {
-      return true;
+    // 1. Same-host or forwarded-host match
+    if (hostHeader) {
+      const cleanHost = hostHeader.toLowerCase().trim();
+      const hostWithoutPort = cleanHost.split(':')[0];
+      if (originHost === cleanHost || originHostname === hostWithoutPort) {
+        return true;
+      }
+    }
+
+    if (forwardedHost) {
+      const firstForwarded = forwardedHost.split(',')[0].trim().toLowerCase();
+      const forwardedWithoutPort = firstForwarded.split(':')[0];
+      if (originHost === firstForwarded || originHostname === forwardedWithoutPort) {
+        return true;
+      }
     }
 
     // 2. Localhost & development environments
     if (
+      originHostname === 'localhost' ||
+      originHostname === '127.0.0.1' ||
       originHost.startsWith('localhost:') ||
-      originHost === 'localhost' ||
-      originHost.startsWith('127.0.0.1:') ||
-      originHost === '127.0.0.1'
+      originHost.startsWith('127.0.0.1:')
     ) {
       return true;
     }
 
-    // 3. Google AI Studio & Cloud Run domains
+    // 3. Google AI Studio, Cloud Run, Firebase App Hosting, Firebase Hosting
     if (
-      originHost.endsWith('.run.app') ||
-      originHost.endsWith('.google.com') ||
-      originHost.endsWith('.aistudio.google.com')
+      originHostname.endsWith('.hosted.app') ||
+      originHostname.endsWith('.run.app') ||
+      originHostname.endsWith('.firebaseapp.com') ||
+      originHostname.endsWith('.web.app') ||
+      originHostname.endsWith('.google.com') ||
+      originHostname.endsWith('.aistudio.google.com')
     ) {
       return true;
     }
 
-    // 4. Custom App URL if configured in environment
+    // 4. Production Domain
+    if (
+      originHostname === 'phivonex.com' ||
+      originHostname.endsWith('.phivonex.com')
+    ) {
+      return true;
+    }
+
+    // 5. Custom App URL if configured in environment
     if (process.env.APP_URL) {
       const appUrl = new URL(process.env.APP_URL);
-      if (originHost === appUrl.host.toLowerCase()) {
+      if (originHostname === appUrl.hostname.toLowerCase()) {
         return true;
       }
     }
@@ -98,10 +122,11 @@ export async function csrfOriginProtection(req: Request, res: Response, next: Ne
     return next();
   }
 
-  const origin = (req.headers.origin as string) || '';
+  const origin = (req.headers.origin as string) || (req.headers.referer as string) || '';
   const host = (req.headers.host as string) || '';
+  const forwardedHost = (req.headers['x-forwarded-host'] as string) || '';
 
-  if (origin && !isTrustedOrigin(origin, host)) {
+  if (origin && !isTrustedOrigin(origin, host, forwardedHost)) {
     try {
       const db = await getDb();
       await logSecurityEvent(db, {

@@ -10128,23 +10128,38 @@ function securityHeadersMiddleware(req, res, next) {
   }
   next();
 }
-function isTrustedOrigin(origin, hostHeader) {
+function isTrustedOrigin(origin, hostHeader, forwardedHost) {
   if (!origin) return true;
   try {
     const url = new URL(origin);
     const originHost = url.host.toLowerCase();
-    if (hostHeader && originHost === hostHeader.toLowerCase()) {
+    const originHostname = url.hostname.toLowerCase();
+    if (hostHeader) {
+      const cleanHost = hostHeader.toLowerCase().trim();
+      const hostWithoutPort = cleanHost.split(":")[0];
+      if (originHost === cleanHost || originHostname === hostWithoutPort) {
+        return true;
+      }
+    }
+    if (forwardedHost) {
+      const firstForwarded = forwardedHost.split(",")[0].trim().toLowerCase();
+      const forwardedWithoutPort = firstForwarded.split(":")[0];
+      if (originHost === firstForwarded || originHostname === forwardedWithoutPort) {
+        return true;
+      }
+    }
+    if (originHostname === "localhost" || originHostname === "127.0.0.1" || originHost.startsWith("localhost:") || originHost.startsWith("127.0.0.1:")) {
       return true;
     }
-    if (originHost.startsWith("localhost:") || originHost === "localhost" || originHost.startsWith("127.0.0.1:") || originHost === "127.0.0.1") {
+    if (originHostname.endsWith(".hosted.app") || originHostname.endsWith(".run.app") || originHostname.endsWith(".firebaseapp.com") || originHostname.endsWith(".web.app") || originHostname.endsWith(".google.com") || originHostname.endsWith(".aistudio.google.com")) {
       return true;
     }
-    if (originHost.endsWith(".run.app") || originHost.endsWith(".google.com") || originHost.endsWith(".aistudio.google.com")) {
+    if (originHostname === "phivonex.com" || originHostname.endsWith(".phivonex.com")) {
       return true;
     }
     if (process.env.APP_URL) {
       const appUrl = new URL(process.env.APP_URL);
-      if (originHost === appUrl.host.toLowerCase()) {
+      if (originHostname === appUrl.hostname.toLowerCase()) {
         return true;
       }
     }
@@ -10158,9 +10173,10 @@ async function csrfOriginProtection(req, res, next) {
   if (method === "GET" || method === "HEAD" || method === "OPTIONS") {
     return next();
   }
-  const origin = req.headers.origin || "";
+  const origin = req.headers.origin || req.headers.referer || "";
   const host = req.headers.host || "";
-  if (origin && !isTrustedOrigin(origin, host)) {
+  const forwardedHost = req.headers["x-forwarded-host"] || "";
+  if (origin && !isTrustedOrigin(origin, host, forwardedHost)) {
     try {
       const db = await getDb();
       await logSecurityEvent(db, {
