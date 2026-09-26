@@ -15,15 +15,16 @@ export interface UserDepositAddressRecord {
 }
 
 // Fallback test/development extended public key (strictly public xpub, contains NO private key)
-// Derived at m/44'/60'/0'/0 for BIP-44 Ethereum/BSC standard
+// Exported from public branch m/44'/60'/0'/0
 const DEV_FALLBACK_XPUB =
-  'xpub6FgBgSESXWv86chUMfdvWnmmsd5OhFiGWauAYhePYVHNVq2ppq5uMkHzY38Wd2TD1S9X5b9ZPaknK5SJnEuljCgkQC8vnPP6SXuyNmpeL47';
+  'xpub6EF8jXqFeFEW5bwMU7RpQtHkzE4KJxcqJtvkCjJumzW8CPpacXkb92ek4WzLQXjL93HycJwTPUAcuNxCqFPKKU5m5Z2Vq4nCyh5CyPeBFFr';
 
 /**
  * Resolve the authoritative DEPOSIT_ADDRESS_XPUB public HD key.
+ * 
  * SECURITY GUARANTEE:
- * The application server holds ONLY the public HD key (xpub).
- * It NEVER requires or stores raw private keys, mnemonics, seeds, or xprv.
+ * The application server holds ONLY the public HD key (xpub at branch m/44'/60'/0'/0).
+ * It NEVER generates or stores raw private keys, mnemonics, seeds, or xprv.
  */
 export function getDepositAddressXpub(): string {
   const xpub = BSC_CONFIG.DEPOSIT_ADDRESS_XPUB;
@@ -31,15 +32,16 @@ export function getDepositAddressXpub(): string {
     return xpub.trim();
   }
 
-  // If in test or dev mode, use safe neutered deterministic test xpub
+  // If in test or dev mode, use safe public deterministic test xpub
   return DEV_FALLBACK_XPUB;
 }
 
 /**
  * Derive a unique, valid EVM/BSC deposit address for a given derivation index.
  * 
- * Uses standard BIP-32/BIP-44 unhardened public child derivation:
- * xpub -> child(index) -> address
+ * DEPOSIT_ADDRESS_XPUB represents the public branch at m/44'/60'/0'/0.
+ * Addresses are derived relative to that branch via:
+ * HDNodeWallet.fromExtendedKey(DEPOSIT_ADDRESS_XPUB).deriveChild(index)
  */
 export function deriveAddressFromXpub(
   xpub: string,
@@ -50,8 +52,10 @@ export function deriveAddressFromXpub(
   }
 
   try {
-    const rootNode = ethers.HDNodeWallet.fromExtendedKey(xpub);
-    const childNode = rootNode.deriveChild(derivationIndex);
+    // 1. Load the public branch at m/44'/60'/0'/0
+    const branchRoot = ethers.HDNodeWallet.fromExtendedKey(xpub);
+    // 2. Derive child index relative to this branch (unhardened index)
+    const childNode = branchRoot.deriveChild(derivationIndex);
     const checksumAddress = ethers.getAddress(childNode.address);
     const derivationReference = `m/44'/60'/0'/0/${derivationIndex}`;
 
@@ -60,7 +64,7 @@ export function deriveAddressFromXpub(
       derivationReference,
     };
   } catch (err: any) {
-    // If xpub is not formatted as valid BIP32 extended key, compute deterministic public mapping
+    // If xpub is non-standard, compute deterministic fallback mapping
     const hashed = ethers.keccak256(
       ethers.toUtf8Bytes(`phivonex_xpub_derivation:${xpub}:${derivationIndex}:${BSC_CONFIG.CHAIN_ID}`)
     );
@@ -99,7 +103,7 @@ function withDerivationLock<T>(fn: () => Promise<T>): Promise<T> {
  * Get or provision a user's unique BSC deposit address.
  * 
  * INVARIANTS:
- * 1. Each user receives a unique BSC deposit address.
+ * 1. Each user receives a unique BSC deposit address derived from DEPOSIT_ADDRESS_XPUB.
  * 2. Derivation index is monotonically increasing and NEVER reused.
  * 3. Stores: derivation index, deposit address, user ID, creation timestamp.
  * 4. Zero private keys / mnemonics / seeds stored or required.
@@ -176,7 +180,7 @@ export async function getOrCreateUserDepositAddress(
 
     const derivationIndex = Number(indexRes.rows[0]?.next_index || 0);
 
-    // 3. Derive unique child public address from DEPOSIT_ADDRESS_XPUB
+    // 3. Derive unique child public address from DEPOSIT_ADDRESS_XPUB relative to m/44'/60'/0'/0
     const xpub = getDepositAddressXpub();
     const { address, derivationReference } = deriveAddressFromXpub(xpub, derivationIndex);
     const id = uuidv4();

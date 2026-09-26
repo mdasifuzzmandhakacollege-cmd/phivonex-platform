@@ -5,10 +5,10 @@
  * - APP_ENV = production (or staging/test/development)
  * - BSC_CHAIN_ID = 56 (BNB Smart Chain Mainnet default)
  * - Primary & Secondary Mainnet RPC endpoints with automatic failover
- * - Official USDT BEP-20 Contract Address: 0x55d398326f99059fF775485246999027B3197955
- * - Public HD Extended Key: DEPOSIT_ADDRESS_XPUB (No raw private keys / seeds in app)
- * - Authoritative Treasury Address: TREASURY_WALLET_ADDRESS
- * - Secure Signer Reference: SIGNER_SECRET_REFERENCE
+ * - Official USDT BEP-20 Contract Address: 0x55d398326f99059ff775485246999027B3197955
+ * - Public HD Extended Key: DEPOSIT_ADDRESS_XPUB (m/44'/60'/0'/0 branch only; NO private keys in app)
+ * - Authoritative Treasury Address: TREASURY_WALLET_ADDRESS (Independent cold/multi-sig wallet)
+ * - Secure Signer Reference: SIGNER_SECRET_REFERENCE (Remote KMS URI placeholder; NEVER treated as configured)
  * - WITHDRAWALS_ENABLED strictly false until separately approved
  */
 
@@ -50,7 +50,7 @@ export const BSC_CONFIG = {
   },
 
   // Authoritative official USDT BEP-20 Contract Address
-  // BSC Mainnet Official Binance-Peg USDT: 0x55d398326f99059fF775485246999027B3197955
+  // BSC Mainnet Official Binance-Peg USDT: 0x55d398326f99059ff775485246999027b3197955
   get USDT_CONTRACT_ADDRESS(): string {
     if (process.env.USDT_CONTRACT_ADDRESS) {
       return process.env.USDT_CONTRACT_ADDRESS.toLowerCase();
@@ -60,8 +60,8 @@ export const BSC_CONFIG = {
       : '0x337610d27c682e347c9cd60bd4b3b107c9d34ddd';
   },
 
-  // Public Extended Key (xpub) used purely for server-side non-hardened public child address derivation
-  // In production, app server holds only the public xpub (never private key/mnemonic)
+  // Public Extended Key (xpub) representing the public branch at m/44'/60'/0'/0
+  // In production, app server holds ONLY the public xpub (never private key/mnemonic)
   get DEPOSIT_ADDRESS_XPUB(): string {
     return process.env.DEPOSIT_ADDRESS_XPUB || '';
   },
@@ -85,10 +85,11 @@ export const BSC_CONFIG = {
   },
 
   // Reference / identifier for the remote KMS / Vault / HSM secure signing service
+  // NOTE: Placeholder URI — requires user's specific KMS resource configuration before live sweep execution
   get SIGNER_SECRET_REFERENCE(): string {
     return (
       process.env.SIGNER_SECRET_REFERENCE ||
-      'gcp-kms://projects/phivonex/locations/global/keyRings/prod/cryptoKeys/bsc-signer'
+      'gcp-kms://projects/PLACEHOLDER-PROJECT-ID/locations/global/keyRings/prod/cryptoKeys/bsc-signer'
     );
   },
 

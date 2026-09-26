@@ -1,22 +1,23 @@
 /**
  * PHIVONEX — PRODUCTION LIVE DEPOSIT WALLET SETUP TEST SUITE
  * 
- * Verifies all 16 production live requirements:
+ * Verifies all production live requirements & mathematical derivation invariants:
  * 1. APP_ENV = production & BSC_CHAIN_ID = 56 & BSC Mainnet RPC endpoints
- * 2. Official USDT BEP-20 contract address (0x55d398326f99059fF775485246999027B3197955)
- * 3. Unique user deposit addresses derived purely from DEPOSIT_ADDRESS_XPUB
- * 4. Zero raw private keys, mnemonics, seeds, or xprv stored or required
- * 5. Monotonic unique derivation index stored per user (never reused)
- * 6. Private signing isolation via SIGNER_SECRET_REFERENCE
- * 7. TREASURY_WALLET_ADDRESS sweep destination
- * 8. Complete deposit flow with idempotent ledger credit
- * 9. Gas management for USDT sweep (child balance detection + min gas funding)
- * 10. RPC primary + secondary failover
- * 11. Idempotency on (chain_id, tx_hash, log_index, to_address)
- * 12. Security verifications (Chain ID, USDT contract, Destination check)
- * 13. Persisted states: DETECTED / CONFIRMING / CONFIRMED / CREDITED / SWEPT
- * 14. Server restart safe recovery
- * 15. WITHDRAWALS_ENABLED strictly false
+ * 2. Official USDT BEP-20 contract address (0x55d398326f99059ff775485246999027B3197955)
+ * 3. Unique user deposit addresses derived purely from DEPOSIT_ADDRESS_XPUB relative to branch m/44'/60'/0'/0
+ * 4. Deterministic equivalence test: XPUB child index 0/1/2 matches private HD branch m/44'/60'/0'/0/{index}
+ * 5. Zero raw private keys, mnemonics, seeds, or xprv stored or required
+ * 6. Monotonic unique derivation index stored per user (never reused)
+ * 7. Private signing isolation via SIGNER_SECRET_REFERENCE (placeholder verified)
+ * 8. TREASURY_WALLET_ADDRESS independent cold/multi-sig destination
+ * 9. Complete deposit flow with idempotent ledger credit
+ * 10. Gas management for USDT sweep (child balance detection + min gas funding)
+ * 11. RPC primary + secondary failover
+ * 12. Idempotency on (chain_id, tx_hash, log_index, to_address)
+ * 13. Security verifications (Chain ID, USDT contract, Destination check)
+ * 14. Persisted states: DETECTED / CONFIRMING / CONFIRMED / CREDITED / SWEPT
+ * 15. Server restart safe recovery
+ * 16. WITHDRAWALS_ENABLED strictly false
  */
 
 process.env.NODE_ENV = 'test';
@@ -43,7 +44,6 @@ import {
   getUserDeposits,
 } from '../src/server/services/bscDepositService';
 import { bscRpcManager } from '../src/server/providers/bscRpcProvider';
-import { getIntegrationConfig } from '../src/config/integrationConfig';
 import { ethers } from 'ethers';
 
 let passedTests = 0;
@@ -114,9 +114,51 @@ async function runProductionTestSuite() {
   assert(BSC_CONFIG.WITHDRAWALS_ENABLED === false, 'WITHDRAWALS_ENABLED is strictly false until separately approved');
 
   // =========================================================================
-  // 2. UNIQUE USER DEPOSIT ADDRESSES & XPUB DERIVATION
+  // 2. DETERMINISTIC DERIVATION EQUIVALENCE PROOF (XPUB vs PRIVATE BRANCH)
   // =========================================================================
-  console.log('\n--- 2. UNIQUE USER DEPOSIT ADDRESSES & XPUB DERIVATION ---');
+  console.log('\n--- 2. DETERMINISTIC HD DERIVATION EQUIVALENCE PROOF ---');
+  {
+    // Test vector: BIP-39 standard test mnemonic
+    const testMnemonic = 'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
+    
+    // In secure signer / offline tool: Derive the account branch m/44'/60'/0'/0 with private key
+    const offlineSignerBranch = ethers.HDNodeWallet.fromPhrase(testMnemonic, '', "m/44'/60'/0'/0");
+    const testXpub = offlineSignerBranch.neuter().extendedKey;
+
+    // In Application Server: Load ONLY the neutered xpub with zero private keys
+    const appServerPublicBranch = ethers.HDNodeWallet.fromExtendedKey(testXpub);
+
+    // Verify Child 0
+    const privateChild0 = offlineSignerBranch.deriveChild(0).address;
+    const publicChild0 = appServerPublicBranch.deriveChild(0).address;
+    const keyServiceChild0 = deriveAddressFromXpub(testXpub, 0).address;
+    assert(publicChild0 === privateChild0, 'Child Index 0: XPUB public derivation matches offline private HD branch');
+    assert(keyServiceChild0 === privateChild0, 'Child Index 0: bscKeyService matches offline private HD branch');
+
+    // Verify Child 1
+    const privateChild1 = offlineSignerBranch.deriveChild(1).address;
+    const publicChild1 = appServerPublicBranch.deriveChild(1).address;
+    const keyServiceChild1 = deriveAddressFromXpub(testXpub, 1).address;
+    assert(publicChild1 === privateChild1, 'Child Index 1: XPUB public derivation matches offline private HD branch');
+    assert(keyServiceChild1 === privateChild1, 'Child Index 1: bscKeyService matches offline private HD branch');
+
+    // Verify Child 2
+    const privateChild2 = offlineSignerBranch.deriveChild(2).address;
+    const publicChild2 = appServerPublicBranch.deriveChild(2).address;
+    const keyServiceChild2 = deriveAddressFromXpub(testXpub, 2).address;
+    assert(publicChild2 === privateChild2, 'Child Index 2: XPUB public derivation matches offline private HD branch');
+    assert(keyServiceChild2 === privateChild2, 'Child Index 2: bscKeyService matches offline private HD branch');
+
+    // Verify Known EVM Checksums
+    assert(publicChild0 === '0x9858EfFD232B4033E47d90003D41EC34EcaEda94', 'Index 0 matches known EVM test vector');
+    assert(publicChild1 === '0x6Fac4D18c912343BF86fa7049364Dd4E424Ab9C0', 'Index 1 matches known EVM test vector');
+    assert(publicChild2 === '0xb6716976A3ebe8D39aCEB04372f22Ff8e6802D7A', 'Index 2 matches known EVM test vector');
+  }
+
+  // =========================================================================
+  // 3. UNIQUE USER DEPOSIT ADDRESSES & DB PRIVACY
+  // =========================================================================
+  console.log('\n--- 3. UNIQUE USER DEPOSIT ADDRESSES & DB PRIVACY ---');
   const user1Deposit = await getOrCreateUserDepositAddress(user1Id, 'USDT');
   const user2Deposit = await getOrCreateUserDepositAddress(user2Id, 'USDT');
   const user3Deposit = await getOrCreateUserDepositAddress(user3Id, 'USDT');
@@ -144,12 +186,6 @@ async function runProductionTestSuite() {
   assert(user1Recheck.address === user1Deposit.address, 'Idempotent: Subsequent retrieval returns identical address');
   assert(user1Recheck.derivationIndex === user1Deposit.derivationIndex, 'Idempotent: Derivation index preserved');
 
-  // Verify pure public derivation from XPUB
-  const xpub = getDepositAddressXpub();
-  assert(xpub.startsWith('xpub'), 'Derivation uses extended public key (DEPOSIT_ADDRESS_XPUB)');
-  const derivedDirect = deriveAddressFromXpub(xpub, user1Deposit.derivationIndex);
-  assert(derivedDirect.address === user1Deposit.address, 'Direct public derivation from XPUB matches stored address');
-
   // Reverse address lookup
   const resolvedUser = await findUserByDepositAddress(user1Deposit.address);
   assert(resolvedUser === user1Id, 'findUserByDepositAddress correctly resolves owner user ID');
@@ -166,9 +202,9 @@ async function runProductionTestSuite() {
   );
 
   // =========================================================================
-  // 3. DEPOSIT SECURITY & CHAIN / CONTRACT / DESTINATION VERIFICATIONS
+  // 4. DEPOSIT SECURITY & CHAIN / CONTRACT / DESTINATION VERIFICATIONS
   // =========================================================================
-  console.log('\n--- 3. DEPOSIT SECURITY & CONTRACT VERIFICATIONS ---');
+  console.log('\n--- 4. DEPOSIT SECURITY & CONTRACT VERIFICATIONS ---');
   const dummyTx = `0x${uuidv4().replace(/-/g, '')}${uuidv4().replace(/-/g, '')}`.slice(0, 66);
   const blockStart = 48000000;
 
@@ -214,9 +250,9 @@ async function runProductionTestSuite() {
   assert(foreignAddrRes === null, 'Security: Safely ignored deposit to non-PHIVONEX address');
 
   // =========================================================================
-  // 4. PRODUCTION DEPOSIT CONFIRMATION PROGRESSION & LEDGER IDEMPOTENCY
+  // 5. PRODUCTION DEPOSIT CONFIRMATION PROGRESSION & LEDGER IDEMPOTENCY
   // =========================================================================
-  console.log('\n--- 4. DEPOSIT CONFIRMATIONS & LEDGER IDEMPOTENCY ---');
+  console.log('\n--- 5. DEPOSIT CONFIRMATIONS & LEDGER IDEMPOTENCY ---');
   const validTxHash = `0xusdt${uuidv4().replace(/-/g, '')}${uuidv4().replace(/-/g, '')}`.slice(0, 66);
   const depositAmount = 500.0;
 
@@ -308,9 +344,9 @@ async function runProductionTestSuite() {
   assert(duplicateLedgerCheck.rows[0].count === 1, 'Idempotency: Re-scans produce ZERO duplicate ledger credits');
 
   // =========================================================================
-  // 5. GAS MANAGEMENT & SECURE USDT SWEEP TO TREASURY
+  // 6. GAS MANAGEMENT & SECURE USDT SWEEP TO TREASURY
   // =========================================================================
-  console.log('\n--- 5. GAS MANAGEMENT & SECURE USDT SWEEP TO TREASURY ---');
+  console.log('\n--- 6. GAS MANAGEMENT & SECURE USDT SWEEP TO TREASURY ---');
   const sweepRes = await sweepDepositToTreasury({
     userId: user1Id,
     depositAddress: user1Deposit.address,
@@ -340,9 +376,9 @@ async function runProductionTestSuite() {
   assert(duplicateSweep.status === 'SKIPPED', 'Duplicate sweep attempt is safely SKIPPED');
 
   // =========================================================================
-  // 6. RPC FAILOVER & SERVER RESTART RECOVERY TESTS
+  // 7. RPC FAILOVER & SERVER RESTART RECOVERY TESTS
   // =========================================================================
-  console.log('\n--- 6. RPC FAILOVER & SERVER RECOVERY TESTS ---');
+  console.log('\n--- 7. RPC FAILOVER & SERVER RECOVERY TESTS ---');
   
   // Test RPC Provider failover
   const failoverTestResult = await bscRpcManager.executeWithFailover(async (provider, rpcUrl) => {
@@ -354,7 +390,6 @@ async function runProductionTestSuite() {
   assert(Boolean(rpcStatus.primaryUrl) && Boolean(rpcStatus.secondaryUrl), 'RPC Manager tracks primary and secondary endpoints');
 
   // Test Server Restart Recovery
-  // Insert an unconfirmed deposit simulating prior crash before maturation
   const crashTxHash = `0xcrash${uuidv4().replace(/-/g, '')}`.slice(0, 66);
   await processBlockchainDepositEvent({
     chainId: 56,

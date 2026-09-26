@@ -1,0 +1,15 @@
+# Firebase App Hosting Configuration
+# Node.js 24 environment configuration
+runConfig:
+  environmentVariables:
+    NODE_ENV: "production"
+    APP_ENV: "production"
+    BSC_CHAIN_ID: "56"
+    DEPOSIT_CONFIRMATIONS: "3"
+    USDT_CONTRACT_ADDRESS: "0x55d398326f99059ff775485246999027b3197955"
+    WITHDRAWALS_ENABLED: "false"
+  minInstances: 1
+  maxInstances: 10
+  concurrency: 80
+  cpu: 1
+  memoryMiB: 1024
