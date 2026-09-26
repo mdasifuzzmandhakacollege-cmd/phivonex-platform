@@ -23,6 +23,20 @@ declare global {
   var __phivonexDbPromise: Promise<DatabaseClient> | undefined;
 }
 
+export function getEffectiveDatabaseUrl(): string | undefined {
+  if (process.env.DATABASE_URL?.trim()) {
+    return process.env.DATABASE_URL.trim();
+  }
+  if (process.env.SQL_HOST && process.env.SQL_USER && process.env.SQL_PASSWORD && process.env.SQL_DB_NAME) {
+    const isUnix = process.env.SQL_HOST.startsWith('/');
+    const port = process.env.SQL_PORT || '5432';
+    return isUnix
+      ? `postgresql://${encodeURIComponent(process.env.SQL_USER)}:${encodeURIComponent(process.env.SQL_PASSWORD)}@/${process.env.SQL_DB_NAME}?host=${encodeURIComponent(process.env.SQL_HOST)}`
+      : `postgresql://${encodeURIComponent(process.env.SQL_USER)}:${encodeURIComponent(process.env.SQL_PASSWORD)}@${process.env.SQL_HOST}:${port}/${process.env.SQL_DB_NAME}`;
+  }
+  return undefined;
+}
+
 export async function getDb(): Promise<DatabaseClient> {
   // 1. If singleton instance is ready, return immediately
   if (globalThis.__phivonexDb) {
@@ -40,7 +54,7 @@ export async function getDb(): Promise<DatabaseClient> {
       const isProduction =
         (process.env.APP_ENV || '').toLowerCase() === 'production' ||
         (process.env.NODE_ENV || '').toLowerCase() === 'production';
-      const databaseUrl = process.env.DATABASE_URL?.trim();
+      const databaseUrl = getEffectiveDatabaseUrl();
       let client: DatabaseClient;
 
       if (isProduction) {
@@ -57,7 +71,7 @@ export async function getDb(): Promise<DatabaseClient> {
         }
 
         console.log('[DB] Connecting to Production PostgreSQL via DATABASE_URL...');
-        const isUnixSocket = databaseUrl.includes('host=/') || databaseUrl.includes('host=%2F');
+        const isUnixSocket = databaseUrl.includes('host=/') || databaseUrl.includes('host=%2F') || Boolean(process.env.SQL_HOST?.startsWith('/'));
         const pool = new Pool({
           connectionString: databaseUrl,
           ssl: isUnixSocket ? false : { rejectUnauthorized: false },
@@ -81,9 +95,10 @@ export async function getDb(): Promise<DatabaseClient> {
         (databaseUrl.startsWith('postgres://') || databaseUrl.startsWith('postgresql://'))
       ) {
         console.log('[DB] Connecting to PostgreSQL via DATABASE_URL...');
+        const isUnixSocket = databaseUrl.includes('host=/') || databaseUrl.includes('host=%2F') || Boolean(process.env.SQL_HOST?.startsWith('/'));
         const pool = new Pool({
           connectionString: databaseUrl,
-          ssl: undefined,
+          ssl: isUnixSocket ? false : undefined,
         });
 
         client = {

@@ -1,4 +1,13 @@
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
+import { auth, db, googleAuthProvider } from '../lib/firebase';
+import {
+  signInWithPopup,
+  createUserWithEmailAndPassword,
+  signInWithEmailAndPassword,
+  signOut as fbSignOut,
+  updateProfile,
+} from 'firebase/auth';
+import { doc, setDoc } from 'firebase/firestore';
 
 export interface UserProfile {
   id: string;
@@ -40,6 +49,7 @@ interface AuthContextType {
     password: string;
     rememberMe?: boolean;
   }) => Promise<UserProfile>;
+  loginWithGoogle: (referralCode?: string) => Promise<UserProfile>;
   logout: () => Promise<void>;
   forgotPassword: (email: string) => Promise<{ message: string }>;
   resetPassword: (token: string, newPassword: string) => Promise<{ message: string }>;
@@ -82,7 +92,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     refreshUser();
   }, [refreshUser]);
 
-  // 1. Register with backend API
+  // 1. Register with backend API & Firebase
   const register = async (data: {
     fullName: string;
     email: string;
@@ -105,11 +115,33 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       throw new Error(errMessage);
     }
 
+    // Sync to client-side Firebase Auth & Firestore
+    try {
+      const userCred = await createUserWithEmailAndPassword(auth, data.email.toLowerCase(), data.password);
+      if (userCred.user) {
+        await updateProfile(userCred.user, { displayName: data.fullName });
+        await setDoc(doc(db, 'users', userCred.user.uid), {
+          uid: userCred.user.uid,
+          id: result.user?.id || userCred.user.uid,
+          email: data.email.toLowerCase(),
+          fullName: data.fullName,
+          country: data.country,
+          phone: data.phone || null,
+          publicId: result.user?.publicId,
+          referralCode: result.user?.referralCode,
+          createdAt: new Date().toISOString(),
+          status: 'ACTIVE',
+        }, { merge: true });
+      }
+    } catch (fbErr: any) {
+      console.warn('[Firebase Client Sync] Note:', fbErr?.message || fbErr);
+    }
+
     setUser(result.user);
     return result.user;
   };
 
-  // 2. Login with backend API
+  // 2. Login with backend API & Firebase
   const login = async (data: {
     identifier: string;
     password: string;
@@ -129,11 +161,79 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       throw new Error(errMessage);
     }
 
+    // Sync to client-side Firebase Auth & Firestore
+    try {
+      if (data.identifier.includes('@')) {
+        let userCred;
+        try {
+          userCred = await signInWithEmailAndPassword(auth, data.identifier.toLowerCase(), data.password);
+        } catch (signInErr: any) {
+          if (signInErr?.code === 'auth/user-not-found' || signInErr?.code === 'auth/invalid-credential') {
+            userCred = await createUserWithEmailAndPassword(auth, data.identifier.toLowerCase(), data.password);
+          }
+        }
+        if (userCred?.user) {
+          await setDoc(doc(db, 'users', userCred.user.uid), {
+            uid: userCred.user.uid,
+            email: userCred.user.email,
+            lastLoginAt: new Date().toISOString(),
+          }, { merge: true });
+        }
+      }
+    } catch (fbErr: any) {
+      console.warn('[Firebase Login Sync] Note:', fbErr?.message || fbErr);
+    }
+
     setUser(result.user);
     return result.user;
   };
 
-  // 3. Logout
+  // 3. Login with Google (Firebase Auth + backend PostgreSQL)
+  const loginWithGoogle = async (referralCode?: string): Promise<UserProfile> => {
+    try {
+      const cred = await signInWithPopup(auth, googleAuthProvider);
+      const fbUser = cred.user;
+      
+      const res = await fetch('/api/auth/google', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          email: fbUser.email,
+          fullName: fbUser.displayName || 'Google User',
+          uid: fbUser.uid,
+          referralCode,
+        }),
+      });
+
+      const result = await res.json();
+      if (!res.ok) {
+        throw new Error(result.message || result.error || 'Failed to authenticate with Google.');
+      }
+
+      // Also ensure Firestore document exists
+      try {
+        await setDoc(doc(db, 'users', fbUser.uid), {
+          uid: fbUser.uid,
+          email: fbUser.email,
+          fullName: fbUser.displayName || 'Google User',
+          publicId: result.user?.publicId,
+          lastLoginAt: new Date().toISOString(),
+          status: 'ACTIVE',
+        }, { merge: true });
+      } catch (e) {
+        console.warn('[Firestore] Sync note:', e);
+      }
+
+      setUser(result.user);
+      return result.user;
+    } catch (err: any) {
+      console.error('[Google Auth] Sign-in failed:', err);
+      throw err;
+    }
+  };
+
+  // 4. Logout
   const logout = async (): Promise<void> => {
     try {
       await fetch('/api/auth/logout', {
@@ -144,6 +244,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } catch (err) {
       console.warn('[AuthContext] Logout fetch failed:', err);
     } finally {
+      try {
+        await fbSignOut(auth);
+      } catch {}
       setUser(null);
     }
   };
@@ -220,6 +323,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         loading,
         register,
         login,
+        loginWithGoogle,
         logout,
         forgotPassword,
         resetPassword,

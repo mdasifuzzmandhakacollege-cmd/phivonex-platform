@@ -21,6 +21,7 @@ import { economicRouter } from './src/server/routes/economicRoutes';
 import { swapRouter } from './src/server/routes/swapRoutes';
 import { notificationRouter } from './src/server/routes/notificationRoutes';
 import { emailWebhookRouter } from './src/server/routes/emailWebhookRoutes';
+import { diagnosticRouter } from './src/server/routes/diagnosticRoutes';
 import { getDb } from './src/server/db/db';
 import { startMatchingScheduler } from './src/server/services/binaryMatchingScheduler';
 import {
@@ -74,7 +75,7 @@ async function startServer() {
 
   // Database readiness middleware for all API requests
   app.use(async (req, res, next) => {
-    if (req.path.startsWith('/api/') && req.path !== '/api/health') {
+    if (req.path.startsWith('/api/') && !req.path.startsWith('/api/health') && !req.path.startsWith('/api/diagnostics')) {
       try {
         await getDb();
         next();
@@ -110,11 +111,17 @@ async function startServer() {
   app.use('/api/notifications', notificationRouter);
   app.use('/api/admin/economics', economicRouter);
   app.use('/api/webhooks/email', emailWebhookRouter);
+  app.use('/api/diagnostics', diagnosticRouter);
   app.use('/api/admin', adminRouter);
 
-  // Health check
+  // Health checks
   app.get('/api/health', (req, res) => {
     res.json({ status: 'ok', time: new Date().toISOString() });
+  });
+
+  app.get('/api/health/db', (req, res, next) => {
+    req.url = '/health';
+    diagnosticRouter(req, res, next);
   });
 
   // Centralized Error Sanitization Middleware for API routes

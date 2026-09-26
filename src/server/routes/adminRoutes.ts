@@ -19,6 +19,7 @@ import {
   getReconciliationIssues,
 } from '../services/reconciliationService';
 import { getIntegrationHealthStatus } from '../services/integrationHealthService';
+import { checkCloudSqlConnection } from '../utils/cloudSqlDiagnostic';
 import {
   getActiveMatchingConfig,
   updateMatchingConfig,
@@ -55,6 +56,28 @@ adminRouter.get('/integration-health', async (req: AuthRequest, res: Response) =
     return res.status(500).json({
       error: 'SERVER_ERROR',
       message: 'Failed to retrieve system integration health.',
+    });
+  }
+});
+
+/**
+ * GET /api/admin/diagnostics/cloudsql
+ * Admin endpoint to verify Cloud SQL PostgreSQL connection and schema status.
+ * Safely masks credentials.
+ */
+adminRouter.get('/diagnostics/cloudsql', async (req: AuthRequest, res: Response) => {
+  try {
+    const report = await checkCloudSqlConnection({ logStatus: true });
+    return res.status(report.status === 'connected' ? 200 : 503).json({
+      success: report.status === 'connected',
+      diagnostic: report,
+    });
+  } catch (err: any) {
+    console.error('[Admin API] Cloud SQL diagnostic execution error:', err);
+    return res.status(500).json({
+      success: false,
+      error: 'DIAGNOSTIC_EXEC_ERROR',
+      message: 'Failed to execute Cloud SQL diagnostic test.',
     });
   }
 });

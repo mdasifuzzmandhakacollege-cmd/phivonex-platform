@@ -40,6 +40,7 @@ import { EconomicControls } from '../components/admin/EconomicControls';
 import { FinancialReconciliationView } from '../components/admin/FinancialReconciliationView';
 import { AdminAuditLog } from '../components/admin/AdminAuditLog';
 import { TreasuryMovementChart } from '../components/admin/TreasuryMovementChart';
+import { CloudSqlDiagnosticCard } from '../components/admin/CloudSqlDiagnosticCard';
 import { AuditLogger, logAction, exportAuditLogsToCsv } from '../services/auditLogger';
 
 interface AdminPageProps {
@@ -701,6 +702,9 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onNavigate, currentPath = 
                   <div className="text-[11px] text-[#32D583]">Settled Lifetime</div>
                 </div>
               </div>
+
+              {/* Live Cloud SQL PostgreSQL Diagnostic Card */}
+              <CloudSqlDiagnosticCard />
 
               {/* Economic Totals Breakdown */}
               <div className="p-6 rounded-2xl bg-[#07101D] border border-white/[0.08] space-y-4">
