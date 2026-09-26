@@ -22,6 +22,8 @@ import {
   FileText,
   AlertCircle
 } from 'lucide-react';
+import { recordAdminAuditToFirestore } from '../../services/firestoreAuditService';
+import { AuditLogger } from '../../services/auditLogger';
 
 export type WithdrawalStateAction = 'APPROVE' | 'REJECT' | 'MARK_PROCESSING' | 'COMPLETE' | 'FAIL';
 
@@ -160,6 +162,45 @@ export const WithdrawalManagement: React.FC<WithdrawalManagementProps> = ({
         type: 'success',
         text: `Successfully transitioned withdrawal ${item.publicWithdrawalId} to ${action}. Ledger updated accordingly.`,
       });
+
+      // Record treasury/settlement movement to Cloud Firestore via AuditLogger
+      try {
+        if (action === 'COMPLETE' || action === 'APPROVE') {
+          await AuditLogger.logTreasuryMovement({
+            actionType: `WITHDRAWAL_${action}`,
+            amount: item.amount,
+            currency: item.currency,
+            toAddress: item.destinationReference,
+            userUid: 'SUPER_ADMIN',
+            details: `Processed treasury payout for withdrawal ${item.publicWithdrawalId} (${item.amount} ${item.currency}) to ${item.destinationReference}.${reasonInput.trim() ? ` Note: ${reasonInput.trim()}` : ''}`,
+            metadata: {
+              withdrawalId: item.publicWithdrawalId,
+              action,
+              userPublicId: item.userPublicId,
+              destinationType: item.destinationType,
+              destinationReference: item.destinationReference,
+              previousStatus: item.status,
+            },
+          });
+        } else {
+          await AuditLogger.logSettlement({
+            actionType: `WITHDRAWAL_${action}`,
+            withdrawalId: item.publicWithdrawalId,
+            amount: item.amount,
+            currency: item.currency,
+            destinationAddress: item.destinationReference,
+            userUid: 'SUPER_ADMIN',
+            details: `Administrative withdrawal state update: ${action} for ${item.publicWithdrawalId}.${reasonInput.trim() ? ` Note: ${reasonInput.trim()}` : ''}`,
+            metadata: {
+              action,
+              reason: reasonInput.trim() || undefined,
+              previousStatus: item.status,
+            },
+          });
+        }
+      } catch (fErr) {
+        console.warn('[WithdrawalManagement] Non-blocking Firestore audit log warning:', fErr);
+      }
 
       setSelectedTarget(null);
       setReasonInput('');

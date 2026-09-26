@@ -28,6 +28,8 @@ import {
   Zap,
   Globe
 } from 'lucide-react';
+import { recordAdminAuditToFirestore } from '../../services/firestoreAuditService';
+import { AuditLogger } from '../../services/auditLogger';
 
 export interface EconomicConfigItem {
   id: string;
@@ -225,6 +227,25 @@ export const EconomicControls: React.FC = () => {
         type: 'success',
         message: `Successfully updated ${editingConfig.configKey} to Version ${data.config.version}.`,
       });
+
+      // Record to Firestore as authoritative audit storage engine via AuditLogger
+      try {
+        await AuditLogger.logConfigUpdate({
+          configKey: editingConfig.configKey,
+          oldValue: editingConfig.configValue,
+          newValue: parsedValue,
+          userUid: editingConfig.updatedByAdminPublicId || 'SUPER_ADMIN',
+          reason: editReasonInput.trim() || undefined,
+          details: `Updated economic parameter ${editingConfig.configKey} to status ${editStatusInput}.${editReasonInput ? ` Reason: ${editReasonInput}` : ''}`,
+          metadata: {
+            status: editStatusInput,
+            version: data.config?.version,
+            category: editingConfig.category,
+          },
+        });
+      } catch (fErr) {
+        console.warn('[EconomicControls] Non-blocking Firestore audit log warning:', fErr);
+      }
 
       setEditingConfig(null);
       await fetchConfigs();

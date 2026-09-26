@@ -10508,6 +10508,18 @@ var BSC_CONFIG = {
 
 // src/server/providers/bscRpcProvider.ts
 import { ethers as ethers2 } from "ethers";
+function maskRpcUrl(url) {
+  if (!url) return "[unconfigured]";
+  try {
+    const parsed = new URL(url);
+    if (parsed.pathname && parsed.pathname.length > 1 && parsed.pathname !== "/") {
+      return `${parsed.protocol}//${parsed.host}/***`;
+    }
+    return `${parsed.protocol}//${parsed.host}`;
+  } catch {
+    return url.length > 20 ? `${url.slice(0, 15)}...` : url;
+  }
+}
 function withTimeout(promise, ms = 2e3) {
   return Promise.race([
     promise,
@@ -10554,8 +10566,10 @@ var BscRpcProviderManager = class {
       this.primaryHealthy = true;
       return { result, usedSecondary: false, rpcUrl: this.primaryUrl };
     } catch (primaryErr) {
+      const maskedPrimary = maskRpcUrl(this.primaryUrl);
+      const maskedSecondary = maskRpcUrl(this.secondaryUrl);
       console.warn(
-        `[BSC RPC Failover] Primary RPC (${this.primaryUrl}) error: ${primaryErr?.message || primaryErr}. Failing over to secondary RPC (${this.secondaryUrl})...`
+        `[BSC RPC Failover] Primary RPC (${maskedPrimary}) error: ${primaryErr?.message || primaryErr}. Failing over to secondary RPC (${maskedSecondary})...`
       );
       this.primaryHealthy = false;
       this.failoverCount++;
@@ -10572,7 +10586,7 @@ var BscRpcProviderManager = class {
           return { result: fallbackRes, usedSecondary: true, rpcUrl: this.secondaryUrl };
         }
         throw new Error(
-          `RPC_FAILOVER_EXHAUSTED: Primary (${this.primaryUrl}) error: ${primaryErr?.message}. Secondary (${this.secondaryUrl}) error: ${secondaryErr?.message}`
+          `RPC_FAILOVER_EXHAUSTED: Primary (${maskedPrimary}) error: ${primaryErr?.message}. Secondary (${maskedSecondary}) error: ${secondaryErr?.message}`
         );
       }
     }
@@ -10592,15 +10606,15 @@ var BscRpcProviderManager = class {
     }
   }
   /**
-   * Get current RPC health and failover metrics.
+   * Get current RPC health and failover metrics (URLs are masked).
    */
   getStatus() {
     return {
-      primaryUrl: this.primaryUrl,
-      secondaryUrl: this.secondaryUrl,
+      primaryUrl: maskRpcUrl(this.primaryUrl),
+      secondaryUrl: maskRpcUrl(this.secondaryUrl),
       primaryHealthy: this.primaryHealthy,
       secondaryHealthy: this.secondaryHealthy,
-      activeEndpoint: this.primaryHealthy ? this.primaryUrl : this.secondaryUrl,
+      activeEndpoint: this.primaryHealthy ? maskRpcUrl(this.primaryUrl) : maskRpcUrl(this.secondaryUrl),
       failoverCount: this.failoverCount,
       lastFailoverAt: this.lastFailoverAt ? this.lastFailoverAt.toISOString() : null,
       lastBlockNumber: this.lastBlockNumber

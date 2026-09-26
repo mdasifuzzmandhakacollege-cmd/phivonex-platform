@@ -12,6 +12,22 @@ export interface RpcStatus {
   lastBlockNumber: number;
 }
 
+/**
+ * Mask sensitive RPC URLs (e.g. Ankr endpoint tokens) to prevent secret leakage in logs.
+ */
+export function maskRpcUrl(url: string): string {
+  if (!url) return '[unconfigured]';
+  try {
+    const parsed = new URL(url);
+    if (parsed.pathname && parsed.pathname.length > 1 && parsed.pathname !== '/') {
+      return `${parsed.protocol}//${parsed.host}/***`;
+    }
+    return `${parsed.protocol}//${parsed.host}`;
+  } catch {
+    return url.length > 20 ? `${url.slice(0, 15)}...` : url;
+  }
+}
+
 function withTimeout<T>(promise: Promise<T>, ms = 2000): Promise<T> {
   return Promise.race([
     promise,
@@ -55,7 +71,7 @@ class BscRpcProviderManager {
   public async executeWithFailover<T>(
     operation: (provider: ethers.JsonRpcProvider, rpcUrl: string) => Promise<T>
   ): Promise<{ result: T; usedSecondary: boolean; rpcUrl: string }> {
-    // If primary was marked unhealthy or simulated fault, try secondary directly
+    // If primary was marked unhealthy, try secondary directly
     if (!this.primaryHealthy) {
       try {
         const result = await withTimeout(operation(this.secondaryProvider, this.secondaryUrl), 2000);
@@ -73,8 +89,10 @@ class BscRpcProviderManager {
       this.primaryHealthy = true;
       return { result, usedSecondary: false, rpcUrl: this.primaryUrl };
     } catch (primaryErr: any) {
+      const maskedPrimary = maskRpcUrl(this.primaryUrl);
+      const maskedSecondary = maskRpcUrl(this.secondaryUrl);
       console.warn(
-        `[BSC RPC Failover] Primary RPC (${this.primaryUrl}) error: ${primaryErr?.message || primaryErr}. Failing over to secondary RPC (${this.secondaryUrl})...`
+        `[BSC RPC Failover] Primary RPC (${maskedPrimary}) error: ${primaryErr?.message || primaryErr}. Failing over to secondary RPC (${maskedSecondary})...`
       );
       this.primaryHealthy = false;
       this.failoverCount++;
@@ -94,7 +112,7 @@ class BscRpcProviderManager {
           return { result: fallbackRes, usedSecondary: true, rpcUrl: this.secondaryUrl };
         }
         throw new Error(
-          `RPC_FAILOVER_EXHAUSTED: Primary (${this.primaryUrl}) error: ${primaryErr?.message}. Secondary (${this.secondaryUrl}) error: ${secondaryErr?.message}`
+          `RPC_FAILOVER_EXHAUSTED: Primary (${maskedPrimary}) error: ${primaryErr?.message}. Secondary (${maskedSecondary}) error: ${secondaryErr?.message}`
         );
       }
     }
@@ -116,15 +134,15 @@ class BscRpcProviderManager {
   }
 
   /**
-   * Get current RPC health and failover metrics.
+   * Get current RPC health and failover metrics (URLs are masked).
    */
   public getStatus(): RpcStatus {
     return {
-      primaryUrl: this.primaryUrl,
-      secondaryUrl: this.secondaryUrl,
+      primaryUrl: maskRpcUrl(this.primaryUrl),
+      secondaryUrl: maskRpcUrl(this.secondaryUrl),
       primaryHealthy: this.primaryHealthy,
       secondaryHealthy: this.secondaryHealthy,
-      activeEndpoint: this.primaryHealthy ? this.primaryUrl : this.secondaryUrl,
+      activeEndpoint: this.primaryHealthy ? maskRpcUrl(this.primaryUrl) : maskRpcUrl(this.secondaryUrl),
       failoverCount: this.failoverCount,
       lastFailoverAt: this.lastFailoverAt ? this.lastFailoverAt.toISOString() : null,
       lastBlockNumber: this.lastBlockNumber,

@@ -8,13 +8,15 @@ runConfig:
     DEPOSIT_CONFIRMATIONS: "3"
     USDT_CONTRACT_ADDRESS: "0x55d398326f99059ff775485246999027b3197955"
     WITHDRAWALS_ENABLED: "false"
-    BSC_RPC_URL_PRIMARY: "https://bsc-dataseed.binance.org"
-    BSC_RPC_URL_SECONDARY: "https://bsc-dataseed1.defibit.io"
   secrets:
     - variable: DEPOSIT_ADDRESS_XPUB
       secret: DEPOSIT_ADDRESS_XPUB
     - variable: TREASURY_WALLET_ADDRESS
       secret: TREASURY_WALLET_ADDRESS
+    - variable: BSC_RPC_URL_PRIMARY
+      secret: BSC_RPC_URL_PRIMARY
+    - variable: BSC_RPC_URL_SECONDARY
+      secret: BSC_RPC_URL_SECONDARY
   minInstances: 1
   maxInstances: 10
   concurrency: 80
