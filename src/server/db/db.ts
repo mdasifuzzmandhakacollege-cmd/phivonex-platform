@@ -1129,10 +1129,85 @@ async function initSchema(client: DatabaseClient) {
     // 5. Seed System Economic Parameters
     await seedEconomicConfigs(client);
 
+    // 6. Hydrate users and essential records from persistent Cloud Firestore across rollouts
+    await restoreUsersFromFirestore(client);
+
     console.log('[DB] PostgreSQL schema & Task #6 Genesis Node migrations initialized successfully.');
   } catch (err) {
     console.error('[DB] Error initializing schema:', err);
     throw err;
+  }
+}
+
+/**
+ * Hydrates users and associated essential records from Google Cloud Firestore
+ * into the active database upon startup/rollout.
+ * Ensures user accounts and credentials persist seamlessly across all container restarts.
+ */
+async function restoreUsersFromFirestore(client: DatabaseClient) {
+  try {
+    const { adminFirestore } = await import('../../lib/firebase-admin');
+    console.log('[DB Hydration] Checking Firestore for persistent users across rollouts...');
+    const snapshot = await adminFirestore.collection('users').get();
+    if (snapshot.empty) {
+      console.log('[DB Hydration] No Firestore users found to restore.');
+      return;
+    }
+
+    let restoredCount = 0;
+    for (const doc of snapshot.docs) {
+      const u = doc.data();
+      const email = u.email?.toLowerCase()?.trim();
+      if (!email) continue;
+
+      const existing = await client.query(`SELECT id FROM users WHERE LOWER(email) = $1`, [email]);
+      if (existing.rowCount === 0) {
+        const userId = u.id || u.uid || doc.id;
+        const publicId = u.publicId || `PHX-${Math.floor(100000 + Math.random() * 900000)}`;
+        const referralCode = u.referralCode || `PHX${Math.floor(10000 + Math.random() * 90000)}`;
+        const role = (email === 'md.asifuzzman.dhakacollege@gmail.com' || email === 'admin@phivonex.com') ? 'ADMIN' : (u.role || 'USER');
+
+        await client.query(`
+          INSERT INTO users (
+            id, public_id, full_name, email, phone, country, password_hash,
+            status, role, email_verified_at, created_at, updated_at
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+          ON CONFLICT (id) DO NOTHING
+        `, [
+          userId,
+          publicId,
+          u.fullName || email.split('@')[0],
+          email,
+          u.phone || null,
+          u.country || 'Global',
+          u.passwordHash || '$argon2id$v=19$m=65536,t=3,p=4$dummyhashforrestoreduser',
+          u.status || 'ACTIVE',
+          role,
+        ]);
+
+        await client.query(`
+          INSERT INTO user_referrals (user_id, referral_code, created_at)
+          VALUES ($1, $2, CURRENT_TIMESTAMP)
+          ON CONFLICT (user_id) DO NOTHING
+        `, [userId, referralCode]);
+
+        await client.query(`
+          INSERT INTO binary_placements (user_id, parent_user_id, side, status, placed_at, created_at)
+          VALUES ($1, NULL, NULL, 'UNPLACED', NULL, CURRENT_TIMESTAMP)
+          ON CONFLICT (user_id) DO NOTHING
+        `, [userId]);
+
+        restoredCount++;
+      }
+    }
+
+    if (restoredCount > 0) {
+      console.log(`[DB Hydration] Successfully verified and restored ${restoredCount} user(s) from persistent Firestore cloud storage!`);
+    } else {
+      console.log('[DB Hydration] All Firestore users are already up-to-date in database.');
+    }
+  } catch (syncErr: any) {
+    console.warn('[DB Hydration] Firestore restore skipped or notice:', syncErr?.message || syncErr);
   }
 }
 

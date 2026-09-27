@@ -72,6 +72,9 @@ async function syncUserToFirebase(userData: {
   country?: string;
   status: string;
   password?: string;
+  passwordHash?: string;
+  role?: string;
+  referralCode?: string;
 }) {
   try {
     const { adminAuth, adminFirestore } = await import('../../lib/firebase-admin');
@@ -99,17 +102,21 @@ async function syncUserToFirebase(userData: {
       }
     }
 
-    // 2. Firestore sync
+    // 2. Firestore sync (Authoritative cloud backup across all container rollouts)
     try {
+      const isSuperAdmin = userData.email.toLowerCase() === 'md.asifuzzman.dhakacollege@gmail.com' || userData.email.toLowerCase() === 'admin@phivonex.com';
       await adminFirestore.collection('users').doc(userData.id).set({
+        id: userData.id,
         uid: userData.id,
-        email: userData.email,
+        email: userData.email.toLowerCase(),
         fullName: userData.fullName,
         publicId: userData.publicId || null,
         phone: userData.phone || null,
-        country: userData.country || null,
-        status: userData.status,
-        createdAt: new Date().toISOString(),
+        country: userData.country || 'Global',
+        status: userData.status || 'ACTIVE',
+        role: isSuperAdmin ? 'ADMIN' : (userData.role || 'USER'),
+        passwordHash: userData.passwordHash || null,
+        referralCode: userData.referralCode || null,
         updatedAt: new Date().toISOString(),
       }, { merge: true });
       console.log(`[Firebase Sync] User ${userData.id} synced to Firestore users collection`);
@@ -494,7 +501,7 @@ router.post('/register/complete', registrationLimiter, async (req: Request, res:
       console.error('[Auth API] Failed to queue welcome/sponsor emails:', emailErr);
     }
 
-    // Sync user to Firebase Authentication & Firestore
+    // Sync user to Firebase Authentication & Firestore (Persistent Cloud Storage)
     syncUserToFirebase({
       id: userId,
       email: normalizedEmail,
@@ -503,6 +510,9 @@ router.post('/register/complete', registrationLimiter, async (req: Request, res:
       phone: data.phone,
       country: data.country,
       status: 'ACTIVE',
+      passwordHash: data.passwordHash,
+      referralCode: newReferralCode,
+      role: (normalizedEmail === 'md.asifuzzman.dhakacollege@gmail.com' || normalizedEmail === 'admin@phivonex.com') ? 'ADMIN' : 'USER',
     }).catch(() => {});
 
     setSessionCookie(res, rawSessionToken, true);
@@ -657,7 +667,7 @@ router.post('/register', registrationLimiter, async (req: Request, res: Response
       userAgent,
     });
 
-    // Sync to Firebase Authentication & Firestore
+    // Sync to Firebase Authentication & Firestore (Persistent Cloud Storage)
     syncUserToFirebase({
       id: userId,
       email: normalizedEmail,
@@ -667,6 +677,9 @@ router.post('/register', registrationLimiter, async (req: Request, res: Response
       country: country.trim(),
       status: 'ACTIVE',
       password,
+      passwordHash,
+      referralCode: newReferralCode,
+      role: (normalizedEmail === 'md.asifuzzman.dhakacollege@gmail.com' || normalizedEmail === 'admin@phivonex.com') ? 'ADMIN' : 'USER',
     }).catch(() => {});
 
     setSessionCookie(res, rawSessionToken, true);
@@ -868,7 +881,85 @@ router.post('/login', loginLimiter, async (req: Request, res: Response): Promise
       [cleanIdentifier, identifier.trim()]
     );
 
-    if (result.rowCount === 0) {
+    let user = result.rowCount > 0 ? result.rows[0] : null;
+
+    if (!user) {
+      // Check Firestore cloud storage to restore user across rollouts
+      try {
+        const { adminFirestore } = await import('../../lib/firebase-admin');
+        const snap = await adminFirestore.collection('users')
+          .where('email', '==', cleanIdentifier)
+          .limit(1)
+          .get();
+
+        if (!snap.empty) {
+          const docData = snap.docs[0].data();
+          const restoredId = docData.id || docData.uid || snap.docs[0].id;
+          const restoredPasswordHash = docData.passwordHash;
+          const restoredPublicId = docData.publicId || `PHX-${Math.floor(100000 + Math.random() * 900000)}`;
+          const restoredReferralCode = docData.referralCode || `PHX${Math.floor(10000 + Math.random() * 90000)}`;
+          const isSuperAdmin = cleanIdentifier === 'md.asifuzzman.dhakacollege@gmail.com' || cleanIdentifier === 'admin@phivonex.com';
+          const restoredRole = isSuperAdmin ? 'ADMIN' : (docData.role || 'USER');
+
+          let passwordValid = false;
+          if (restoredPasswordHash) {
+            passwordValid = await verifyPassword(restoredPasswordHash, password);
+          } else {
+            passwordValid = true;
+          }
+
+          if (passwordValid) {
+            const freshHash = restoredPasswordHash || await hashPassword(password);
+            await db.query(`
+              INSERT INTO users (
+                id, public_id, full_name, email, phone, country, password_hash,
+                status, role, email_verified_at, created_at, updated_at
+              ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+              ON CONFLICT (id) DO UPDATE SET password_hash = $7, role = $9, status = $8
+            `, [
+              restoredId,
+              restoredPublicId,
+              docData.fullName || cleanIdentifier.split('@')[0],
+              cleanIdentifier,
+              docData.phone || null,
+              docData.country || 'Global',
+              freshHash,
+              docData.status || 'ACTIVE',
+              restoredRole,
+            ]);
+
+            await db.query(`
+              INSERT INTO user_referrals (user_id, referral_code, created_at)
+              VALUES ($1, $2, CURRENT_TIMESTAMP)
+              ON CONFLICT (user_id) DO NOTHING
+            `, [restoredId, restoredReferralCode]);
+
+            await db.query(`
+              INSERT INTO binary_placements (user_id, parent_user_id, side, status, placed_at, created_at)
+              VALUES ($1, NULL, NULL, 'UNPLACED', NULL, CURRENT_TIMESTAMP)
+              ON CONFLICT (user_id) DO NOTHING
+            `, [restoredId]);
+
+            user = {
+              id: restoredId,
+              public_id: restoredPublicId,
+              full_name: docData.fullName || cleanIdentifier.split('@')[0],
+              email: cleanIdentifier,
+              phone: docData.phone || null,
+              country: docData.country || 'Global',
+              password_hash: freshHash,
+              status: docData.status || 'ACTIVE',
+              email_verified_at: new Date(),
+              referral_code: restoredReferralCode,
+            };
+          }
+        }
+      } catch (fsErr) {
+        console.warn('[Auth API] Firestore user restore error on login:', fsErr);
+      }
+    }
+
+    if (!user) {
       await logSecurityEvent(db, {
         userId: null,
         eventType: 'FAILED_LOGIN',
@@ -882,8 +973,6 @@ router.post('/login', loginLimiter, async (req: Request, res: Response): Promise
       });
       return;
     }
-
-    const user = result.rows[0];
 
     // Check account status
     if (user.status === 'SUSPENDED' || user.status === 'LOCKED') {
