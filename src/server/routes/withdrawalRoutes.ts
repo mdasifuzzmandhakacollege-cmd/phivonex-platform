@@ -10,6 +10,7 @@ import {
   settleWithdrawalAction,
 } from '../services/withdrawalService';
 import { broadcastBnbWithdrawal } from '../services/bscSignerService';
+import { verifyCaptcha } from '../services/captchaService';
 import { getDb } from '../db/db';
 
 export const withdrawalRouter = Router();
@@ -22,7 +23,22 @@ export const withdrawalRouter = Router();
 withdrawalRouter.post('/', requireAuth, withdrawalLimiter, async (req: AuthRequest, res: Response) => {
   try {
     const userId = req.user!.id;
-    const { amount, destinationType, destinationReference, idempotencyKey } = req.body;
+    const { amount, destinationType, destinationReference, idempotencyKey, captchaToken, captchaAnswer, captchaVisualCode } = req.body;
+    const clientIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.ip || '127.0.0.1';
+
+    // Real-time Bot Shield & High-Value Transaction Authorization
+    const captchaResult = await verifyCaptcha(captchaToken, 'WITHDRAWAL', clientIp, {
+      answer: captchaAnswer,
+      visualCode: captchaVisualCode,
+      userId,
+    });
+
+    if (!captchaResult.success) {
+      return res.status(403).json({
+        error: 'CAPTCHA_REQUIRED',
+        message: 'Security authorization check failed. Please complete the CAPTCHA verification to proceed with withdrawal.',
+      });
+    }
 
     const numAmount = parseFloat(amount);
     if (isNaN(numAmount) || !isFinite(numAmount) || numAmount <= 0) {

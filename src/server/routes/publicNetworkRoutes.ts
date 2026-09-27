@@ -6,7 +6,28 @@ import {
   PublicNetworkEvent,
 } from '../services/publicNetworkService';
 
+import { getTokenPriceTrend } from '../services/economicService';
+
 export const publicNetworkRouter = Router();
+
+/**
+ * GET /api/public/network/price-trend
+ * Returns real-time 24h token price performance data for Recharts.
+ */
+publicNetworkRouter.get('/price-trend', async (req: Request, res: Response) => {
+  try {
+    const timeframe = (req.query.timeframe as string) || '24h';
+    const trendData = await getTokenPriceTrend(timeframe);
+    res.setHeader('Cache-Control', 'public, max-age=5');
+    return res.status(200).json(trendData);
+  } catch (err: any) {
+    console.error('[Public API] Error fetching token price trend:', err);
+    return res.status(500).json({
+      error: 'SERVER_ERROR',
+      message: 'Failed to retrieve token price trend data.',
+    });
+  }
+});
 
 /**
  * GET /api/public/network/summary

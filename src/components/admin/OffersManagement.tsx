@@ -81,19 +81,33 @@ export const OffersManagement: React.FC<OffersManagementProps> = ({ adminEmail, 
   const [deleting, setDeleting] = useState<boolean>(false);
 
   // Form State
-  const [formData, setFormData] = useState({
+  const [formData, setFormData] = useState<{
+    title: string;
+    description: string;
+    bannerImage: string;
+    offerType: 'BOGO_FREE_NODE' | 'FREE_BONUS_NODE' | 'DISCOUNT' | 'CUSTOM';
+    bonusNodesCount: number;
+    bonusMiningRewards: boolean;
+    bonusMatchingEnabled: boolean;
+    bonusReferralCommission: boolean;
+    startDate: string;
+    endDate: string;
+    status: 'ACTIVE' | 'INACTIVE';
+    targetAudience: 'ALL' | 'NEW' | 'VIP';
+    priorityOrder: number;
+  }>({
     title: '',
     description: '',
     bannerImage: PRESET_BANNERS[0].url,
-    offerType: 'BOGO_FREE_NODE' as const,
+    offerType: 'BOGO_FREE_NODE',
     bonusNodesCount: 1,
     bonusMiningRewards: true, // Free bonus node earns daily coin mining rewards
     bonusMatchingEnabled: false, // Free bonus node does NOT generate binary matching spots/volume
     bonusReferralCommission: false, // Free bonus node does NOT generate direct referral spot commissions
     startDate: new Date().toISOString().slice(0, 16),
     endDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 16),
-    status: 'ACTIVE' as const,
-    targetAudience: 'ALL' as const,
+    status: 'ACTIVE',
+    targetAudience: 'ALL',
     priorityOrder: 1,
   });
 

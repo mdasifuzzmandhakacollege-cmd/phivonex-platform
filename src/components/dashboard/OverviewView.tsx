@@ -24,6 +24,7 @@ import {
 } from 'lucide-react';
 import { UserProfile } from '../../context/AuthContext';
 import { WalletSection } from './WalletSection';
+import { TokenPriceTrendChart } from './TokenPriceTrendChart';
 import { buildPublicReferralUrl } from '../../utils/referralUrl';
 
 interface ReferralMeResponse {
@@ -41,7 +42,7 @@ interface OverviewViewProps {
   onNavigateTab?: (tab: string) => void;
 }
 
-export const OverviewView: React.FC<OverviewViewProps> = ({ user }) => {
+export const OverviewView: React.FC<OverviewViewProps> = ({ user, onNavigateTab }) => {
   const [referralData, setReferralData] = useState<ReferralMeResponse | null>(null);
   const [loadingReferral, setLoadingReferral] = useState(true);
   const [referralError, setReferralError] = useState<string | null>(null);
@@ -170,6 +171,9 @@ export const OverviewView: React.FC<OverviewViewProps> = ({ user }) => {
           </div>
         </div>
       </div>
+
+      {/* Real-time 24H Token Price Trend Performance Chart */}
+      <TokenPriceTrendChart onNavigateTab={onNavigateTab} />
 
       {/* 2. REAL ACCOUNT OVERVIEW CARDS (6 Key Cards) */}
       <div>

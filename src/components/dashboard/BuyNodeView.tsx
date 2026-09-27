@@ -23,6 +23,7 @@ import {
 import { UserProfile } from '../../context/AuthContext';
 import { GENESIS_NODE_CAP, NODE_BASE_PRICE_USD, RESERVATION_EXPIRY_MINUTES } from '../../config/nodeConfig';
 import { UsdtIcon, BnbIcon, PhivoCoinIcon } from '../brand/CryptoIcons';
+import { SecurityCaptcha } from '../common/SecurityCaptcha';
 
 interface BuyNodeViewProps {
   user: UserProfile;
@@ -799,6 +800,16 @@ export const BuyNodeView: React.FC<BuyNodeViewProps> = ({ user, onNavigateTab })
                 </p>
               </button>
             </div>
+
+            {/* Real-time Security Shield */}
+            {((selectedAssetForNode === 'USDT' && balanceValidation?.canActivateWithUsdt) ||
+              (selectedAssetForNode === 'BNB' && balanceValidation?.canActivateWithBnb)) && (
+              <SecurityCaptcha
+                action="buyNode"
+                label="Node Activation Security Shield"
+                onVerify={() => {}}
+              />
+            )}
 
             {/* Action Trigger */}
             <div className="flex flex-col sm:flex-row items-center justify-between gap-4 pt-2">

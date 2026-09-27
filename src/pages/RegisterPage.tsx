@@ -17,6 +17,7 @@ import {
 import { PhivonexLogo } from '../components/brand/PhivonexLogo';
 import { COUNTRIES } from '../data/countries';
 import { useAuth } from '../context/AuthContext';
+import { SecurityCaptcha } from '../components/common/SecurityCaptcha';
 
 interface RegisterPageProps {
   initialReferralCode?: string;
@@ -89,6 +90,7 @@ export const RegisterPage: React.FC<RegisterPageProps> = ({
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [agreeTerms, setAgreeTerms] = useState(false);
+  const [captchaToken, setCaptchaToken] = useState<string>('');
 
   // UI state
   const [showPassword, setShowPassword] = useState(false);
@@ -267,6 +269,7 @@ export const RegisterPage: React.FC<RegisterPageProps> = ({
           country: selectedCountry,
           password,
           referralCode: referralCode.trim() || undefined,
+          captchaToken: captchaToken || undefined,
         }),
       });
 
@@ -780,6 +783,16 @@ export const RegisterPage: React.FC<RegisterPageProps> = ({
                         <AlertCircle className="w-3 h-3 shrink-0" /> {errors.agreeTerms}
                       </span>
                     )}
+                  </div>
+
+                  {/* Security Verification Shield */}
+                  <div className="pt-2">
+                    <SecurityCaptcha
+                      action="register"
+                      label="Security Verification Shield"
+                      onVerify={(token) => setCaptchaToken(token)}
+                      onReset={() => setCaptchaToken('')}
+                    />
                   </div>
 
                   {/* 7. Primary Action Button */}

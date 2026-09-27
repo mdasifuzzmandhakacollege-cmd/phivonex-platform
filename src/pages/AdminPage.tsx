@@ -47,6 +47,7 @@ import { AdminAuditLog } from '../components/admin/AdminAuditLog';
 import { TreasuryMovementChart } from '../components/admin/TreasuryMovementChart';
 import { CloudSqlDiagnosticCard } from '../components/admin/CloudSqlDiagnosticCard';
 import { OffersManagement } from '../components/admin/OffersManagement';
+import { CaptchaManagement } from '../components/admin/CaptchaManagement';
 import { AuditLogger, logAction, exportAuditLogsToCsv } from '../services/auditLogger';
 
 interface AdminPageProps {
@@ -60,6 +61,7 @@ export type AdminTab =
   | 'reconciliation'
   | 'economics'
   | 'offers'
+  | 'captcha'
   | 'users'
   | 'nodes'
   | 'orders'
@@ -91,6 +93,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onNavigate, currentPath = 
     if (clean.includes('/reconciliation')) return 'reconciliation';
     if (clean.includes('/economics')) return 'economics';
     if (clean.includes('/offers') || clean.includes('/promotions')) return 'offers';
+    if (clean.includes('/captcha') || clean.includes('/security') || clean.includes('/recaptcha')) return 'captcha';
     if (clean.includes('/users')) return 'users';
     if (clean.includes('/nodes')) return 'nodes';
     if (clean.includes('/orders')) return 'orders';
@@ -585,6 +588,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onNavigate, currentPath = 
     { id: 'reconciliation' as AdminTab, label: 'Financial Reconciliation', icon: ShieldCheck },
     { id: 'economics' as AdminTab, label: 'Economic Controls', icon: Sliders },
     { id: 'offers' as AdminTab, label: 'Promotions & Offers', icon: Gift },
+    { id: 'captcha' as AdminTab, label: 'Security & CAPTCHA', icon: ShieldCheck },
     { id: 'users' as AdminTab, label: 'Users', icon: Users },
     { id: 'nodes' as AdminTab, label: 'Nodes Inventory', icon: Server },
     { id: 'orders' as AdminTab, label: 'Node Orders', icon: ShoppingBag },
@@ -1278,15 +1282,23 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onNavigate, currentPath = 
               adminEmail={user?.email}
               onLogAction={(action, targetType, targetId, details) => {
                 logAction({
-                  adminUserId: user?.id || 'admin',
-                  adminEmail: user?.email || 'admin',
-                  adminPublicId: (user as any)?.publicId || 'ADMIN',
-                  action,
+                  userUid: (user as any)?.uid || (user as any)?.publicId || 'ADMIN',
+                  actorEmail: user?.email || 'admin@phivonex.com',
+                  actionType: action,
+                  category: 'CONFIG_UPDATE',
                   targetType,
                   targetId,
                   details,
                 });
               }}
+            />
+          )}
+
+          {/* TAB: SECURITY & CAPTCHA MANAGEMENT */}
+          {activeTab === 'captcha' && (
+            <CaptchaManagement
+              currentUserEmail={user?.email}
+              currentUserUid={(user as any)?.publicId || 'ADMIN'}
             />
           )}
 

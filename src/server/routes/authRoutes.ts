@@ -6,6 +6,7 @@ import { generatePublicId, generateReferralCode, normalizeReferralCode } from '.
 import { requireAuth, AuthRequest, isUserAdmin } from '../middleware/authMiddleware';
 import { authLimiter, loginLimiter, registrationLimiter, passwordResetLimiter } from '../middleware/rateLimiter';
 import { logSecurityEvent, parseUserAgentSummary } from '../utils/securityLogger';
+import { verifyCaptcha, getCaptchaConfig } from '../services/captchaService';
 
 const router = Router();
 
@@ -134,7 +135,21 @@ async function syncUserToFirebase(userData: {
  */
 router.post('/register/request-verification', registrationLimiter, async (req: Request, res: Response): Promise<void> => {
   try {
-    const { fullName, email, country, password, referralCode, phone } = req.body;
+    const { fullName, email, country, password, referralCode, phone, captchaToken, captchaAnswer, captchaVisualCode } = req.body;
+    const clientIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.ip || '127.0.0.1';
+
+    // Verify Bot Defense CAPTCHA
+    const captchaResult = await verifyCaptcha(captchaToken, 'REGISTER', clientIp, {
+      answer: captchaAnswer,
+      visualCode: captchaVisualCode,
+    });
+    if (!captchaResult.success) {
+      res.status(403).json({
+        error: 'CAPTCHA_REQUIRED',
+        message: 'Security check failed. Please complete the CAPTCHA verification.',
+      });
+      return;
+    }
 
     // 1. Validation
     if (!fullName || typeof fullName !== 'string' || fullName.trim().length < 2) {
@@ -848,7 +863,21 @@ router.post('/google', authLimiter, async (req: Request, res: Response): Promise
  */
 router.post('/login', loginLimiter, async (req: Request, res: Response): Promise<void> => {
   try {
-    const { identifier, password, rememberMe = true } = req.body;
+    const { identifier, password, rememberMe = true, captchaToken, captchaAnswer, captchaVisualCode } = req.body;
+    const clientIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.ip || '127.0.0.1';
+
+    // Verify Bot Defense CAPTCHA
+    const captchaResult = await verifyCaptcha(captchaToken, 'LOGIN', clientIp, {
+      answer: captchaAnswer,
+      visualCode: captchaVisualCode,
+    });
+    if (!captchaResult.success) {
+      res.status(403).json({
+        error: 'CAPTCHA_REQUIRED',
+        message: 'Security check failed. Please complete the CAPTCHA verification.',
+      });
+      return;
+    }
 
     if (!identifier || !password) {
       res.status(400).json({
