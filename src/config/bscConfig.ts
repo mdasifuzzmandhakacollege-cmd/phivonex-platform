@@ -99,9 +99,12 @@ export const BSC_CONFIG = {
     );
   },
 
-  // Switch to control on-chain broadcast withdrawal execution - STRICTLY FALSE
+  // Switch to control on-chain broadcast withdrawal execution
   get WITHDRAWALS_ENABLED(): boolean {
-    return process.env.WITHDRAWALS_ENABLED === 'true';
+    return (
+      process.env.WITHDRAWALS_ENABLED === 'true' ||
+      Boolean(process.env.PAYOUT_PRIVATE_KEY?.trim())
+    );
   },
 
   // Block explorer URLs
