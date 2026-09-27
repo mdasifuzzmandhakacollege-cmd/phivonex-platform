@@ -918,6 +918,27 @@ async function initSchema(client: DatabaseClient) {
       console.warn('[DB Migration] Task #20 Notifications schema migration warning:', task20Err);
     }
 
+    // Web Push Tokens Table for Firebase Cloud Messaging (FCM)
+    try {
+      await client.exec(`
+        CREATE TABLE IF NOT EXISTS user_push_tokens (
+          id UUID PRIMARY KEY,
+          user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          token TEXT NOT NULL,
+          platform VARCHAR(50) DEFAULT 'WEB',
+          user_agent TEXT,
+          is_active BOOLEAN DEFAULT TRUE,
+          created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          CONSTRAINT uq_user_push_token UNIQUE (user_id, token)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_user_push_tokens_user ON user_push_tokens (user_id, is_active);
+      `);
+    } catch (pushErr) {
+      console.warn('[DB Migration] Web Push tokens schema migration warning:', pushErr);
+    }
+
     // Task #21: Financial Reconciliation Tables
     try {
       await client.exec(`
@@ -1003,8 +1024,13 @@ async function initSchema(client: DatabaseClient) {
         SELECT 
           '2c45abba-b586-4032-8cf4-6a039eec92bc', TRUE, 5000.00, TRUE,
           'DISCARD_WEAK_CARRY_STRONG', CURRENT_DATE, 1,
-          '[{"units":2,"bonusUsd":500},{"units":4,"bonusUsd":1000},{"units":6,"bonusUsd":1500},{"units":8,"bonusUsd":2000},{"units":10,"bonusUsd":2500},{"units":12,"bonusUsd":3000},{"units":14,"bonusUsd":3500},{"units":16,"bonusUsd":4000},{"units":18,"bonusUsd":4500},{"units":20,"bonusUsd":5000}]'
+          '[{"units":2,"bonusUsd":500},{"units":4,"bonusUsd":1000},{"units":8,"bonusUsd":1500},{"units":12,"bonusUsd":2000},{"units":16,"bonusUsd":2500},{"units":20,"bonusUsd":3000},{"units":24,"bonusUsd":3500},{"units":28,"bonusUsd":4000},{"units":32,"bonusUsd":4500},{"units":36,"bonusUsd":5000}]'
         WHERE NOT EXISTS (SELECT 1 FROM binary_matching_config);
+
+        -- Update default tier schedule if needed
+        UPDATE binary_matching_config
+        SET tiers_json = '[{"units":2,"bonusUsd":500},{"units":4,"bonusUsd":1000},{"units":8,"bonusUsd":1500},{"units":12,"bonusUsd":2000},{"units":16,"bonusUsd":2500},{"units":20,"bonusUsd":3000},{"units":24,"bonusUsd":3500},{"units":28,"bonusUsd":4000},{"units":32,"bonusUsd":4500},{"units":36,"bonusUsd":5000}]'
+        WHERE version = 1 AND tiers_json LIKE '%"units":6%';
       `);
     } catch (task233AErr) {
       console.warn('[DB Migration] Task #23.3A Dynamic Matching schema migration warning:', task233AErr);
@@ -1419,12 +1445,16 @@ async function seedEconomicConfigs(client: DatabaseClient) {
       {
         key: 'MATCHING_TIERS_CONFIG',
         value: JSON.stringify([
-          { units: 2, rewardUsd: 20 },
-          { units: 4, rewardUsd: 40 },
-          { units: 8, rewardUsd: 80 },
-          { units: 20, rewardUsd: 200 },
-          { units: 50, rewardUsd: 500 },
-          { units: 100, rewardUsd: 1000 },
+          { units: 2, rewardUsd: 500 },
+          { units: 4, rewardUsd: 1000 },
+          { units: 8, rewardUsd: 1500 },
+          { units: 12, rewardUsd: 2000 },
+          { units: 16, rewardUsd: 2500 },
+          { units: 20, rewardUsd: 3000 },
+          { units: 24, rewardUsd: 3500 },
+          { units: 28, rewardUsd: 4000 },
+          { units: 32, rewardUsd: 4500 },
+          { units: 36, rewardUsd: 5000 },
         ]),
         category: 'MATCHING',
         description: 'Daily binary volume balance matching bonus reward tiers',

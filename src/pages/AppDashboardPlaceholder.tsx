@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { PhivonexLogo } from '../components/brand/PhivonexLogo';
 import { useAuth } from '../context/AuthContext';
+import { buildPublicReferralUrl } from '../utils/referralUrl';
 
 interface AppDashboardPlaceholderProps {
   onNavigate: (route: string) => void;
@@ -62,6 +63,11 @@ export const AppDashboardPlaceholder: React.FC<AppDashboardPlaceholderProps> = (
     };
   }, []);
 
+  const effectiveReferralUrl = buildPublicReferralUrl(
+    referralInfo?.referralCode || user?.referralCode || 'PHXGENESIS',
+    referralInfo?.referralUrl
+  );
+
   const handleCopyCode = () => {
     const code = referralInfo?.referralCode || user?.referralCode;
     if (!code) return;
@@ -71,9 +77,8 @@ export const AppDashboardPlaceholder: React.FC<AppDashboardPlaceholderProps> = (
   };
 
   const handleCopyLink = () => {
-    const link = referralInfo?.referralUrl || `${window.location.origin}/register?ref=${user?.referralCode}`;
-    if (!link) return;
-    navigator.clipboard.writeText(link);
+    if (!effectiveReferralUrl) return;
+    navigator.clipboard.writeText(effectiveReferralUrl);
     setCopiedLink(true);
     setTimeout(() => setCopiedLink(false), 2000);
   };
@@ -192,7 +197,7 @@ export const AppDashboardPlaceholder: React.FC<AppDashboardPlaceholderProps> = (
                     <input
                       type="text"
                       readOnly
-                      value={referralInfo?.referralUrl || `${window.location.origin}/register?ref=${user?.referralCode || ''}`}
+                      value={effectiveReferralUrl}
                       className="flex-1 bg-white/[0.03] border border-white/[0.08] rounded-lg px-3 py-2 text-xs font-mono text-[#98A2B3] select-all focus:outline-none"
                     />
                     <button

@@ -51,6 +51,7 @@ export interface MatchingSummary {
   };
   latestSettlement: MatchingSettlementItem | null;
   totalMatchingEarnedUsd: number;
+  activeTiers?: Array<{ units: number; bonusUsd?: number; rewardUsd?: number }>;
   nextSettlement: {
     scheduledTime: string;
     nextSettlementIso: string;
@@ -216,46 +217,51 @@ export const MatchingSection: React.FC<MatchingSectionProps> = ({
         </div>
       </div>
 
-      {/* Official Matching Tiers Reference */}
-      <div className="p-4 rounded-xl bg-[#07101D]/70 border border-white/5 space-y-3">
-        <div className="flex items-center space-x-2 text-xs font-mono text-slate-300">
-          <Layers className="w-4 h-4 text-cyan-400" />
-          <span className="font-semibold">Official Server Matching Tiers</span>
-          <span className="text-slate-500">(Greedy decomposition from 100/100 down to 2/2)</span>
-        </div>
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 text-xs font-mono">
-          <div className="p-2.5 rounded-lg bg-white/[0.02] border border-white/5 text-center">
-            <div className="text-slate-400 text-[10px]">Tier 1</div>
-            <div className="font-bold text-white">2 / 2</div>
-            <div className="text-emerald-400 text-[11px] font-semibold">$500</div>
+      {/* Official Dynamic Matching Tiers Reference */}
+      {(() => {
+        const defaultTiers = [
+          { units: 2, bonusUsd: 500 },
+          { units: 4, bonusUsd: 1000 },
+          { units: 8, bonusUsd: 1500 },
+          { units: 12, bonusUsd: 2000 },
+          { units: 16, bonusUsd: 2500 },
+          { units: 20, bonusUsd: 3000 },
+          { units: 24, bonusUsd: 3500 },
+          { units: 28, bonusUsd: 4000 },
+          { units: 32, bonusUsd: 4500 },
+          { units: 36, bonusUsd: 5000 },
+        ];
+        const displayTiers = summary?.activeTiers && summary.activeTiers.length > 0
+          ? summary.activeTiers
+          : defaultTiers;
+
+        return (
+          <div className="p-4 rounded-xl bg-[#07101D]/70 border border-white/5 space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-mono text-slate-300">
+              <div className="flex items-center space-x-2">
+                <Layers className="w-4 h-4 text-cyan-400" />
+                <span className="font-semibold text-white">Daily Binary Matching Tiers</span>
+                <span className="text-slate-500 text-[11px]">(Live Dynamic Payout Schedule)</span>
+              </div>
+              <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">
+                {displayTiers.length} Active Slabs
+              </span>
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2 text-xs font-mono">
+              {displayTiers.map((tier, idx) => {
+                const reward = (tier as any).bonusUsd ?? (tier as any).rewardUsd ?? 0;
+                return (
+                  <div key={idx} className="p-2.5 rounded-lg bg-white/[0.02] hover:bg-white/[0.04] border border-white/5 transition-all text-center">
+                    <div className="text-slate-400 text-[10px]">Tier {idx + 1}</div>
+                    <div className="font-bold text-white text-xs mt-0.5">L-{tier.units} = R-{tier.units}</div>
+                    <div className="text-emerald-400 text-xs font-bold mt-1">${reward.toLocaleString()}</div>
+                  </div>
+                );
+              })}
+            </div>
           </div>
-          <div className="p-2.5 rounded-lg bg-white/[0.02] border border-white/5 text-center">
-            <div className="text-slate-400 text-[10px]">Tier 2</div>
-            <div className="font-bold text-white">4 / 4</div>
-            <div className="text-emerald-400 text-[11px] font-semibold">$1,000</div>
-          </div>
-          <div className="p-2.5 rounded-lg bg-white/[0.02] border border-white/5 text-center">
-            <div className="text-slate-400 text-[10px]">Tier 3</div>
-            <div className="font-bold text-white">8 / 8</div>
-            <div className="text-emerald-400 text-[11px] font-semibold">$2,000</div>
-          </div>
-          <div className="p-2.5 rounded-lg bg-white/[0.02] border border-white/5 text-center">
-            <div className="text-slate-400 text-[10px]">Tier 4</div>
-            <div className="font-bold text-white">20 / 20</div>
-            <div className="text-emerald-400 text-[11px] font-semibold">$4,000</div>
-          </div>
-          <div className="p-2.5 rounded-lg bg-white/[0.02] border border-white/5 text-center">
-            <div className="text-slate-400 text-[10px]">Tier 5</div>
-            <div className="font-bold text-white">50 / 50</div>
-            <div className="text-emerald-400 text-[11px] font-semibold">$6,000</div>
-          </div>
-          <div className="p-2.5 rounded-lg bg-white/[0.02] border border-white/5 text-center">
-            <div className="text-slate-400 text-[10px]">Tier 6</div>
-            <div className="font-bold text-white">100 / 100</div>
-            <div className="text-emerald-400 text-[11px] font-semibold">$10,000</div>
-          </div>
-        </div>
-      </div>
+        );
+      })()}
 
       {/* Matching History */}
       <div className="space-y-3">

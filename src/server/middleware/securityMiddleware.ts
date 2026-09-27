@@ -13,7 +13,7 @@ export function securityHeadersMiddleware(req: Request, res: Response, next: Nex
   // Preserves Google AI Studio iframe embedding while protecting against malicious framing
   res.setHeader(
     'Content-Security-Policy',
-    "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: https: blob:; connect-src 'self' https: wss:; worker-src 'self' blob:; manifest-src 'self'; frame-ancestors 'self' https://*.google.com https://*.run.app https://*.aistudio.google.com;"
+    "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://www.gstatic.com; style-src 'self' 'unsafe-inline'; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: https: blob:; connect-src 'self' https: wss:; worker-src 'self' blob: https://www.gstatic.com; manifest-src 'self'; frame-ancestors 'self' https://*.google.com https://*.run.app https://*.aistudio.google.com;"
   );
 
   // Prevent MIME type sniffing

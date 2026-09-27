@@ -29,9 +29,11 @@ export const ADMIN_EMAILS = [
   (process.env.ADMIN_EMAIL || '').toLowerCase().trim(),
 ].filter(Boolean);
 
-export function isUserAdmin(user?: { email?: string; role?: string } | null): boolean {
+export function isUserAdmin(user?: { email?: string; role?: string; isAdmin?: boolean } | null): boolean {
   if (!user) return false;
-  if (user.role === 'ADMIN') return true;
+  if (user.isAdmin === true) return true;
+  const roleUpper = (user.role || '').toUpperCase().trim();
+  if (roleUpper === 'ADMIN' || roleUpper === 'SUPER_ADMIN') return true;
   if (user.email && ADMIN_EMAILS.includes(user.email.toLowerCase().trim())) return true;
   return false;
 }
@@ -119,12 +121,32 @@ export async function requireAuth(req: AuthRequest, res: Response, next: NextFun
     // Update last_used_at timestamp asynchronously
     db.query(`UPDATE sessions SET last_used_at = CURRENT_TIMESTAMP WHERE token_hash = $1`, [tokenHash]).catch(console.error);
 
+    let resolvedRole = row.role || 'USER';
     const emailLower = (row.email || '').toLowerCase().trim();
-    const adminDetected = ADMIN_EMAILS.includes(emailLower);
-    const resolvedRole = adminDetected ? 'ADMIN' : (row.role || 'USER');
+    const isHardcodedAdmin = ADMIN_EMAILS.includes(emailLower);
+    const isRoleAdmin = resolvedRole.toUpperCase() === 'ADMIN' || resolvedRole.toUpperCase() === 'SUPER_ADMIN';
 
-    if (adminDetected && row.role !== 'ADMIN') {
-      db.query(`UPDATE users SET role = 'ADMIN' WHERE id = $1`, [row.user_id]).catch(console.error);
+    if (isHardcodedAdmin || isRoleAdmin) {
+      resolvedRole = 'ADMIN';
+      if (row.role !== 'ADMIN') {
+        db.query(`UPDATE users SET role = 'ADMIN' WHERE id = $1`, [row.user_id]).catch(console.error);
+      }
+    } else {
+      // Dynamic Cloud Firestore user role inspection
+      try {
+        const { adminFirestore } = await import('../../lib/firebase-admin');
+        const userDocSnap = await adminFirestore.collection('users').doc(row.user_id).get();
+        if (userDocSnap.exists) {
+          const fsData = userDocSnap.data();
+          const fsRole = (fsData?.role || '').toUpperCase().trim();
+          if (fsRole === 'ADMIN' || fsRole === 'SUPER_ADMIN' || fsData?.isAdmin === true) {
+            resolvedRole = 'ADMIN';
+            db.query(`UPDATE users SET role = 'ADMIN' WHERE id = $1`, [row.user_id]).catch(console.error);
+          }
+        }
+      } catch {
+        // Fallback silently if Firestore is unreachable
+      }
     }
 
     req.user = {

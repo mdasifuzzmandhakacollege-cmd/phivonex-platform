@@ -18,11 +18,24 @@ import {
   AlertCircle,
   Trash2,
   Volume2,
-  VolumeX
+  VolumeX,
+  Radio,
+  Zap,
+  Send,
+  Smartphone,
+  CheckCircle2,
+  BellRing,
+  Loader2,
+  ExternalLink
 } from 'lucide-react';
 import { UserProfile } from '../../context/AuthContext';
 import { useNotifications, AppNotification } from '../../context/NotificationContext';
 import { DashboardTab } from './Sidebar';
+import {
+  checkPushSupport,
+  requestPushPermissionAndToken,
+  sendTestPushNotification
+} from '../../services/webPushService';
 
 interface NotificationsViewProps {
   user: UserProfile;
@@ -52,6 +65,81 @@ export const NotificationsView: React.FC<NotificationsViewProps> = ({ user, onNa
 
   const [markingAllRead, setMarkingAllRead] = useState(false);
   const [clearingRead, setClearingRead] = useState(false);
+
+  // Web Push Messaging State
+  const [pushSupported, setPushSupported] = useState<boolean>(true);
+  const [pushPermission, setPushPermission] = useState<NotificationPermission>('default');
+  const [pushLoading, setPushLoading] = useState<boolean>(false);
+  const [testPushLoading, setTestPushLoading] = useState<boolean>(false);
+  const [isSubscribed, setIsSubscribed] = useState<boolean>(false);
+  const [pushFeedback, setPushFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+
+  // Check support and push status on mount
+  useEffect(() => {
+    checkPushSupport().then((supported) => {
+      setPushSupported(supported);
+      if (typeof window !== 'undefined' && 'Notification' in window) {
+        setPushPermission(Notification.permission);
+      }
+    });
+
+    // Check if user has active push token on server
+    fetch('/api/notifications/push-status')
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.isSubscribed) {
+          setIsSubscribed(true);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  const handleEnablePush = async () => {
+    try {
+      setPushLoading(true);
+      setPushFeedback(null);
+      const res = await requestPushPermissionAndToken();
+      if (res.success) {
+        setPushPermission('granted');
+        setIsSubscribed(true);
+        setPushFeedback({
+          type: 'success',
+          message: '🎉 Web Push সফলভাবে সক্রিয় হয়েছে! আপনি এখন ব্রাউজার বা ব্যাকগ্রাউন্ডে রিয়েল-টাইমে নোটিফিকেশন পাবেন।',
+        });
+      } else {
+        if (typeof window !== 'undefined' && 'Notification' in window) {
+          setPushPermission(Notification.permission);
+        }
+        setPushFeedback({
+          type: 'error',
+          message: res.error || 'Failed to enable Web Push notifications.',
+        });
+      }
+    } finally {
+      setPushLoading(false);
+    }
+  };
+
+  const handleSendTestPush = async () => {
+    try {
+      setTestPushLoading(true);
+      setPushFeedback(null);
+      const res = await sendTestPushNotification();
+      if (res.success) {
+        setPushFeedback({
+          type: 'success',
+          message: '🔔 টেস্ট পুশ নোটিফিকেশন পাঠানো হয়েছে! আপনার স্ক্রিনে নোটিফিকেশন পপ-আপ দেখুন।',
+        });
+      } else {
+        setPushFeedback({
+          type: 'error',
+          message: res.error || 'Failed to dispatch test push notification.',
+        });
+      }
+    } finally {
+      setTestPushLoading(false);
+    }
+  };
 
   const handleMarkAsRead = async (id: string) => {
     await markAsRead(id);
@@ -255,6 +343,120 @@ export const NotificationsView: React.FC<NotificationsViewProps> = ({ user, onNa
             </button>
           )}
         </div>
+      </div>
+
+      {/* FIREBASE WEB PUSH MESSAGING CONTROL CARD */}
+      <div className={`p-5 rounded-2xl border transition-all ${
+        pushPermission === 'granted'
+          ? 'bg-gradient-to-r from-[#07101D] via-[#052e16]/25 to-[#07101D] border-emerald-500/30 shadow-lg shadow-emerald-500/5'
+          : 'bg-gradient-to-r from-[#07101D] via-[#0c1f38]/50 to-[#07101D] border-[#00CFFF]/25 shadow-lg shadow-[#00CFFF]/5'
+      }`}>
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div className="space-y-1.5 max-w-2xl">
+            <div className="flex flex-wrap items-center gap-2.5">
+              <div className={`p-2 rounded-xl border ${
+                pushPermission === 'granted'
+                  ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
+                  : 'bg-[#00CFFF]/10 border-[#00CFFF]/30 text-[#00CFFF]'
+              }`}>
+                <BellRing className="w-5 h-5" />
+              </div>
+              <h3 className="text-base font-bold text-white flex items-center gap-2">
+                <span>Web Push Messaging (ওয়েব পুশ নোটিফিকেশন)</span>
+              </h3>
+              <span className={`px-2.5 py-0.5 rounded-full text-[11px] font-mono font-semibold flex items-center gap-1.5 border ${
+                pushPermission === 'granted'
+                  ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-300'
+                  : pushPermission === 'denied'
+                  ? 'bg-rose-500/15 border-rose-500/30 text-rose-300'
+                  : 'bg-[#00CFFF]/15 border-[#00CFFF]/30 text-[#00CFFF]'
+              }`}>
+                <span className={`w-1.5 h-1.5 rounded-full ${
+                  pushPermission === 'granted' ? 'bg-emerald-400 animate-pulse' : pushPermission === 'denied' ? 'bg-rose-400' : 'bg-[#00CFFF]'
+                }`} />
+                {pushPermission === 'granted'
+                  ? 'Active & Subscribed (সক্রিয়)'
+                  : pushPermission === 'denied'
+                  ? 'Blocked in Browser'
+                  : 'Ready to Activate'}
+              </span>
+              <span className="text-[10px] font-mono text-[#98A2B3] bg-black/40 px-2 py-0.5 rounded border border-white/[0.08]">
+                Sender: 1077670417334
+              </span>
+            </div>
+
+            <p className="text-xs text-[#98A2B3] leading-relaxed">
+              Firebase Cloud Messaging (FCM) ব্যবহারের মাধ্যমে ব্রাউজার বন্ধ থাকলেও ক্রিপ্টো ডিপোজিট, নোড থেকে ডেইলি কয়েন মাইনিং, রেফারেল কমিশন এবং উইথড্রোল ডিসবার্সমেন্টের ইনস্ট্যান্ট পুশ অ্যালার্ট সরাসরি আপনার ডিভাইস স্ক্রিনে পৌঁছে যাবে।
+            </p>
+          </div>
+
+          {/* Action Buttons */}
+          <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+            {pushPermission !== 'granted' ? (
+              <button
+                onClick={handleEnablePush}
+                disabled={pushLoading || !pushSupported}
+                className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-[#00CFFF] to-[#00A3FF] hover:from-[#00CFFF]/90 hover:to-[#00A3FF]/90 text-[#05070B] font-bold text-xs flex items-center gap-2 transition-all shadow-md shadow-[#00CFFF]/20 cursor-pointer disabled:opacity-50 min-h-[40px]"
+              >
+                {pushLoading ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span>Connecting...</span>
+                  </>
+                ) : (
+                  <>
+                    <Radio className="w-4 h-4" />
+                    <span>Enable Web Push (চালু করুন)</span>
+                  </>
+                )}
+              </button>
+            ) : (
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={handleSendTestPush}
+                  disabled={testPushLoading}
+                  className="px-4 py-2.5 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/40 text-emerald-300 font-bold text-xs flex items-center gap-2 transition-all cursor-pointer disabled:opacity-50 min-h-[40px]"
+                >
+                  {testPushLoading ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin text-emerald-300" />
+                      <span>Sending Push...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Send className="w-4 h-4 text-emerald-400" />
+                      <span>Send Test Push (টেস্ট পাঠান)</span>
+                    </>
+                  )}
+                </button>
+                <button
+                  onClick={handleEnablePush}
+                  disabled={pushLoading}
+                  className="px-3 py-2.5 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.08] text-xs text-[#98A2B3] hover:text-white transition-all cursor-pointer min-h-[40px]"
+                  title="Re-sync FCM Push Token"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${pushLoading ? 'animate-spin' : ''}`} />
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Feedback Alert */}
+        {pushFeedback && (
+          <div className={`mt-3 p-3 rounded-xl text-xs flex items-center gap-2.5 ${
+            pushFeedback.type === 'success'
+              ? 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-300'
+              : 'bg-rose-500/10 border border-rose-500/20 text-rose-300'
+          }`}>
+            {pushFeedback.type === 'success' ? (
+              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+            ) : (
+              <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+            )}
+            <span>{pushFeedback.message}</span>
+          </div>
+        )}
       </div>
 
       {/* Filter Toolbar */}

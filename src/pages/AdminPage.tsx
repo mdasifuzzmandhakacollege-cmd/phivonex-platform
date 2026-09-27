@@ -75,7 +75,9 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onNavigate, currentPath = 
 
   const isCurrentUserAdmin = Boolean(
     user && (
-      (user as any).role === 'ADMIN' ||
+      user.isAdmin === true ||
+      (user.role || '').toUpperCase() === 'ADMIN' ||
+      (user.role || '').toUpperCase() === 'SUPER_ADMIN' ||
       (user.email && ADMIN_EMAILS.includes(user.email.toLowerCase().trim()))
     )
   );

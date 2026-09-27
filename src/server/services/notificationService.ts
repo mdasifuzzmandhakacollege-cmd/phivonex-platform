@@ -85,6 +85,25 @@ export async function createNotification(params: CreateNotificationParams): Prom
     }
 
     const row = res.rows[0];
+
+    // Trigger Web Push Notification via Firebase Cloud Messaging (FCM)
+    try {
+      const { sendPushNotificationToUser } = await import('./webPushServerService');
+      sendPushNotificationToUser(userId, {
+        title: row.title,
+        body: row.message,
+        data: {
+          notificationId: row.public_notification_id,
+          type: row.type,
+          url: '/app/notifications',
+        },
+      }).catch((pushErr) => {
+        console.warn('[NotificationService] Web Push delivery warning:', pushErr?.message);
+      });
+    } catch {
+      // Ignore background push errors
+    }
+
     return {
       id: row.public_notification_id,
       type: row.type,

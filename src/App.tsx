@@ -18,9 +18,11 @@ import { PublicLandingPage } from './pages/PublicLandingPage';
 // Modals
 import { LegalModal } from './components/modals/LegalModal';
 import { PWAInstallPrompt } from './components/PWAInstallPrompt';
+import { capturePendingReferralCode } from './utils/referralUrl';
 
 function AppContent() {
   const { user, loading } = useAuth();
+  const [pendingRefCode, setPendingRefCode] = useState<string | null>(null);
 
   const [currentPath, setCurrentPath] = useState<string>(() => {
     try {
@@ -32,10 +34,22 @@ function AppContent() {
 
   const [legalModalTitle, setLegalModalTitle] = useState<string | null>(null);
 
+  // Capture referral code from URL parameter on initial load
+  useEffect(() => {
+    const code = capturePendingReferralCode();
+    if (code) {
+      setPendingRefCode(code);
+    }
+  }, []);
+
   // Synchronize history state for routing
   useEffect(() => {
     const handlePopState = () => {
       setCurrentPath(window.location.pathname || '/');
+      const code = capturePendingReferralCode();
+      if (code) {
+        setPendingRefCode(code);
+      }
     };
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
@@ -113,6 +127,7 @@ function AppContent() {
     return (
       <>
         <RegisterPage
+          initialReferralCode={pendingRefCode || undefined}
           onNavigate={navigate}
           onOpenLegalModal={(title) => setLegalModalTitle(title)}
         />

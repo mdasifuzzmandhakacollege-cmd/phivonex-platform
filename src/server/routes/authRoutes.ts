@@ -3,7 +3,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { getDb } from '../db/db';
 import { hashPassword, verifyPassword, generateRandomToken, hashToken } from '../utils/crypto';
 import { generatePublicId, generateReferralCode, normalizeReferralCode } from '../utils/idGenerator';
-import { requireAuth, AuthRequest } from '../middleware/authMiddleware';
+import { requireAuth, AuthRequest, isUserAdmin } from '../middleware/authMiddleware';
 import { authLimiter, loginLimiter, registrationLimiter, passwordResetLimiter } from '../middleware/rateLimiter';
 import { logSecurityEvent, parseUserAgentSummary } from '../utils/securityLogger';
 
@@ -1073,6 +1073,8 @@ router.get('/me', requireAuth, async (req: AuthRequest, res: Response): Promise<
         phone: user.phone,
         country: user.country,
         status: user.status,
+        role: user.role,
+        isAdmin: isUserAdmin(user),
         emailVerified: user.emailVerified,
         createdAt: user.created_at,
         lastLoginAt: user.last_login_at,

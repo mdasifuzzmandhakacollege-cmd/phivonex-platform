@@ -24,6 +24,7 @@ import {
 } from 'lucide-react';
 import { UserProfile } from '../../context/AuthContext';
 import { WalletSection } from './WalletSection';
+import { buildPublicReferralUrl } from '../../utils/referralUrl';
 
 interface ReferralMeResponse {
   publicId: string;
@@ -90,6 +91,11 @@ export const OverviewView: React.FC<OverviewViewProps> = ({ user }) => {
     setTimeout(() => setCopiedId(false), 2000);
   };
 
+  const effectiveReferralUrl = buildPublicReferralUrl(
+    referralData?.referralCode || user?.referralCode || 'PHXGENESIS',
+    referralData?.referralUrl
+  );
+
   const handleCopyCode = () => {
     const code = referralData?.referralCode || user?.referralCode;
     if (!code) return;
@@ -99,10 +105,8 @@ export const OverviewView: React.FC<OverviewViewProps> = ({ user }) => {
   };
 
   const handleCopyLink = () => {
-    const fallbackLink = `${window.location.origin}/register?ref=${user?.referralCode || ''}`;
-    const link = referralData?.referralUrl || fallbackLink;
-    if (!link) return;
-    navigator.clipboard.writeText(link);
+    if (!effectiveReferralUrl) return;
+    navigator.clipboard.writeText(effectiveReferralUrl);
     setCopiedLink(true);
     setTimeout(() => setCopiedLink(false), 2000);
   };
@@ -369,7 +373,7 @@ export const OverviewView: React.FC<OverviewViewProps> = ({ user }) => {
                   <input
                     type="text"
                     readOnly
-                    value={referralData?.referralUrl || `${window.location.origin}/register?ref=${user?.referralCode || ''}`}
+                    value={effectiveReferralUrl}
                     className="flex-1 bg-white/[0.03] border border-white/[0.08] rounded-xl px-3.5 py-2.5 text-xs font-mono text-[#98A2B3] select-all focus:outline-none min-h-[44px]"
                   />
                   <button

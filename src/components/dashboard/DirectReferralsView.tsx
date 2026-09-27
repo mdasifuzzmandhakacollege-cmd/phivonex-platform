@@ -18,6 +18,7 @@ import {
   RefreshCw
 } from 'lucide-react';
 import { UserProfile } from '../../context/AuthContext';
+import { buildPublicReferralUrl } from '../../utils/referralUrl';
 
 interface ReferralProfileData {
   publicId: string;
@@ -102,6 +103,11 @@ export const DirectReferralsView: React.FC<DirectReferralsViewProps> = ({ user, 
     loadData();
   }, []);
 
+  const effectiveReferralUrl = buildPublicReferralUrl(
+    profileData?.referralCode || user?.referralCode || 'PHXGENESIS',
+    profileData?.referralUrl
+  );
+
   const handleCopyCode = () => {
     const code = profileData?.referralCode || user?.referralCode;
     if (!code) return;
@@ -111,9 +117,8 @@ export const DirectReferralsView: React.FC<DirectReferralsViewProps> = ({ user, 
   };
 
   const handleCopyLink = () => {
-    const url = profileData?.referralUrl;
-    if (!url) return;
-    navigator.clipboard.writeText(url);
+    if (!effectiveReferralUrl) return;
+    navigator.clipboard.writeText(effectiveReferralUrl);
     setCopiedLink(true);
     setTimeout(() => setCopiedLink(false), 2000);
   };
@@ -292,15 +297,15 @@ export const DirectReferralsView: React.FC<DirectReferralsViewProps> = ({ user, 
           {/* Referral Link */}
           <div className="space-y-2">
             <label className="text-xs font-mono text-[#98A2B3] uppercase tracking-wider">
-              Referral Link
+              Referral Link (Public Invitation)
             </label>
             <div className="flex items-center gap-2">
               <div className="flex-1 px-4 py-3 rounded-xl bg-black/40 border border-white/[0.08] font-mono text-xs text-[#F7FAFC] truncate select-all">
-                {profileData?.referralUrl || `${window.location.origin}/register?ref=${user?.referralCode || ''}`}
+                {effectiveReferralUrl}
               </div>
               <button
                 onClick={handleCopyLink}
-                className="px-4 py-3 rounded-xl bg-[#00CFFF] hover:bg-[#00CFFF]/90 text-[#05070B] font-mono text-xs font-bold flex items-center gap-2 transition-all cursor-pointer"
+                className="px-4 py-3 rounded-xl bg-[#00CFFF] hover:bg-[#00CFFF]/90 text-[#05070B] font-mono text-xs font-bold flex items-center gap-2 transition-all cursor-pointer min-h-[44px]"
               >
                 {copiedLink ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
                 <span>{copiedLink ? 'Copied' : 'Copy Link'}</span>

@@ -151,11 +151,11 @@ export const RegisterPage: React.FC<RegisterPageProps> = ({
     }
   };
 
-  // Parse URL search params if ?ref= exists
+  // Parse URL search params if ?ref= exists or check localStorage
   useEffect(() => {
     try {
       const params = new URLSearchParams(window.location.search);
-      const refParam = params.get('ref') || initialReferralCode;
+      const refParam = params.get('ref') || initialReferralCode || localStorage.getItem('phivonex_pending_ref');
       if (refParam) {
         const cleanRef = refParam.trim().toUpperCase();
         setReferralCode(cleanRef);

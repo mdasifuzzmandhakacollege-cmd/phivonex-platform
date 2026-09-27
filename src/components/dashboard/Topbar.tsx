@@ -88,7 +88,9 @@ export const Topbar: React.FC<TopbarProps> = ({
 
   const isAdmin = Boolean(
     user && (
-      (user as any).role === 'ADMIN' ||
+      user.isAdmin === true ||
+      (user.role || '').toUpperCase() === 'ADMIN' ||
+      (user.role || '').toUpperCase() === 'SUPER_ADMIN' ||
       user.email?.toLowerCase().trim() === 'md.asifuzzman.dhakacollege@gmail.com' ||
       user.email?.toLowerCase().trim() === 'admin@phivonex.com'
     )

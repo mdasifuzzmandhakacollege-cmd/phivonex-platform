@@ -120,6 +120,12 @@ router.get('/me', requireAuth, async (req: AuthRequest, res: Response): Promise<
       const protocol = req.protocol === 'https' || req.get('x-forwarded-proto') === 'https' ? 'https' : 'http';
       baseUrl = `${protocol}://${host}`;
     }
+
+    // Convert internal Google AI Studio dev cluster URL to public shared URL
+    if (baseUrl.includes('ais-dev-')) {
+      baseUrl = baseUrl.replace('ais-dev-', 'ais-pre-');
+    }
+
     const cleanBaseUrl = baseUrl.replace(/\/$/, '');
     const referralUrl = `${cleanBaseUrl}/register?ref=${userData.referral_code}`;
 

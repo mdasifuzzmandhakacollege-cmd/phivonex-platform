@@ -160,3 +160,130 @@ notificationRouter.delete('/', requireAuth, async (req: AuthRequest, res: Respon
     });
   }
 });
+
+// ============================================================================
+// WEB PUSH MESSAGING (FIREBASE CLOUD MESSAGING / FCM)
+// ============================================================================
+
+/**
+ * POST /api/notifications/push-token
+ * Registers or updates an FCM Web Push registration token.
+ */
+notificationRouter.post('/push-token', requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const userId = req.user!.id;
+    const { token, platform, userAgent } = req.body;
+
+    if (!token || typeof token !== 'string') {
+      return res.status(400).json({
+        success: false,
+        error: 'INVALID_TOKEN',
+        message: 'Push registration token is required.',
+      });
+    }
+
+    const { saveUserPushToken } = await import('../services/webPushServerService');
+    const saved = await saveUserPushToken({
+      userId,
+      token,
+      platform: platform || 'WEB',
+      userAgent: userAgent || req.headers['user-agent'] || '',
+    });
+
+    return res.json({ success: saved, message: 'Web Push subscription active.' });
+  } catch (err: any) {
+    console.error('[Notification API] Error saving push token:', err);
+    return res.status(500).json({
+      success: false,
+      error: 'SERVER_ERROR',
+      message: 'Failed to register push token.',
+    });
+  }
+});
+
+/**
+ * DELETE /api/notifications/push-token
+ * Deactivates an FCM Web Push registration token.
+ */
+notificationRouter.delete('/push-token', requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const userId = req.user!.id;
+    const { token } = req.body;
+
+    if (!token) {
+      return res.status(400).json({ success: false, message: 'Token required.' });
+    }
+
+    const { removeUserPushToken } = await import('../services/webPushServerService');
+    await removeUserPushToken(userId, token);
+
+    return res.json({ success: true, message: 'Push token unsubscribed.' });
+  } catch (err: any) {
+    console.error('[Notification API] Error unsubscribing push token:', err);
+    return res.status(500).json({ success: false, message: 'Failed to unsubscribe push token.' });
+  }
+});
+
+/**
+ * POST /api/notifications/test-push
+ * Triggers an immediate test push notification to verify browser/device receipt.
+ */
+notificationRouter.post('/test-push', requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const userId = req.user!.id;
+    const { sendPushNotificationToUser } = await import('../services/webPushServerService');
+
+    const result = await sendPushNotificationToUser(userId, {
+      title: '🔔 PHIVONEX Web Push Active!',
+      body: 'Your device is successfully connected to the PHIVONEX real-time alert mesh.',
+      url: '/app/notifications',
+      data: {
+        type: 'TEST_PUSH',
+        timestamp: String(Date.now()),
+      },
+    });
+
+    if (result.sent === 0 && result.failed === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'No active push notification subscriptions found for your account. Please enable notifications first.',
+      });
+    }
+
+    return res.json({
+      success: true,
+      message: `Test push notification dispatched! Sent to ${result.sent} device(s).`,
+      sentCount: result.sent,
+      failedCount: result.failed,
+    });
+  } catch (err: any) {
+    console.error('[Notification API] Error triggering test push:', err);
+    return res.status(500).json({
+      success: false,
+      error: 'SERVER_ERROR',
+      message: 'Failed to trigger test push notification.',
+    });
+  }
+});
+
+/**
+ * GET /api/notifications/push-status
+ * Checks if the current user has active push subscriptions.
+ */
+notificationRouter.get('/push-status', requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const userId = req.user!.id;
+    const { getUserPushTokens } = await import('../services/webPushServerService');
+    const tokens = await getUserPushTokens(userId);
+
+    return res.json({
+      isSubscribed: tokens.length > 0,
+      activeDeviceCount: tokens.length,
+      projectId: 'phivonex-production',
+      messagingSenderId: '1077670417334',
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: 'SERVER_ERROR', message: 'Failed to query push status.' });
+  }
+});
+

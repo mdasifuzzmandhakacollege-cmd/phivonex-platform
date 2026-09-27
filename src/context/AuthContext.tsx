@@ -18,6 +18,8 @@ export interface UserProfile {
   phone?: string | null;
   country?: string;
   status: string;
+  role?: string;
+  isAdmin?: boolean;
   emailVerified: boolean;
   createdAt?: string;
   lastLoginAt?: string;

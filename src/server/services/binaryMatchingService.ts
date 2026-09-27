@@ -48,14 +48,14 @@ export async function getActiveMatchingConfig(dbClient?: DatabaseClient): Promis
     const defaultTiers: MatchingTier[] = [
       { units: 2, bonusUsd: 500 },
       { units: 4, bonusUsd: 1000 },
-      { units: 6, bonusUsd: 1500 },
-      { units: 8, bonusUsd: 2000 },
-      { units: 10, bonusUsd: 2500 },
-      { units: 12, bonusUsd: 3000 },
-      { units: 14, bonusUsd: 3500 },
-      { units: 16, bonusUsd: 4000 },
-      { units: 18, bonusUsd: 4500 },
-      { units: 20, bonusUsd: 5000 }
+      { units: 8, bonusUsd: 1500 },
+      { units: 12, bonusUsd: 2000 },
+      { units: 16, bonusUsd: 2500 },
+      { units: 20, bonusUsd: 3000 },
+      { units: 24, bonusUsd: 3500 },
+      { units: 28, bonusUsd: 4000 },
+      { units: 32, bonusUsd: 4500 },
+      { units: 36, bonusUsd: 5000 },
     ];
 
     if (res.rows.length === 0) {
@@ -104,14 +104,14 @@ export async function getActiveMatchingConfig(dbClient?: DatabaseClient): Promis
       tiers: [
         { units: 2, bonusUsd: 500 },
         { units: 4, bonusUsd: 1000 },
-        { units: 6, bonusUsd: 1500 },
-        { units: 8, bonusUsd: 2000 },
-        { units: 10, bonusUsd: 2500 },
-        { units: 12, bonusUsd: 3000 },
-        { units: 14, bonusUsd: 3500 },
-        { units: 16, bonusUsd: 4000 },
-        { units: 18, bonusUsd: 4500 },
-        { units: 20, bonusUsd: 5000 }
+        { units: 8, bonusUsd: 1500 },
+        { units: 12, bonusUsd: 2000 },
+        { units: 16, bonusUsd: 2500 },
+        { units: 20, bonusUsd: 3000 },
+        { units: 24, bonusUsd: 3500 },
+        { units: 28, bonusUsd: 4000 },
+        { units: 32, bonusUsd: 4500 },
+        { units: 36, bonusUsd: 5000 }
       ]
     };
   }
@@ -375,6 +375,12 @@ export interface MatchingSummaryResponse {
   };
   latestSettlement: MatchingSettlementItem | null;
   totalMatchingEarnedUsd: number;
+  activeTiers?: MatchingTier[];
+  matchingConfig?: {
+    matchingEnabled: boolean;
+    dailyMaxPayout: number;
+    sponsorQualificationRequired: boolean;
+  };
   nextSettlement: {
     scheduledTime: string;
     nextSettlementIso: string;
@@ -992,6 +998,9 @@ export async function getUserMatchingSummary(userId: string): Promise<MatchingSu
 
   const totalMatchingEarnedUsd = Number(totalRes.rows[0]?.total_earned || 0);
 
+  // 5. Active Live Matching Configuration & Tiers
+  const activeConfig = await getActiveMatchingConfig(db);
+
   return {
     todayVolume: {
       left: todayLeft,
@@ -1003,6 +1012,12 @@ export async function getUserMatchingSummary(userId: string): Promise<MatchingSu
     },
     latestSettlement,
     totalMatchingEarnedUsd,
+    activeTiers: activeConfig.tiers,
+    matchingConfig: {
+      matchingEnabled: activeConfig.matchingEnabled,
+      dailyMaxPayout: activeConfig.dailyMaxPayout,
+      sponsorQualificationRequired: activeConfig.sponsorQualificationRequired,
+    },
     nextSettlement: {
       scheduledTime: '00:00 Asia/Dhaka',
       nextSettlementIso: nextDhakaInfo.nextMidnightIso,
