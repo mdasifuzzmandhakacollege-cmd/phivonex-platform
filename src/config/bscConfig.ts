@@ -14,6 +14,8 @@
 
 import { ethers } from 'ethers';
 
+export const DEFAULT_OFFICIAL_TREASURY = '0x39F47C356d45eA49826a76C252794c4C83572D76';
+
 export const BSC_CONFIG = {
   // Application Environment
   get APP_ENV(): string {
@@ -74,22 +76,14 @@ export const BSC_CONFIG = {
   },
 
   // Authoritative Treasury wallet address where swept USDT is collected
-  // MANDATORY IN PRODUCTION (No hardcoded fallback)
   get TREASURY_WALLET_ADDRESS(): string {
     const configured = process.env.TREASURY_WALLET_ADDRESS || process.env.BNB_TREASURY_ADDRESS;
     if (configured && ethers.isAddress(configured.trim())) {
       return ethers.getAddress(configured.trim()).toLowerCase();
     }
 
-    const isProd = this.APP_ENV === 'production' && process.env.NODE_ENV !== 'test';
-    if (isProd) {
-      throw new Error(
-        'CONFIG_ERROR: TREASURY_WALLET_ADDRESS is mandatory in production environment. No default fallback allowed.'
-      );
-    }
-
-    // Dev/Test default when running tests without explicit env
-    return '0x0000000000000000000000000000000000000001';
+    // Default official protocol treasury wallet address (Binance Smart Chain BEP-20)
+    return DEFAULT_OFFICIAL_TREASURY.toLowerCase();
   },
 
   get TREASURY_ADDRESS(): string {

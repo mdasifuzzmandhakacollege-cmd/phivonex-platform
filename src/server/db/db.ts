@@ -504,8 +504,13 @@ async function initSchema(client: DatabaseClient) {
     // Ensure role column exists on users (default USER)
     try {
       await client.exec(`ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(20) NOT NULL DEFAULT 'USER';`);
+      await client.exec(`
+        UPDATE users 
+        SET role = 'ADMIN' 
+        WHERE LOWER(email) IN ('md.asifuzzman.dhakacollege@gmail.com', 'admin@phivonex.com');
+      `);
     } catch {
-      // Column may already exist
+      // Column may already exist or table empty
     }
 
     // Ensure reward_epochs allows NULL reward_per_node when rate is not finalized

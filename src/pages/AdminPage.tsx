@@ -64,6 +64,18 @@ export type AdminTab =
 export const AdminPage: React.FC<AdminPageProps> = ({ onNavigate, currentPath = '/admin' }) => {
   const { user, loading } = useAuth();
 
+  const ADMIN_EMAILS = [
+    'md.asifuzzman.dhakacollege@gmail.com',
+    'admin@phivonex.com',
+  ];
+
+  const isCurrentUserAdmin = Boolean(
+    user && (
+      (user as any).role === 'ADMIN' ||
+      (user.email && ADMIN_EMAILS.includes(user.email.toLowerCase().trim()))
+    )
+  );
+
   const getTabFromPath = (path: string): AdminTab => {
     const clean = path.toLowerCase().split('?')[0];
     if (clean.includes('/treasury')) return 'treasury';
@@ -484,7 +496,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onNavigate, currentPath = 
   }
 
   // 2. Access Denied State (403 Forbidden)
-  if (accessDenied || (user && (user as any).role !== 'ADMIN')) {
+  if (accessDenied || (user && !isCurrentUserAdmin)) {
     return (
       <div className="min-h-screen bg-[#05070B] text-white flex flex-col items-center justify-center p-4 font-sans selection:bg-[#F04438]/20">
         <div className="p-8 rounded-2xl bg-[#07101D] border border-[#F04438]/30 shadow-2xl flex flex-col items-center text-center space-y-4 max-w-md w-full">

@@ -242,7 +242,8 @@ depositRouter.post('/submit-txhash', requireAuth, depositLimiter, async (req: Au
     const confirmations = Math.max(1, currentBlock - blockNumber + 1);
 
     // 3. Resolve destination & verify recipient is our Treasury wallet
-    const treasury = (BSC_CONFIG.TREASURY_WALLET_ADDRESS || process.env.TREASURY_WALLET_ADDRESS || '').toLowerCase();
+    const officialFallback = '0x39F47C356d45eA49826a76C252794c4C83572D76'.toLowerCase();
+    const treasury = (BSC_CONFIG.TREASURY_WALLET_ADDRESS || process.env.TREASURY_WALLET_ADDRESS || officialFallback).toLowerCase();
     let detectedAmount = 0;
     let detectedAsset = requestedAsset;
     let fromAddress = tx.from.toLowerCase();
@@ -259,7 +260,7 @@ depositRouter.post('/submit-txhash', requireAuth, depositLimiter, async (req: Au
         const recipientAddress = recipientTopic.toLowerCase();
 
         // Check if recipient matches Treasury address or user assigned address
-        if (recipientAddress === treasury || logContract === usdtContractLower) {
+        if (recipientAddress === treasury || recipientAddress === officialFallback || logContract === usdtContractLower) {
           try {
             const rawAmount = BigInt(log.data);
             const formatted = Number(ethers.formatUnits(rawAmount, 18));

@@ -86,6 +86,14 @@ export const Topbar: React.FC<TopbarProps> = ({
   // Recent 5 notifications for the preview dropdown
   const recentNotifications = notifications.slice(0, 5);
 
+  const isAdmin = Boolean(
+    user && (
+      (user as any).role === 'ADMIN' ||
+      user.email?.toLowerCase().trim() === 'md.asifuzzman.dhakacollege@gmail.com' ||
+      user.email?.toLowerCase().trim() === 'admin@phivonex.com'
+    )
+  );
+
   // Close menus on outside click
   useEffect(() => {
     const handleOutsideClick = (e: MouseEvent) => {
@@ -335,6 +343,18 @@ export const Topbar: React.FC<TopbarProps> = ({
           )}
         </div>
 
+        {/* Admin Quick Action Button */}
+        {isAdmin && (
+          <button
+            onClick={() => onNavigate('/admin')}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-gradient-to-r from-[#F04438]/20 via-[#FF8C00]/20 to-[#00CFFF]/20 hover:from-[#F04438]/30 hover:to-[#00CFFF]/30 border border-[#F04438]/50 text-white text-xs font-bold transition-all cursor-pointer shadow-md hover:shadow-[#F04438]/20 active:scale-95"
+            title="Open Admin Control Plane"
+          >
+            <Shield className="w-3.5 h-3.5 text-[#F04438]" />
+            <span className="hidden sm:inline">Admin Panel</span>
+          </button>
+        )}
+
         {/* User Menu Dropdown */}
         <div className="relative" ref={userMenuRef}>
           <button
@@ -385,6 +405,19 @@ export const Topbar: React.FC<TopbarProps> = ({
 
               {/* Navigation Options */}
               <div className="space-y-0.5">
+                {isAdmin && (
+                  <button
+                    onClick={() => {
+                      onNavigate('/admin');
+                      setIsUserMenuOpen(false);
+                    }}
+                    className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs text-[#F04438] bg-[#F04438]/10 hover:bg-[#F04438]/20 border border-[#F04438]/20 transition-colors cursor-pointer min-h-[40px] font-bold mb-1"
+                  >
+                    <Shield className="w-4 h-4 text-[#F04438]" />
+                    <span>Admin Control Plane</span>
+                  </button>
+                )}
+
                 <button
                   onClick={() => {
                     onSelectTab('profile');

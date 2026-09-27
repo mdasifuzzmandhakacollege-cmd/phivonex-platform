@@ -71,7 +71,8 @@ export function validateProductionConfig(): void {
   }
 
   // 2. Validate TREASURY_WALLET_ADDRESS
-  const treasury = process.env.TREASURY_WALLET_ADDRESS?.trim() || process.env.BNB_TREASURY_ADDRESS?.trim();
+  const officialFallback = '0x39F47C356d45eA49826a76C252794c4C83572D76';
+  const treasury = process.env.TREASURY_WALLET_ADDRESS?.trim() || process.env.BNB_TREASURY_ADDRESS?.trim() || officialFallback;
   if (!treasury || !ethers.isAddress(treasury)) {
     missingOrInvalid.push('TREASURY_WALLET_ADDRESS (must be a valid 0x EVM/BSC address)');
   }

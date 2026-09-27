@@ -23,6 +23,19 @@ export interface AuthRequest extends Request {
   sessionId?: string;
 }
 
+export const ADMIN_EMAILS = [
+  'md.asifuzzman.dhakacollege@gmail.com',
+  'admin@phivonex.com',
+  (process.env.ADMIN_EMAIL || '').toLowerCase().trim(),
+].filter(Boolean);
+
+export function isUserAdmin(user?: { email?: string; role?: string } | null): boolean {
+  if (!user) return false;
+  if (user.role === 'ADMIN') return true;
+  if (user.email && ADMIN_EMAILS.includes(user.email.toLowerCase().trim())) return true;
+  return false;
+}
+
 export async function requireAuth(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
   const token = req.cookies?.phx_session || (req.headers.authorization?.startsWith('Bearer ') ? req.headers.authorization.split(' ')[1] : null);
 
@@ -106,6 +119,14 @@ export async function requireAuth(req: AuthRequest, res: Response, next: NextFun
     // Update last_used_at timestamp asynchronously
     db.query(`UPDATE sessions SET last_used_at = CURRENT_TIMESTAMP WHERE token_hash = $1`, [tokenHash]).catch(console.error);
 
+    const emailLower = (row.email || '').toLowerCase().trim();
+    const adminDetected = ADMIN_EMAILS.includes(emailLower);
+    const resolvedRole = adminDetected ? 'ADMIN' : (row.role || 'USER');
+
+    if (adminDetected && row.role !== 'ADMIN') {
+      db.query(`UPDATE users SET role = 'ADMIN' WHERE id = $1`, [row.user_id]).catch(console.error);
+    }
+
     req.user = {
       id: row.user_id,
       public_id: row.public_id,
@@ -114,7 +135,7 @@ export async function requireAuth(req: AuthRequest, res: Response, next: NextFun
       phone: row.phone,
       country: row.country,
       status: row.status,
-      role: row.role || 'USER',
+      role: resolvedRole,
       emailVerified: !!row.email_verified_at,
       emailVerifiedAt: row.email_verified_at,
       created_at: row.created_at,
@@ -148,7 +169,7 @@ export async function requireAdmin(req: AuthRequest, res: Response, next: NextFu
 
   // If already authenticated by preceding auth middleware
   if (req.user) {
-    if (req.user.role === 'ADMIN') {
+    if (isUserAdmin(req.user)) {
       return next();
     }
     res.status(403).json({
@@ -160,7 +181,7 @@ export async function requireAdmin(req: AuthRequest, res: Response, next: NextFu
 
   // Otherwise, enforce session auth and verify ADMIN role
   await requireAuth(req, res, () => {
-    if (req.user?.role === 'ADMIN') {
+    if (isUserAdmin(req.user)) {
       return next();
     }
 

@@ -218,6 +218,17 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onNavigate, curren
     }
   };
 
+  const ADMIN_EMAILS = [
+    'md.asifuzzman.dhakacollege@gmail.com',
+    'admin@phivonex.com',
+  ];
+  const isAdmin = Boolean(
+    user && (
+      (user as any).role === 'ADMIN' ||
+      (user.email && ADMIN_EMAILS.includes(user.email.toLowerCase().trim()))
+    )
+  );
+
   // 3. Authenticated Dashboard Layout
   return (
     <div className="min-h-screen bg-[#05070B] text-[#F7FAFC] flex font-sans selection:bg-[#00CFFF]/20 selection:text-[#00CFFF]">
@@ -227,6 +238,8 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onNavigate, curren
           activeTab={activeTab}
           onSelectTab={handleSelectTab}
           publicId={user.publicId}
+          isAdmin={isAdmin}
+          onNavigate={onNavigate}
         />
       </div>
 
@@ -248,6 +261,8 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onNavigate, curren
               publicId={user.publicId}
               isMobile={true}
               onCloseMobile={() => setIsMobileMenuOpen(false)}
+              isAdmin={isAdmin}
+              onNavigate={onNavigate}
             />
           </div>
         </div>

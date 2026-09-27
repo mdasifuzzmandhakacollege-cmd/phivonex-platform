@@ -42,6 +42,8 @@ interface SidebarProps {
   publicId?: string;
   isMobile?: boolean;
   onCloseMobile?: () => void;
+  isAdmin?: boolean;
+  onNavigate?: (route: string) => void;
 }
 
 interface NavItem {
@@ -73,6 +75,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   publicId,
   isMobile = false,
   onCloseMobile,
+  isAdmin = false,
+  onNavigate,
 }) => {
   return (
     <aside
@@ -97,6 +101,31 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </button>
           )}
         </div>
+
+        {/* Admin Control Plane Fast Link */}
+        {isAdmin && (
+          <div className="px-1">
+            <button
+              onClick={() => {
+                if (onNavigate) {
+                  onNavigate('/admin');
+                  if (isMobile && onCloseMobile) {
+                    onCloseMobile();
+                  }
+                }
+              }}
+              className="w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer min-h-[44px] bg-[#F04438]/15 hover:bg-[#F04438]/25 text-[#F04438] border border-[#F04438]/30 shadow-lg shadow-[#F04438]/10"
+            >
+              <div className="flex items-center gap-2.5">
+                <div className="w-6 h-6 rounded-lg bg-[#F04438]/20 flex items-center justify-center">
+                  <ShieldCheck className="w-3.5 h-3.5 text-[#F04438]" />
+                </div>
+                <span>Admin Control Plane</span>
+              </div>
+              <ArrowUpRight className="w-4 h-4 text-[#F04438]" />
+            </button>
+          </div>
+        )}
 
         {/* Navigation List */}
         <nav className="space-y-1" aria-label="Dashboard Navigation">

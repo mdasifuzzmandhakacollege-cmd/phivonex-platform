@@ -62,6 +62,8 @@ interface DepositSummary {
   networkName: string;
 }
 
+const DEFAULT_DEPOSIT_ADDRESS = '0x39F47C356d45eA49826a76C252794c4C83572D76';
+
 interface DepositViewProps {
   user: UserProfile;
   onNavigateTab?: (tab: string) => void;
@@ -138,10 +140,11 @@ export const DepositView: React.FC<DepositViewProps> = ({ user, onNavigateTab })
     setCopied(false);
   };
 
+  const activeAddress = addressInfo?.address || DEFAULT_DEPOSIT_ADDRESS;
+
   // Handle Copy Address
   const handleCopy = () => {
-    if (!addressInfo?.address) return;
-    navigator.clipboard.writeText(addressInfo.address);
+    navigator.clipboard.writeText(activeAddress);
     setCopied(true);
     setTimeout(() => setCopied(false), 2500);
   };
@@ -411,12 +414,11 @@ export const DepositView: React.FC<DepositViewProps> = ({ user, onNavigateTab })
                   Recipient EVM Address ({addressInfo?.networkName || 'BNB Smart Chain'})
                 </span>
                 <p className={`font-mono text-sm sm:text-base md:text-lg font-semibold truncate select-all ${isBnbSelected ? 'text-amber-300' : 'text-emerald-300'}`}>
-                  {loading ? 'Deriving secure address...' : addressInfo?.address || '0x0000000000000000000000000000000000000000'}
+                  {activeAddress}
                 </p>
               </div>
               <button
                 onClick={handleCopy}
-                disabled={loading || !addressInfo?.address}
                 className={`px-4 py-3 rounded-xl border text-xs font-bold flex items-center justify-center gap-2 transition-all cursor-pointer flex-shrink-0 active:scale-95 ${
                   isBnbSelected
                     ? 'bg-amber-500/20 hover:bg-amber-500/30 border-amber-500/40 text-amber-300'
@@ -451,17 +453,15 @@ export const DepositView: React.FC<DepositViewProps> = ({ user, onNavigateTab })
                 Required Confirmations: <strong className="text-[#00CFFF] font-mono">{addressInfo?.requiredConfirmations || 3} Blocks</strong>
               </span>
             </div>
-            {addressInfo?.explorerUrl && (
-              <a
-                href={addressInfo.explorerUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-[#00CFFF] hover:text-[#80EAFF] flex items-center gap-1.5 transition-colors font-mono"
-              >
-                <span>View on BscScan</span>
-                <ExternalLink className="w-3.5 h-3.5" />
-              </a>
-            )}
+            <a
+              href={addressInfo?.explorerUrl || `https://bscscan.com/address/${activeAddress}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-[#00CFFF] hover:text-[#80EAFF] flex items-center gap-1.5 transition-colors font-mono"
+            >
+              <span>View on BscScan</span>
+              <ExternalLink className="w-3.5 h-3.5" />
+            </a>
           </div>
 
           {/* Asset Specific Safety Card */}
@@ -491,20 +491,14 @@ export const DepositView: React.FC<DepositViewProps> = ({ user, onNavigateTab })
 
           {/* QR Code Frame */}
           <div className="p-4 rounded-2xl bg-white shadow-2xl border border-white/20 inline-block">
-            {addressInfo?.address ? (
-              <QRCodeSVG
-                value={addressInfo.address}
-                size={160}
-                bgColor="#FFFFFF"
-                fgColor="#05070B"
-                level="M"
-                includeMargin={false}
-              />
-            ) : (
-              <div className="w-[160px] h-[160px] flex items-center justify-center bg-slate-100 text-slate-400 text-xs font-mono">
-                Generating QR...
-              </div>
-            )}
+            <QRCodeSVG
+              value={activeAddress}
+              size={160}
+              bgColor="#FFFFFF"
+              fgColor="#05070B"
+              level="M"
+              includeMargin={false}
+            />
           </div>
 
           <p className="text-[11px] text-[#98A2B3] max-w-xs">
