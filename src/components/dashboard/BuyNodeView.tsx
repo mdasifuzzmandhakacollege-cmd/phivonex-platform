@@ -82,6 +82,7 @@ export const BuyNodeView: React.FC<BuyNodeViewProps> = ({ user, onNavigateTab })
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [activatedNode, setActivatedNode] = useState<{ publicNodeId: string; nodeNumber: number } | null>(null);
   const [copiedField, setCopiedField] = useState<string | null>(null);
+  const [activeOffers, setActiveOffers] = useState<any[]>([]);
 
   // Check if current client environment is development/sandbox
   const isDevMode = typeof window !== 'undefined' && (
@@ -99,12 +100,18 @@ export const BuyNodeView: React.FC<BuyNodeViewProps> = ({ user, onNavigateTab })
   const loadData = async (isBackground = false) => {
     if (!isBackground) setErrorMsg(null);
     try {
-      const [statsRes, ordersRes, depRes, valRes] = await Promise.all([
+      const [statsRes, ordersRes, depRes, valRes, promoRes] = await Promise.all([
         fetch('/api/nodes/stats'),
         fetch('/api/node-orders/me', { credentials: 'include' }),
         fetch('/api/deposits/me?page=1&limit=10', { credentials: 'include' }),
         fetch('/api/node-orders/balance-validation', { credentials: 'include' }),
+        fetch('/api/promotions/offers', { credentials: 'include' }),
       ]);
+
+      if (promoRes && promoRes.ok) {
+        const promoData = await promoRes.json();
+        setActiveOffers(promoData.offers || []);
+      }
 
       if (statsRes.ok) {
         const statsData = await statsRes.json();
@@ -444,6 +451,40 @@ export const BuyNodeView: React.FC<BuyNodeViewProps> = ({ user, onNavigateTab })
           </div>
         </div>
       </div>
+
+      {/* Active Promotional Offer Banner (BOGO / Free Node) */}
+      {activeOffers && activeOffers.length > 0 && (
+        <div className="p-5 rounded-2xl bg-gradient-to-r from-purple-950/40 via-[#0D1B30] to-indigo-950/40 border border-purple-800/40 shadow-xl space-y-3 relative overflow-hidden animate-fadeIn">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-purple-500/20 text-purple-300 border border-purple-500/30 flex items-center gap-1">
+                <Sparkles className="w-3 h-3 text-purple-400" /> Active Protocol Promotion
+              </span>
+              <span className="text-xs text-purple-200 font-semibold font-mono">
+                {activeOffers[0].title}
+              </span>
+            </div>
+            <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-purple-500/20 text-purple-300 font-bold">
+              +{activeOffers[0].bonusNodesCount || 1} Free Bonus Node
+            </span>
+          </div>
+
+          <p className="text-xs text-slate-300 leading-relaxed">
+            {activeOffers[0].description}
+          </p>
+
+          <div className="flex flex-wrap items-center gap-4 text-[11px] pt-1 text-slate-400">
+            <div className="flex items-center gap-1 text-emerald-400">
+              <CheckCircle2 className="w-3.5 h-3.5" />
+              <span>Free Node Daily Mining Rewards: Enabled</span>
+            </div>
+            <div className="flex items-center gap-1 text-slate-400">
+              <Info className="w-3.5 h-3.5 text-indigo-400" />
+              <span>Matching &amp; Direct Spot Bonus: Real Purchased Node Only</span>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Success Notification */}
       {successMsg && (

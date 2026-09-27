@@ -601,6 +601,53 @@ export async function settleNodeOrder(
     console.warn('[BinaryVolume] Error propagating node sales volume:', volErr);
   }
 
+  // 6b. Apply Active Promotional Offers (e.g. Buy 1 Genesis Node, Get 1 Free Promo Node)
+  try {
+    const { getPromotionalOffers } = await import('./promotionalService');
+    const promoOffers = await getPromotionalOffers(false);
+    const bogoOffer = promoOffers.find(o => o.offerType === 'BOGO_FREE_NODE' || o.title.toLowerCase().includes('bogo') || o.title.toLowerCase().includes('free promo node'));
+
+    if (bogoOffer && bogoOffer.bonusNodesCount > 0) {
+      const bonusCount = bogoOffer.bonusNodesCount || 1;
+      for (let i = 0; i < bonusCount; i++) {
+        const availNodeRes = await db.query<{ id: string; node_number: number; public_node_id: string }>(
+          `SELECT id, node_number, public_node_id FROM nodes WHERE status = 'AVAILABLE' ORDER BY node_number ASC LIMIT 1`
+        );
+
+        if (availNodeRes.rows.length > 0) {
+          const bonusNode = availNodeRes.rows[0];
+          await db.query(
+            `
+            UPDATE nodes
+            SET 
+              owner_user_id = $1,
+              status = 'ACTIVE',
+              activated_at = CURRENT_TIMESTAMP,
+              updated_at = CURRENT_TIMESTAMP
+            WHERE id = $2
+            `,
+            [order.user_id, bonusNode.id]
+          );
+
+          await db.query(
+            `
+            INSERT INTO node_owners (id, node_id, user_id, acquired_via, acquired_at, is_current_owner)
+            VALUES ($1, $2, $3, 'PROMOTIONAL_BONUS', CURRENT_TIMESTAMP, TRUE)
+            ON CONFLICT (node_id, user_id) DO UPDATE SET is_current_owner = TRUE, acquired_via = 'PROMOTIONAL_BONUS'
+            `,
+            [uuidv4(), bonusNode.id, order.user_id]
+          );
+
+          // NOTE: As explicitly required, Free Promo Nodes receive Daily Mining Coin Rewards,
+          // but generate NO binary matching volume and NO direct spot referral commission!
+          console.log(`[PromotionEngine] Allocated Free Bonus Promo Node #${bonusNode.node_number} (${bonusNode.public_node_id}) to user ${order.user_id} under offer "${bogoOffer.title}"`);
+        }
+      }
+    }
+  } catch (promoErr) {
+    console.warn('[PromotionEngine] Notice checking promotional node bonus:', promoErr);
+  }
+
   // 7. Record security event
   try {
     await db.query(

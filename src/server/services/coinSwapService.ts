@@ -77,25 +77,37 @@ export async function getUserCoinBalance(userId: string): Promise<UserCoinBalanc
     `,
     [userId]
   );
-  const totalEarnedCoins = Number(rewardsRes.rows[0]?.total || 0);
+  const totalEarnedRewards = Number(rewardsRes.rows[0]?.total || 0);
 
-  // 2. Total swapped coins
-  const swapsRes = await db.query<{ total: string | number }>(
+  // 2. Total purchased coins (USDT swapped to PHIVO)
+  const boughtRes = await db.query<{ total: string | number }>(
     `
     SELECT COALESCE(SUM(coin_amount), 0) AS total
     FROM coin_swap_transactions
-    WHERE user_id = $1 AND status = 'COMPLETED'
+    WHERE user_id = $1 AND status = 'COMPLETED' AND direction = 'USDT_TO_COIN' AND coin_amount > 0
     `,
     [userId]
   );
-  const totalSwappedCoins = Number(swapsRes.rows[0]?.total || 0);
+  const totalBoughtCoins = Number(boughtRes.rows[0]?.total || 0);
 
-  const availableCoinBalance = Math.max(0, Number((totalEarnedCoins - totalSwappedCoins).toFixed(6)));
+  // 3. Total sold coins (PHIVO swapped to USDT)
+  const soldRes = await db.query<{ total: string | number }>(
+    `
+    SELECT COALESCE(SUM(coin_amount), 0) AS total
+    FROM coin_swap_transactions
+    WHERE user_id = $1 AND status = 'COMPLETED' AND (direction = 'COIN_TO_USDT' OR direction IS NULL) AND coin_amount > 0
+    `,
+    [userId]
+  );
+  const totalSoldCoins = Number(soldRes.rows[0]?.total || 0);
+
+  const totalEarnedCoins = totalEarnedRewards + totalBoughtCoins;
+  const availableCoinBalance = Math.max(0, Number((totalEarnedCoins - totalSoldCoins).toFixed(6)));
 
   return {
     availableCoinBalance,
     totalEarnedCoins,
-    totalSwappedCoins,
+    totalSwappedCoins: totalSoldCoins,
     coinSymbol: 'PHIVO',
   };
 }
@@ -255,9 +267,9 @@ export async function executeCoinToUsdtSwap(params: {
       `
       INSERT INTO coin_swap_transactions (
         id, public_swap_id, user_id, coin_amount, rate_usdt, usdt_amount,
-        status, rate_version, idempotency_key, created_at, completed_at
+        status, rate_version, idempotency_key, created_at, completed_at, direction
       )
-      VALUES ($1, $2, $3, $4, $5, $6, 'COMPLETED', $7, $8, $9, $9)
+      VALUES ($1, $2, $3, $4, $5, $6, 'COMPLETED', $7, $8, $9, $9, 'COIN_TO_USDT')
       RETURNING *
       `,
       [
@@ -430,4 +442,137 @@ export async function getUserSwapHistory(
       totalCount: totalSwapsCount,
     },
   };
+}
+
+/**
+ * Authoritative USDT -> Coin Swap Execution Engine (Bidirectional Swap).
+ * Debits USDT from financial ledger and credits PHIVO coin balance.
+ */
+export async function executeUsdtToCoinSwap(params: {
+  userId: string;
+  usdtAmount: number;
+  idempotencyKey?: string;
+}): Promise<{
+  success: boolean;
+  swap: CoinSwapTransactionRecord;
+  balances: {
+    remainingUsdtBalance: number;
+    coinsCredited: number;
+  };
+}> {
+  const { userId, usdtAmount, idempotencyKey } = params;
+
+  if (isNaN(usdtAmount) || usdtAmount <= 0) {
+    throw new Error('INVALID_USDT_AMOUNT: USDT amount must be a positive number.');
+  }
+
+  return runWithUserLock(userId, async () => {
+    const db = await getDb();
+
+    // 1. Fetch authoritative active rate
+    const coinConfig = await getEconomicConfigByKey('INTERNAL_COIN_PRICE_USDT');
+    const globalSwapActive = await isCoinSwapEnabled();
+
+    if (!coinConfig || coinConfig.status !== 'ACTIVE') {
+      const err: any = new Error('SWAP_RATE_NOT_CONFIGURED: Internal coin conversion rate is not configured.');
+      err.code = 'SWAP_RATE_NOT_CONFIGURED';
+      throw err;
+    }
+
+    const val = coinConfig.configValue || {};
+    const rateUsdt = Number(val.priceUsdt);
+    if (isNaN(rateUsdt) || rateUsdt <= 0) {
+      const err: any = new Error('SWAP_RATE_NOT_CONFIGURED: Active coin conversion rate is invalid or missing.');
+      err.code = 'SWAP_RATE_NOT_CONFIGURED';
+      throw err;
+    }
+
+    const isEnabled = globalSwapActive && val.swapEnabled !== false;
+    if (!isEnabled) {
+      const err: any = new Error('SWAP_DISABLED: Internal coin swapping is currently disabled by administration.');
+      err.code = 'SWAP_DISABLED';
+      throw err;
+    }
+
+    // 2. Verify available USDT ledger balance
+    const { getWalletSummary, postLedgerDebit } = await import('./walletLedgerService');
+    const wallet = await getWalletSummary(userId);
+    if (usdtAmount > wallet.availableBalance) {
+      const err: any = new Error(
+        `INSUFFICIENT_USDT_BALANCE: Requested swap of $${usdtAmount.toFixed(2)} USDT exceeds available balance of $${wallet.availableBalance.toFixed(2)} USDT.`
+      );
+      err.code = 'INSUFFICIENT_USDT_BALANCE';
+      throw err;
+    }
+
+    // 3. Calculate PHIVO coin proceeds
+    const coinAmount = Number((usdtAmount / rateUsdt).toFixed(4));
+    if (coinAmount <= 0) {
+      throw new Error('INVALID_SWAP_CALCULATION: Resulting coin amount must be greater than zero.');
+    }
+
+    const id = uuidv4();
+    const publicSwapId = generateSwapPublicId();
+    const now = new Date();
+
+    // 4. Debit USDT from financial ledger
+    await postLedgerDebit({
+      userId,
+      sourceType: 'COIN_SWAP',
+      sourceId: id,
+      sourceRef: publicSwapId,
+      amount: usdtAmount,
+      currency: 'USDT',
+      description: `Internal Swap USDT -> PHIVO (${coinAmount} PHIVO @ $${rateUsdt.toFixed(2)} USDT)`,
+      createdAt: now,
+    });
+
+    // 5. Insert swap transaction record
+    const insertRes = await db.query<any>(
+      `
+      INSERT INTO coin_swap_transactions (
+        id, public_swap_id, user_id, coin_amount, rate_usdt, usdt_amount,
+        status, rate_version, idempotency_key, created_at, completed_at, direction
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, 'COMPLETED', $7, $8, $9, $9, 'USDT_TO_COIN')
+      RETURNING *
+      `,
+      [
+        id,
+        publicSwapId,
+        userId,
+        coinAmount,
+        rateUsdt,
+        usdtAmount,
+        coinConfig.version,
+        idempotencyKey ? idempotencyKey.trim() : null,
+        now,
+      ]
+    );
+
+    const updatedWallet = await getWalletSummary(userId);
+    const updatedCoinBal = await getUserCoinBalance(userId);
+    const swapRow = insertRes.rows[0];
+
+    return {
+      success: true,
+      swap: {
+        id: swapRow.id,
+        publicSwapId: swapRow.public_swap_id,
+        userId: swapRow.user_id,
+        coinAmount: Number(swapRow.coin_amount),
+        rateUsdt: Number(swapRow.rate_usdt),
+        usdtAmount: Number(swapRow.usdt_amount),
+        status: swapRow.status,
+        rateVersion: Number(swapRow.rate_version),
+        idempotencyKey: swapRow.idempotency_key,
+        createdAt: new Date(swapRow.created_at).toISOString(),
+        completedAt: swapRow.completed_at ? new Date(swapRow.completed_at).toISOString() : null,
+      },
+      balances: {
+        remainingUsdtBalance: updatedWallet.availableBalance,
+        coinsCredited: coinAmount,
+      },
+    };
+  });
 }

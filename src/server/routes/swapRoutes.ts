@@ -4,6 +4,7 @@ import { swapLimiter } from '../middleware/rateLimiter';
 import {
   getSwapQuote,
   executeCoinToUsdtSwap,
+  executeUsdtToCoinSwap,
   getUserSwapHistory,
   getUserCoinBalance,
 } from '../services/coinSwapService';
@@ -149,3 +150,65 @@ swapRouter.post('/coin-to-usdt', requireAuth, swapLimiter, async (req: AuthReque
     });
   }
 });
+
+/**
+ * POST /api/swap/usdt-to-coin
+ * Authoritative swap execution: debits user's USDT ledger balance and credits PHIVO coins.
+ */
+swapRouter.post('/usdt-to-coin', requireAuth, swapLimiter, async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const user = req.user!;
+    const { usdtAmount, idempotencyKey } = req.body;
+
+    const parsedAmount = typeof usdtAmount === 'number' ? usdtAmount : parseFloat(usdtAmount);
+    if (isNaN(parsedAmount) || !isFinite(parsedAmount) || parsedAmount <= 0) {
+      res.status(400).json({
+        error: 'INVALID_AMOUNT',
+        message: 'USDT amount must be a positive number greater than 0.',
+      });
+      return;
+    }
+
+    const result = await executeUsdtToCoinSwap({
+      userId: user.id,
+      usdtAmount: parsedAmount,
+      idempotencyKey,
+    });
+
+    res.status(200).json(result);
+  } catch (err: any) {
+    const code = err.code || (err.message && err.message.split(':')[0]) || 'SERVER_ERROR';
+
+    if (code === 'INSUFFICIENT_USDT_BALANCE') {
+      res.status(400).json({
+        error: 'INSUFFICIENT_USDT_BALANCE',
+        message: err.message?.replace('INSUFFICIENT_USDT_BALANCE: ', '') || 'Insufficient USDT ledger balance.',
+      });
+      return;
+    }
+
+    if (code === 'SWAP_DISABLED') {
+      res.status(400).json({
+        error: 'SWAP_DISABLED',
+        message: 'Internal coin swapping is currently disabled by administration.',
+      });
+      return;
+    }
+
+    if (code === 'SWAP_RATE_NOT_CONFIGURED') {
+      res.status(400).json({
+        error: 'SWAP_RATE_NOT_CONFIGURED',
+        message: 'Internal coin conversion rate is not configured by PHIVONEX administration.',
+      });
+      return;
+    }
+
+    console.error('[Swap API] Error in POST /api/swap/usdt-to-coin:', err);
+    res.status(500).json({
+      error: 'SERVER_ERROR',
+      message: err.message || 'Failed to execute USDT to coin swap.',
+    });
+  }
+});
+
+export default swapRouter;

@@ -119,7 +119,21 @@ promotionRouter.get('/admin/offers', requireAuth, requireAdmin, async (req: Auth
 promotionRouter.post('/admin/offers', requireAuth, requireAdmin, async (req: AuthRequest, res: Response) => {
   try {
     const admin = req.user!;
-    const { title, description, bannerImage, startDate, endDate, status, targetAudience, priorityOrder } = req.body || {};
+    const {
+      title,
+      description,
+      bannerImage,
+      offerType,
+      bonusNodesCount,
+      bonusMiningRewards,
+      bonusMatchingEnabled,
+      bonusReferralCommission,
+      startDate,
+      endDate,
+      status,
+      targetAudience,
+      priorityOrder
+    } = req.body || {};
 
     if (!title || !description || !bannerImage || !startDate || !endDate || !status || !targetAudience || typeof priorityOrder !== 'number') {
       return res.status(400).json({ error: 'INVALID_INPUT', message: 'All offer fields are required.' });
@@ -129,6 +143,11 @@ promotionRouter.post('/admin/offers', requireAuth, requireAdmin, async (req: Aut
       title,
       description,
       bannerImage,
+      offerType: offerType || 'BOGO_FREE_NODE',
+      bonusNodesCount: typeof bonusNodesCount === 'number' ? bonusNodesCount : 1,
+      bonusMiningRewards: bonusMiningRewards !== false,
+      bonusMatchingEnabled: Boolean(bonusMatchingEnabled),
+      bonusReferralCommission: Boolean(bonusReferralCommission),
       startDate,
       endDate,
       status,
@@ -150,7 +169,21 @@ promotionRouter.put('/admin/offers/:id', requireAuth, requireAdmin, async (req: 
   try {
     const admin = req.user!;
     const { id } = req.params;
-    const { title, description, bannerImage, startDate, endDate, status, targetAudience, priorityOrder } = req.body || {};
+    const {
+      title,
+      description,
+      bannerImage,
+      offerType,
+      bonusNodesCount,
+      bonusMiningRewards,
+      bonusMatchingEnabled,
+      bonusReferralCommission,
+      startDate,
+      endDate,
+      status,
+      targetAudience,
+      priorityOrder
+    } = req.body || {};
 
     if (!title || !description || !bannerImage || !startDate || !endDate || !status || !targetAudience || typeof priorityOrder !== 'number') {
       return res.status(400).json({ error: 'INVALID_INPUT', message: 'All offer fields are required.' });
@@ -160,6 +193,11 @@ promotionRouter.put('/admin/offers/:id', requireAuth, requireAdmin, async (req: 
       title,
       description,
       bannerImage,
+      offerType: offerType || 'BOGO_FREE_NODE',
+      bonusNodesCount: typeof bonusNodesCount === 'number' ? bonusNodesCount : 1,
+      bonusMiningRewards: bonusMiningRewards !== false,
+      bonusMatchingEnabled: Boolean(bonusMatchingEnabled),
+      bonusReferralCommission: Boolean(bonusReferralCommission),
       startDate,
       endDate,
       status,

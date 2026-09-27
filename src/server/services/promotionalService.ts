@@ -8,6 +8,11 @@ export interface PromotionalOffer {
   title: string;
   description: string;
   bannerImage: string;
+  offerType: 'BOGO_FREE_NODE' | 'FREE_BONUS_NODE' | 'DISCOUNT' | 'CUSTOM';
+  bonusNodesCount: number;
+  bonusMiningRewards: boolean;
+  bonusMatchingEnabled: boolean;
+  bonusReferralCommission: boolean;
   startDate: string;
   endDate: string;
   status: 'ACTIVE' | 'INACTIVE';
@@ -43,7 +48,9 @@ export interface PerformancePopupSettings {
 export async function getPromotionalOffers(adminOnly: boolean = false): Promise<PromotionalOffer[]> {
   const db = await getDb();
   let query = `
-    SELECT id, title, description, banner_image, start_date, end_date, status, target_audience, priority_order, created_at 
+    SELECT id, title, description, banner_image, offer_type, bonus_nodes_count,
+           bonus_mining_rewards, bonus_matching_enabled, bonus_referral_commission,
+           start_date, end_date, status, target_audience, priority_order, created_at 
     FROM promotional_offers
   `;
   const params: any[] = [];
@@ -60,6 +67,11 @@ export async function getPromotionalOffers(adminOnly: boolean = false): Promise<
     title: r.title,
     description: r.description,
     bannerImage: r.banner_image,
+    offerType: r.offer_type || 'BOGO_FREE_NODE',
+    bonusNodesCount: Number(r.bonus_nodes_count ?? 1),
+    bonusMiningRewards: r.bonus_mining_rewards ?? true,
+    bonusMatchingEnabled: r.bonus_matching_enabled ?? false,
+    bonusReferralCommission: r.bonus_referral_commission ?? false,
     startDate: r.start_date,
     endDate: r.end_date,
     status: r.status,
@@ -79,14 +91,23 @@ export async function createPromotionalOffer(
 
   await db.query(
     `
-    INSERT INTO promotional_offers (id, title, description, banner_image, start_date, end_date, status, target_audience, priority_order)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+    INSERT INTO promotional_offers (
+      id, title, description, banner_image, offer_type, bonus_nodes_count,
+      bonus_mining_rewards, bonus_matching_enabled, bonus_referral_commission,
+      start_date, end_date, status, target_audience, priority_order
+    )
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
     `,
     [
       id,
       offer.title,
       offer.description,
       offer.bannerImage,
+      offer.offerType || 'BOGO_FREE_NODE',
+      offer.bonusNodesCount ?? 1,
+      offer.bonusMiningRewards ?? true,
+      offer.bonusMatchingEnabled ?? false,
+      offer.bonusReferralCommission ?? false,
       offer.startDate,
       offer.endDate,
       offer.status,
@@ -107,7 +128,7 @@ export async function createPromotionalOffer(
     action: 'CREATE_PROMOTIONAL_OFFER',
     targetType: 'promotional_offers',
     targetId: id,
-    details: `Created promotional offer: "${offer.title}"`
+    details: `Created promotional offer: "${offer.title}" (${offer.offerType || 'BOGO_FREE_NODE'})`
   });
 
   return created;
@@ -130,13 +151,20 @@ export async function updatePromotionalOffer(
   await db.query(
     `
     UPDATE promotional_offers
-    SET title = $1, description = $2, banner_image = $3, start_date = $4, end_date = $5, status = $6, target_audience = $7, priority_order = $8
-    WHERE id = $9
+    SET title = $1, description = $2, banner_image = $3, offer_type = $4, bonus_nodes_count = $5,
+        bonus_mining_rewards = $6, bonus_matching_enabled = $7, bonus_referral_commission = $8,
+        start_date = $9, end_date = $10, status = $11, target_audience = $12, priority_order = $13
+    WHERE id = $14
     `,
     [
       offer.title,
       offer.description,
       offer.bannerImage,
+      offer.offerType || 'BOGO_FREE_NODE',
+      offer.bonusNodesCount ?? 1,
+      offer.bonusMiningRewards ?? true,
+      offer.bonusMatchingEnabled ?? false,
+      offer.bonusReferralCommission ?? false,
       offer.startDate,
       offer.endDate,
       offer.status,

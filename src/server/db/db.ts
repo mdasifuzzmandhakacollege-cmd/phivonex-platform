@@ -874,6 +874,8 @@ async function initSchema(client: DatabaseClient) {
         CREATE INDEX IF NOT EXISTS idx_cst_status ON coin_swap_transactions (status);
         CREATE INDEX IF NOT EXISTS idx_cst_created_at ON coin_swap_transactions (created_at DESC);
 
+        ALTER TABLE coin_swap_transactions ADD COLUMN IF NOT EXISTS direction VARCHAR(20) NOT NULL DEFAULT 'COIN_TO_USDT';
+
         -- Update financial_ledger_entries constraint to support COIN_SWAP
         ALTER TABLE financial_ledger_entries DROP CONSTRAINT IF EXISTS chk_fle_source_type;
         ALTER TABLE financial_ledger_entries ADD CONSTRAINT chk_fle_source_type CHECK (source_type IN ('REFERRAL_COMMISSION', 'MATCHING_BONUS', 'PROMOTION_BONUS', 'NODE_REWARD', 'WITHDRAWAL', 'BLOCKCHAIN_DEPOSIT', 'COIN_SWAP', 'NODE_PURCHASE', 'USDT_DEPOSIT', 'BNB_DEPOSIT', 'DEPOSIT_CREDIT'));
@@ -1044,6 +1046,11 @@ async function initSchema(client: DatabaseClient) {
           title TEXT NOT NULL,
           description TEXT NOT NULL,
           banner_image TEXT NOT NULL,
+          offer_type VARCHAR(50) NOT NULL DEFAULT 'BOGO_FREE_NODE',
+          bonus_nodes_count INTEGER NOT NULL DEFAULT 1,
+          bonus_mining_rewards BOOLEAN NOT NULL DEFAULT TRUE,
+          bonus_matching_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+          bonus_referral_commission BOOLEAN NOT NULL DEFAULT FALSE,
           start_date TIMESTAMP WITH TIME ZONE NOT NULL,
           end_date TIMESTAMP WITH TIME ZONE NOT NULL,
           status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE',
@@ -1051,6 +1058,36 @@ async function initSchema(client: DatabaseClient) {
           priority_order INTEGER NOT NULL DEFAULT 0,
           created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
         );
+
+        -- Add columns if missing in existing table
+        ALTER TABLE promotional_offers ADD COLUMN IF NOT EXISTS offer_type VARCHAR(50) NOT NULL DEFAULT 'BOGO_FREE_NODE';
+        ALTER TABLE promotional_offers ADD COLUMN IF NOT EXISTS bonus_nodes_count INTEGER NOT NULL DEFAULT 1;
+        ALTER TABLE promotional_offers ADD COLUMN IF NOT EXISTS bonus_mining_rewards BOOLEAN NOT NULL DEFAULT TRUE;
+        ALTER TABLE promotional_offers ADD COLUMN IF NOT EXISTS bonus_matching_enabled BOOLEAN NOT NULL DEFAULT FALSE;
+        ALTER TABLE promotional_offers ADD COLUMN IF NOT EXISTS bonus_referral_commission BOOLEAN NOT NULL DEFAULT FALSE;
+
+        -- Seed BOGO offer if none exists
+        INSERT INTO promotional_offers (
+          id, title, description, banner_image, offer_type, bonus_nodes_count,
+          bonus_mining_rewards, bonus_matching_enabled, bonus_referral_commission,
+          start_date, end_date, status, target_audience, priority_order
+        )
+        SELECT
+          '3c55abba-b586-4032-8cf4-6a039eec92bc',
+          'Buy 1 Genesis Node, Get 1 Free Promo Node (BOGO)',
+          'Limited promotion: Acquire 1 Genesis Validator Node and receive 1 Free Promo Node. The Free Node accrues daily mining coin rewards without binary matching or direct spot commissions.',
+          'https://images.unsplash.com/photo-1639762681485-074b7f938ba0?q=80&w=800&auto=format&fit=crop',
+          'BOGO_FREE_NODE',
+          1,
+          TRUE,
+          FALSE,
+          FALSE,
+          CURRENT_TIMESTAMP - INTERVAL '1 day',
+          CURRENT_TIMESTAMP + INTERVAL '90 days',
+          'ACTIVE',
+          'ALL',
+          1
+        WHERE NOT EXISTS (SELECT 1 FROM promotional_offers WHERE offer_type = 'BOGO_FREE_NODE');
 
         CREATE TABLE IF NOT EXISTS promotional_banners (
           id UUID PRIMARY KEY,

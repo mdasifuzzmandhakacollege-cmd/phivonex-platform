@@ -16,7 +16,8 @@ import {
   Sparkles,
   Zap,
   ExternalLink,
-  ChevronRight
+  ChevronRight,
+  Wallet
 } from 'lucide-react';
 import { UserProfile } from '../../context/AuthContext';
 import { PHIVONEX_TOKEN_CONFIG } from '../../server/config/tokenConfig';
@@ -39,6 +40,7 @@ export interface SwapHistoryItem {
   idempotencyKey: string | null;
   createdAt: string;
   completedAt: string | null;
+  direction?: 'COIN_TO_USDT' | 'USDT_TO_COIN';
 }
 
 export interface SwapQuoteData {
@@ -52,10 +54,15 @@ export interface SwapQuoteData {
 }
 
 export const SwapView: React.FC<SwapViewProps> = ({ user, onNavigateTab }) => {
-  // State
+  // Mode: 'COIN_TO_USDT' (Sell PHIVO, Receive USDT) vs 'USDT_TO_COIN' (Spend USDT, Buy PHIVO)
+  const [swapDirection, setSwapDirection] = useState<'COIN_TO_USDT' | 'USDT_TO_COIN'>('COIN_TO_USDT');
+
+  // Balances
   const [coinBalance, setCoinBalance] = useState<number>(0);
+  const [usdtBalance, setUsdtBalance] = useState<number>(0);
   const [totalEarnedCoins, setTotalEarnedCoins] = useState<number>(0);
   const [totalSwappedCoins, setTotalSwappedCoins] = useState<number>(0);
+
   const [quote, setQuote] = useState<SwapQuoteData | null>(null);
   const [history, setHistory] = useState<SwapHistoryItem[]>([]);
   const [historySummary, setHistorySummary] = useState({
@@ -65,7 +72,6 @@ export const SwapView: React.FC<SwapViewProps> = ({ user, onNavigateTab }) => {
   });
 
   const [loading, setLoading] = useState<boolean>(true);
-  const [quoteLoading, setQuoteLoading] = useState<boolean>(false);
   const [swapAmountInput, setSwapAmountInput] = useState<string>('');
   const [submitting, setSubmitting] = useState<boolean>(false);
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
@@ -77,10 +83,11 @@ export const SwapView: React.FC<SwapViewProps> = ({ user, onNavigateTab }) => {
   const fetchData = useCallback(async () => {
     try {
       setLoading(true);
-      const [balRes, quoteRes, histRes] = await Promise.all([
-        fetch('/api/swap/balance'),
+      const [balRes, quoteRes, histRes, walletRes] = await Promise.all([
+        fetch('/api/swap/balance', { credentials: 'include' }),
         fetch('/api/swap/quote?amount=1'),
-        fetch('/api/swap/history?limit=30'),
+        fetch('/api/swap/history?limit=30', { credentials: 'include' }),
+        fetch('/api/wallets/summary', { credentials: 'include' }),
       ]);
 
       if (balRes.ok) {
@@ -88,6 +95,11 @@ export const SwapView: React.FC<SwapViewProps> = ({ user, onNavigateTab }) => {
         setCoinBalance(balData.availableCoinBalance ?? 0);
         setTotalEarnedCoins(balData.totalEarnedCoins ?? 0);
         setTotalSwappedCoins(balData.totalSwappedCoins ?? 0);
+      }
+
+      if (walletRes.ok) {
+        const wData = await walletRes.json();
+        setUsdtBalance(Number(wData.availableBalance || 0));
       }
 
       if (quoteRes.ok) {
@@ -113,21 +125,40 @@ export const SwapView: React.FC<SwapViewProps> = ({ user, onNavigateTab }) => {
     fetchData();
   }, [fetchData]);
 
+  // Active conversion rate (e.g. 1 PHIVO = $0.10 USDT)
+  const activeRate = quote?.rate || 0.10;
+  const isSwapDisabled = quote?.swapEnabled === false;
+
   // Handle Quick Percent Selection
   const handleQuickPercent = (pct: number) => {
-    if (coinBalance <= 0) return;
-    const computed = (coinBalance * (pct / 100)).toFixed(4);
+    const maxVal = swapDirection === 'COIN_TO_USDT' ? coinBalance : usdtBalance;
+    if (maxVal <= 0) return;
+    const computed = (maxVal * (pct / 100)).toFixed(swapDirection === 'COIN_TO_USDT' ? 4 : 2);
     setSwapAmountInput(computed);
     setFeedback(null);
   };
 
-  // Numerical calculations
-  const parsedSwapAmount = parseFloat(swapAmountInput) || 0;
-  const activeRate = quote?.rate || 0.10;
-  const estimatedUsdt = Number((parsedSwapAmount * activeRate).toFixed(4));
-  const isSwapDisabled = quote?.swapEnabled === false;
-  const isInsufficient = parsedSwapAmount > coinBalance;
-  const isValidAmount = parsedSwapAmount > 0 && !isInsufficient && !isSwapDisabled;
+  // Toggle direction
+  const handleToggleDirection = () => {
+    setSwapDirection(prev => prev === 'COIN_TO_USDT' ? 'USDT_TO_COIN' : 'COIN_TO_USDT');
+    setSwapAmountInput('');
+    setFeedback(null);
+  };
+
+  // Numerical calculations based on direction
+  const parsedInput = parseFloat(swapAmountInput) || 0;
+
+  // If COIN_TO_USDT: Input is PHIVO, Output is USDT
+  // If USDT_TO_COIN: Input is USDT, Output is PHIVO
+  const isCoinToUsdt = swapDirection === 'COIN_TO_USDT';
+  const availableSourceBalance = isCoinToUsdt ? coinBalance : usdtBalance;
+  const isInsufficient = parsedInput > availableSourceBalance;
+  
+  const estimatedOutput = isCoinToUsdt
+    ? Number((parsedInput * activeRate).toFixed(4))
+    : Number((activeRate > 0 ? parsedInput / activeRate : 0).toFixed(4));
+
+  const isValidAmount = parsedInput > 0 && !isInsufficient && !isSwapDisabled;
 
   // Open Confirmation Modal
   const handleInitiateSwap = () => {
@@ -142,13 +173,16 @@ export const SwapView: React.FC<SwapViewProps> = ({ user, onNavigateTab }) => {
       setSubmitting(true);
       setFeedback(null);
 
-      const res = await fetch('/api/swap/coin-to-usdt', {
+      const endpoint = isCoinToUsdt ? '/api/swap/coin-to-usdt' : '/api/swap/usdt-to-coin';
+      const body = isCoinToUsdt
+        ? { coinAmount: parsedInput, idempotencyKey: `swap-c2u-${user.id.slice(0, 8)}-${Date.now()}` }
+        : { usdtAmount: parsedInput, idempotencyKey: `swap-u2c-${user.id.slice(0, 8)}-${Date.now()}` };
+
+      const res = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          coinAmount: parsedSwapAmount,
-          idempotencyKey: `swap-${user.id.slice(0, 8)}-${Date.now()}`,
-        }),
+        credentials: 'include',
+        body: JSON.stringify(body),
       });
 
       const data = await res.json();
@@ -156,7 +190,7 @@ export const SwapView: React.FC<SwapViewProps> = ({ user, onNavigateTab }) => {
       if (!res.ok) {
         setFeedback({
           type: 'error',
-          message: data.message || 'Failed to execute internal coin swap.',
+          message: data.message || 'Failed to execute internal swap.',
         });
         setIsConfirmModalOpen(false);
         return;
@@ -164,7 +198,9 @@ export const SwapView: React.FC<SwapViewProps> = ({ user, onNavigateTab }) => {
 
       setFeedback({
         type: 'success',
-        message: `Successfully converted ${parsedSwapAmount} PHIVO into $${data.swap?.usdtAmount?.toFixed(2)} USDT ledger balance!`,
+        message: isCoinToUsdt
+          ? `Successfully converted ${parsedInput} PHIVO into $${data.swap?.usdtAmount?.toFixed(2)} USDT ledger balance!`
+          : `Successfully converted $${parsedInput} USDT into ${data.swap?.coinAmount ? Math.abs(data.swap.coinAmount).toFixed(4) : estimatedOutput.toFixed(4)} PHIVO coins!`,
       });
 
       setSwapAmountInput('');
@@ -189,13 +225,13 @@ export const SwapView: React.FC<SwapViewProps> = ({ user, onNavigateTab }) => {
         <div>
           <div className="flex items-center gap-2 text-xs font-mono text-[#00CFFF] uppercase tracking-wider">
             <Coins className="w-3.5 h-3.5" />
-            <span>PHIVONEX Liquidity Layer • Task #19.1</span>
+            <span>PHIVONEX Liquidity &amp; Conversion Layer</span>
           </div>
           <h1 className="text-2xl sm:text-3xl font-bold text-white tracking-tight mt-1 flex items-center gap-3">
-            PHIVO → USDT Swap Engine
+            Bidirectional Coin &amp; Dollar Swap
           </h1>
           <p className="text-sm text-[#98A2B3] mt-1 max-w-2xl">
-            Convert earned PHIVO mining reward coins directly into internal USDT balance using the authoritative server-configured conversion rate.
+            Seamlessly convert earned PHIVO mining coins into USDT balance for withdrawal, or convert USDT balance into PHIVO coins to accumulate and hold.
           </p>
         </div>
 
@@ -203,7 +239,7 @@ export const SwapView: React.FC<SwapViewProps> = ({ user, onNavigateTab }) => {
           <button
             onClick={() => fetchData()}
             disabled={loading}
-            className="flex items-center gap-2 px-3 py-2 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.08] text-xs text-white font-mono transition-colors cursor-pointer disabled:opacity-50"
+            className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.08] text-xs text-white font-mono transition-colors cursor-pointer disabled:opacity-50"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin text-[#00CFFF]' : ''}`} />
             <span>Sync Balances</span>
@@ -242,7 +278,7 @@ export const SwapView: React.FC<SwapViewProps> = ({ user, onNavigateTab }) => {
         {/* Card 1: Available Coin Balance */}
         <div className="p-5 rounded-2xl bg-[#07101D] border border-white/[0.08] relative overflow-hidden group hover:border-[#00CFFF]/40 transition-colors">
           <div className="flex items-center justify-between text-[#98A2B3] text-xs">
-            <span>Available PHIVO Balance</span>
+            <span>Available PHIVO Coin</span>
             <div className="p-2 rounded-lg bg-[#00CFFF]/10 text-[#00CFFF]">
               <Coins className="w-4 h-4" />
             </div>
@@ -257,58 +293,58 @@ export const SwapView: React.FC<SwapViewProps> = ({ user, onNavigateTab }) => {
           </div>
         </div>
 
-        {/* Card 2: Active Coin Price */}
+        {/* Card 2: Available USDT Balance */}
         <div className="p-5 rounded-2xl bg-[#07101D] border border-white/[0.08] relative overflow-hidden group hover:border-[#12B76A]/40 transition-colors">
           <div className="flex items-center justify-between text-[#98A2B3] text-xs">
-            <span>Authoritative PHIVO Price</span>
+            <span>Available USDT Balance</span>
             <div className="p-2 rounded-lg bg-[#12B76A]/10 text-[#12B76A]">
-              <TrendingUp className="w-4 h-4" />
+              <Wallet className="w-4 h-4" />
             </div>
           </div>
           <div className="mt-3">
             <div className="text-2xl font-bold font-mono text-[#12B76A] tracking-tight">
-              ${activeRate.toFixed(2)} USDT
+              ${usdtBalance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDT
             </div>
             <div className="text-[11px] text-[#98A2B3] mt-0.5 flex items-center gap-1.5">
-              <span className="w-1.5 h-1.5 rounded-full bg-[#12B76A]" />
-              <span>Rate v{quote?.rateVersion || 1} • Server Verified</span>
+              <span>Eligible for Node &amp; Withdrawals</span>
             </div>
           </div>
         </div>
 
-        {/* Card 3: Total Swapped */}
+        {/* Card 3: Active Coin Price */}
         <div className="p-5 rounded-2xl bg-[#07101D] border border-white/[0.08] relative overflow-hidden group hover:border-purple-400/40 transition-colors">
           <div className="flex items-center justify-between text-[#98A2B3] text-xs">
-            <span>Total PHIVO Swapped</span>
+            <span>Conversion Rate</span>
             <div className="p-2 rounded-lg bg-purple-500/10 text-purple-400">
+              <TrendingUp className="w-4 h-4" />
+            </div>
+          </div>
+          <div className="mt-3">
+            <div className="text-2xl font-bold font-mono text-white tracking-tight">
+              1 PHIVO = ${activeRate.toFixed(2)}
+            </div>
+            <div className="text-[11px] text-[#98A2B3] mt-0.5 flex items-center gap-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-[#12B76A]" />
+              <span>Version {quote?.rateVersion || 1} • Authoritative</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Card 4: Total Swaps Count */}
+        <div className="p-5 rounded-2xl bg-[#07101D] border border-white/[0.08] relative overflow-hidden group hover:border-amber-400/40 transition-colors">
+          <div className="flex items-center justify-between text-[#98A2B3] text-xs">
+            <span>Total Swaps Settled</span>
+            <div className="p-2 rounded-lg bg-amber-500/10 text-amber-400">
               <ArrowLeftRight className="w-4 h-4" />
             </div>
           </div>
           <div className="mt-3">
             <div className="text-2xl font-bold font-mono text-white tracking-tight">
-              {historySummary.totalSwappedCoins.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} PHIVO
-            </div>
-            <div className="text-[11px] text-[#98A2B3] mt-0.5">
-              <span>Across {historySummary.totalSwapsCount} swap operation(s)</span>
-            </div>
-          </div>
-        </div>
-
-        {/* Card 4: USDT Proceeds Realized */}
-        <div className="p-5 rounded-2xl bg-[#07101D] border border-white/[0.08] relative overflow-hidden group hover:border-amber-400/40 transition-colors">
-          <div className="flex items-center justify-between text-[#98A2B3] text-xs">
-            <span>USDT Ledger Proceeds</span>
-            <div className="p-2 rounded-lg bg-amber-500/10 text-amber-400">
-              <DollarSign className="w-4 h-4" />
-            </div>
-          </div>
-          <div className="mt-3">
-            <div className="text-2xl font-bold font-mono text-white tracking-tight">
-              ${historySummary.totalUsdtReceived.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              {historySummary.totalSwapsCount} Operations
             </div>
             <div className="text-[11px] text-[#98A2B3] mt-0.5 flex items-center gap-1">
               <ShieldCheck className="w-3 h-3 text-[#12B76A]" />
-              <span>Available for Withdrawal / Nodes</span>
+              <span>Instant Ledger Settlement</span>
             </div>
           </div>
         </div>
@@ -319,39 +355,53 @@ export const SwapView: React.FC<SwapViewProps> = ({ user, onNavigateTab }) => {
         {/* Left: Interactive Swap Card (7 Cols) */}
         <div className="lg:col-span-7 bg-[#07101D] border border-white/[0.08] rounded-2xl p-6 relative overflow-hidden flex flex-col justify-between">
           <div className="space-y-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <h2 className="text-base font-bold text-white flex items-center gap-2">
-                  <Coins className="w-4 h-4 text-[#00CFFF]" />
-                  <span>Execute Coin Conversion</span>
-                </h2>
-                <p className="text-xs text-[#98A2B3] mt-0.5">
-                  Debits PHIVO reward coins and atomically credits internal USDT balance.
-                </p>
-              </div>
+            {/* Direction Selector Tabs */}
+            <div className="flex items-center justify-between gap-2 p-1.5 rounded-xl bg-[#05070B] border border-white/[0.08]">
+              <button
+                type="button"
+                onClick={() => {
+                  setSwapDirection('COIN_TO_USDT');
+                  setSwapAmountInput('');
+                  setFeedback(null);
+                }}
+                className={`flex-1 py-2 px-3 rounded-lg text-xs font-bold font-mono flex items-center justify-center gap-2 transition-all ${
+                  isCoinToUsdt
+                    ? 'bg-gradient-to-r from-[#00CFFF]/20 to-[#168BFF]/20 text-white border border-[#00CFFF]/40 shadow-sm'
+                    : 'text-[#98A2B3] hover:text-white'
+                }`}
+              >
+                <PhivoCoinIcon size={16} />
+                <span>PHIVO → USDT (Sell Coin)</span>
+              </button>
 
-              {quote?.swapEnabled === false ? (
-                <span className="px-2.5 py-1 rounded-full text-[10px] font-mono font-bold bg-[#F04438]/10 text-[#F04438] border border-[#F04438]/30">
-                  SWAP DISABLED
-                </span>
-              ) : (
-                <span className="px-2.5 py-1 rounded-full text-[10px] font-mono font-bold bg-[#12B76A]/10 text-[#12B76A] border border-[#12B76A]/30 flex items-center gap-1.5">
-                  <span className="w-1.5 h-1.5 rounded-full bg-[#12B76A] animate-pulse" />
-                  <span>SWAP ACTIVE</span>
-                </span>
-              )}
+              <button
+                type="button"
+                onClick={() => {
+                  setSwapDirection('USDT_TO_COIN');
+                  setSwapAmountInput('');
+                  setFeedback(null);
+                }}
+                className={`flex-1 py-2 px-3 rounded-lg text-xs font-bold font-mono flex items-center justify-center gap-2 transition-all ${
+                  !isCoinToUsdt
+                    ? 'bg-gradient-to-r from-[#12B76A]/20 to-emerald-600/20 text-white border border-[#12B76A]/40 shadow-sm'
+                    : 'text-[#98A2B3] hover:text-white'
+                }`}
+              >
+                <UsdtIcon size={16} />
+                <span>USDT → PHIVO (Buy Coin)</span>
+              </button>
             </div>
 
-            {/* From: PHIVONEX Coin Input */}
+            {/* Input Box (Pay) */}
             <div className="p-4 rounded-xl bg-[#05070B] border border-white/[0.08] space-y-3">
               <div className="flex items-center justify-between text-xs">
                 <span className="text-[#98A2B3] font-mono uppercase tracking-wider text-[10px]">
-                  You Swap (From)
+                  You Pay ({isCoinToUsdt ? 'PHIVO' : 'USDT'})
                 </span>
                 <div className="flex items-center gap-2 text-xs font-mono">
                   <span className="text-[#98A2B3]">Available:</span>
                   <span className="text-[#00CFFF] font-bold">
-                    {coinBalance.toFixed(4)} PHIVO
+                    {isCoinToUsdt ? `${coinBalance.toFixed(4)} PHIVO` : `$${usdtBalance.toFixed(2)} USDT`}
                   </span>
                 </div>
               </div>
@@ -372,8 +422,10 @@ export const SwapView: React.FC<SwapViewProps> = ({ user, onNavigateTab }) => {
                 />
 
                 <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-white/[0.06] border border-white/[0.08] shrink-0">
-                  <PhivoCoinIcon size={22} />
-                  <span className="text-sm font-bold font-mono text-white">PHIVO</span>
+                  {isCoinToUsdt ? <PhivoCoinIcon size={22} /> : <UsdtIcon size={22} />}
+                  <span className="text-sm font-bold font-mono text-white">
+                    {isCoinToUsdt ? 'PHIVO' : 'USDT'}
+                  </span>
                 </div>
               </div>
 
@@ -384,7 +436,7 @@ export const SwapView: React.FC<SwapViewProps> = ({ user, onNavigateTab }) => {
                     key={pct}
                     type="button"
                     onClick={() => handleQuickPercent(pct)}
-                    disabled={coinBalance <= 0 || quote?.swapEnabled === false}
+                    disabled={availableSourceBalance <= 0 || quote?.swapEnabled === false}
                     className="flex-1 py-1 px-2 rounded-lg bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.06] text-[11px] font-mono text-[#98A2B3] hover:text-white transition-colors cursor-pointer disabled:opacity-30"
                   >
                     {pct === 100 ? 'MAX' : `${pct}%`}
@@ -393,18 +445,23 @@ export const SwapView: React.FC<SwapViewProps> = ({ user, onNavigateTab }) => {
               </div>
             </div>
 
-            {/* Divider Icon */}
+            {/* Direction Switch Toggle Button */}
             <div className="flex justify-center -my-3 relative z-10">
-              <div className="w-9 h-9 rounded-full bg-[#07101D] border border-white/[0.12] shadow-lg flex items-center justify-center text-[#00CFFF]">
+              <button
+                type="button"
+                onClick={handleToggleDirection}
+                className="w-9 h-9 rounded-full bg-[#07101D] border border-white/[0.12] hover:border-[#00CFFF] shadow-lg flex items-center justify-center text-[#00CFFF] hover:scale-110 transition-transform cursor-pointer"
+                title="Switch Swap Direction"
+              >
                 <ArrowLeftRight className="w-4 h-4" />
-              </div>
+              </button>
             </div>
 
-            {/* To: USDT Estimated Output */}
+            {/* Output Box (Receive) */}
             <div className="p-4 rounded-xl bg-[#05070B] border border-white/[0.08] space-y-3">
               <div className="flex items-center justify-between text-xs">
                 <span className="text-[#98A2B3] font-mono uppercase tracking-wider text-[10px]">
-                  You Receive (To Internal USDT Ledger)
+                  You Receive ({isCoinToUsdt ? 'USDT' : 'PHIVO'})
                 </span>
                 <span className="text-[10px] font-mono text-[#12B76A] bg-[#12B76A]/10 px-2 py-0.5 rounded">
                   Rate: 1 PHIVO = ${activeRate.toFixed(2)} USDT
@@ -413,28 +470,32 @@ export const SwapView: React.FC<SwapViewProps> = ({ user, onNavigateTab }) => {
 
               <div className="flex items-center justify-between gap-4">
                 <div className="text-2xl sm:text-3xl font-mono font-bold text-[#12B76A]">
-                  ${estimatedUsdt.toFixed(2)}
+                  {isCoinToUsdt ? `$${estimatedOutput.toFixed(2)}` : `${estimatedOutput.toFixed(4)} PHIVO`}
                 </div>
 
                 <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-[#12B76A]/10 border border-[#12B76A]/30 shrink-0">
-                  <UsdtIcon size={22} />
-                  <span className="text-sm font-bold font-mono text-[#12B76A]">USDT</span>
+                  {isCoinToUsdt ? <UsdtIcon size={22} /> : <PhivoCoinIcon size={22} />}
+                  <span className="text-sm font-bold font-mono text-[#12B76A]">
+                    {isCoinToUsdt ? 'USDT' : 'PHIVO'}
+                  </span>
                 </div>
               </div>
             </div>
 
             {/* Validation Notice */}
-            {isInsufficient && parsedSwapAmount > 0 && (
+            {isInsufficient && parsedInput > 0 && (
               <div className="p-3 rounded-xl bg-[#F04438]/10 border border-[#F04438]/30 flex items-center gap-2 text-xs text-[#F04438]">
                 <AlertTriangle className="w-4 h-4 shrink-0" />
-                <span>Requested swap exceeds available PHIVO coin balance ({coinBalance.toFixed(4)} PHIVO).</span>
+                <span>
+                  Requested swap exceeds available {isCoinToUsdt ? 'PHIVO' : 'USDT'} balance ({availableSourceBalance.toFixed(isCoinToUsdt ? 4 : 2)}).
+                </span>
               </div>
             )}
 
             {isSwapDisabled && (
               <div className="p-3 rounded-xl bg-[#F04438]/10 border border-[#F04438]/30 flex items-center gap-2 text-xs text-[#F04438]">
                 <Lock className="w-4 h-4 shrink-0" />
-                <span>Internal coin swapping is currently disabled by PHIVONEX administration.</span>
+                <span>Internal swapping is currently disabled by PHIVONEX administration.</span>
               </div>
             )}
           </div>
@@ -444,28 +505,34 @@ export const SwapView: React.FC<SwapViewProps> = ({ user, onNavigateTab }) => {
             <button
               onClick={handleInitiateSwap}
               disabled={!isValidAmount || submitting}
-              className="w-full py-3.5 px-4 rounded-xl bg-gradient-to-r from-[#00CFFF] to-[#00A3FF] hover:from-[#00CFFF]/90 hover:to-[#00A3FF]/90 text-[#05070B] font-bold text-sm flex items-center justify-center gap-2 transition-all shadow-lg shadow-[#00CFFF]/20 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed disabled:shadow-none min-h-[48px]"
+              className={`w-full py-3.5 px-4 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-all shadow-lg cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed disabled:shadow-none min-h-[48px] ${
+                isCoinToUsdt
+                  ? 'bg-gradient-to-r from-[#00CFFF] to-[#00A3FF] text-[#05070B] shadow-[#00CFFF]/20'
+                  : 'bg-gradient-to-r from-[#12B76A] to-emerald-500 text-white shadow-emerald-500/20'
+              }`}
             >
               <Zap className="w-4 h-4 fill-current" />
               <span>
                 {isSwapDisabled
                   ? 'Swapping Disabled'
                   : isInsufficient
-                  ? 'Insufficient PHIVO Balance'
-                  : parsedSwapAmount <= 0
+                  ? `Insufficient ${isCoinToUsdt ? 'PHIVO' : 'USDT'} Balance`
+                  : parsedInput <= 0
                   ? 'Enter Amount to Swap'
-                  : `Convert ${parsedSwapAmount} PHIVO → $${estimatedUsdt.toFixed(2)} USDT`}
+                  : isCoinToUsdt
+                  ? `Convert ${parsedInput} PHIVO → $${estimatedOutput.toFixed(2)} USDT`
+                  : `Convert $${parsedInput} USDT → ${estimatedOutput.toFixed(4)} PHIVO`}
               </span>
             </button>
           </div>
         </div>
 
-        {/* Right: Contract & Protocol Integrity Info (5 Cols) */}
+        {/* Right: Specifications & Protocol Guarantee (5 Cols) */}
         <div className="lg:col-span-5 space-y-6">
           <div className="bg-[#07101D] border border-white/[0.08] rounded-2xl p-6 space-y-4">
             <div className="flex items-center gap-2 text-xs font-mono text-[#00CFFF] uppercase tracking-wider">
               <ShieldCheck className="w-4 h-4" />
-              <span>Swap Engine Specifications</span>
+              <span>Swap Protocol Guarantee</span>
             </div>
 
             <h3 className="text-base font-bold text-white">
@@ -476,19 +543,19 @@ export const SwapView: React.FC<SwapViewProps> = ({ user, onNavigateTab }) => {
               <li className="flex items-start gap-2.5">
                 <CheckCircle2 className="w-4 h-4 text-[#12B76A] shrink-0 mt-0.5" />
                 <span>
-                  <strong className="text-white">Server-Authoritative Pricing:</strong> Swaps execute strictly against the active Admin economic rate with immutable historical versioning.
+                  <strong className="text-white">Full Bi-Directional Swaps:</strong> Convert mining coin rewards into USDT for withdrawal, or convert internal USDT into PHIVO coins to hold in your wallet.
                 </span>
               </li>
               <li className="flex items-start gap-2.5">
                 <CheckCircle2 className="w-4 h-4 text-[#12B76A] shrink-0 mt-0.5" />
                 <span>
-                  <strong className="text-white">Direct USDT Ledger Credit:</strong> USDT proceeds immediately post as internal balance for Genesis Node activation or USDT TRC20/BEP20 withdrawals.
+                  <strong className="text-white">Unused Deposit Withdrawal:</strong> Users who deposit USDT can withdraw funds freely without any lock-in if they choose not to activate nodes.
                 </span>
               </li>
               <li className="flex items-start gap-2.5">
                 <CheckCircle2 className="w-4 h-4 text-[#12B76A] shrink-0 mt-0.5" />
                 <span>
-                  <strong className="text-white">Permanent Rate Guarantee:</strong> Historical swap records permanently preserve the exact rate used and never recompute upon future rate updates.
+                  <strong className="text-white">Real-Time Ledger Settlement:</strong> Transactions are atomic, double-entry balanced, and permanently logged in Firestore &amp; PostgreSQL.
                 </span>
               </li>
             </ul>
@@ -512,10 +579,10 @@ export const SwapView: React.FC<SwapViewProps> = ({ user, onNavigateTab }) => {
           <div>
             <h2 className="text-base font-bold text-white flex items-center gap-2">
               <Clock className="w-4 h-4 text-[#00CFFF]" />
-              <span>Conversion & Swap History</span>
+              <span>Conversion &amp; Swap History</span>
             </h2>
             <p className="text-xs text-[#98A2B3] mt-0.5">
-              Auditable log of all completed coin-to-USDT conversion transactions.
+              Auditable log of all completed coin-to-USDT and USDT-to-coin conversion transactions.
             </p>
           </div>
           <span className="text-xs font-mono text-[#98A2B3]">
@@ -528,7 +595,7 @@ export const SwapView: React.FC<SwapViewProps> = ({ user, onNavigateTab }) => {
             <Coins className="w-8 h-8 text-[#98A2B3] mx-auto opacity-40" />
             <div className="text-sm font-bold text-white">No Swap Records Yet</div>
             <p className="text-xs text-[#98A2B3] max-w-sm mx-auto">
-              You haven't converted any PHIVONEX coins yet. Use the engine above to swap earned mining rewards to internal USDT.
+              You haven't converted any assets yet. Use the engine above to swap coins or USDT.
             </p>
           </div>
         ) : (
@@ -536,43 +603,54 @@ export const SwapView: React.FC<SwapViewProps> = ({ user, onNavigateTab }) => {
             <table className="w-full text-left text-xs">
               <thead className="bg-[#05070B] text-[#98A2B3] font-mono uppercase text-[10px] border-b border-white/[0.06]">
                 <tr>
-                  <th className="py-3 px-4">Date & Time</th>
+                  <th className="py-3 px-4">Date &amp; Time</th>
                   <th className="py-3 px-4">Swap ID</th>
-                  <th className="py-3 px-4">Coins Debited</th>
+                  <th className="py-3 px-4">Type</th>
+                  <th className="py-3 px-4">Coin Amount</th>
                   <th className="py-3 px-4">Rate Applied</th>
-                  <th className="py-3 px-4">USDT Credited</th>
-                  <th className="py-3 px-4">Rate Version</th>
+                  <th className="py-3 px-4">USDT Amount</th>
                   <th className="py-3 px-4 text-right">Status</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/[0.04] font-mono">
-                {history.map((item) => (
-                  <tr key={item.id} className="hover:bg-white/[0.02] transition-colors">
-                    <td className="py-3 px-4 text-[#98A2B3]">
-                      {new Date(item.createdAt).toLocaleString()}
-                    </td>
-                    <td className="py-3 px-4 font-bold text-white">
-                      {item.publicSwapId}
-                    </td>
-                    <td className="py-3 px-4 text-[#00CFFF]">
-                      -{item.coinAmount.toFixed(4)} PHIVO
-                    </td>
-                    <td className="py-3 px-4 text-white">
-                      ${item.rateUsdt.toFixed(2)} / PHIVO
-                    </td>
-                    <td className="py-3 px-4 text-[#12B76A] font-bold">
-                      +${item.usdtAmount.toFixed(2)} USDT
-                    </td>
-                    <td className="py-3 px-4 text-[#98A2B3]">
-                      v{item.rateVersion}
-                    </td>
-                    <td className="py-3 px-4 text-right">
-                      <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-[#12B76A]/10 text-[#12B76A] border border-[#12B76A]/30">
-                        {item.status}
-                      </span>
-                    </td>
-                  </tr>
-                ))}
+                {history.map((item) => {
+                  const isBuy = item.direction === 'USDT_TO_COIN';
+                  return (
+                    <tr key={item.id} className="hover:bg-white/[0.02] transition-colors">
+                      <td className="py-3 px-4 text-[#98A2B3]">
+                        {new Date(item.createdAt).toLocaleString()}
+                      </td>
+                      <td className="py-3 px-4 font-bold text-white">
+                        {item.publicSwapId}
+                      </td>
+                      <td className="py-3 px-4">
+                        <span
+                          className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                            isBuy
+                              ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30'
+                              : 'bg-cyan-500/10 text-cyan-400 border border-cyan-500/30'
+                          }`}
+                        >
+                          {isBuy ? 'USDT → PHIVO' : 'PHIVO → USDT'}
+                        </span>
+                      </td>
+                      <td className="py-3 px-4 text-[#00CFFF]">
+                        {isBuy ? `+${Math.abs(item.coinAmount).toFixed(4)}` : `-${Math.abs(item.coinAmount).toFixed(4)}`} PHIVO
+                      </td>
+                      <td className="py-3 px-4 text-white">
+                        ${item.rateUsdt.toFixed(2)} / PHIVO
+                      </td>
+                      <td className={`py-3 px-4 font-bold ${isBuy ? 'text-[#F04438]' : 'text-[#12B76A]'}`}>
+                        {isBuy ? `-$${item.usdtAmount.toFixed(2)}` : `+$${item.usdtAmount.toFixed(2)}`} USDT
+                      </td>
+                      <td className="py-3 px-4 text-right">
+                        <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-[#12B76A]/10 text-[#12B76A] border border-[#12B76A]/30">
+                          {item.status}
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -588,32 +666,34 @@ export const SwapView: React.FC<SwapViewProps> = ({ user, onNavigateTab }) => {
                 <ArrowLeftRight className="w-5 h-5" />
               </div>
               <div>
-                <h3 className="text-lg font-bold text-white">Confirm Internal Coin Swap</h3>
+                <h3 className="text-lg font-bold text-white">
+                  Confirm {isCoinToUsdt ? 'PHIVO → USDT' : 'USDT → PHIVO'} Swap
+                </h3>
                 <p className="text-xs text-[#98A2B3]">Permanent ledger conversion operation</p>
               </div>
             </div>
 
             <div className="p-4 rounded-xl bg-[#05070B] border border-white/[0.08] space-y-3 text-xs font-mono">
               <div className="flex justify-between">
-                <span className="text-[#98A2B3]">Coin Amount to Debit:</span>
-                <span className="text-white font-bold">{parsedSwapAmount} PHIVO</span>
+                <span className="text-[#98A2B3]">You Pay:</span>
+                <span className="text-white font-bold">
+                  {isCoinToUsdt ? `${parsedInput} PHIVO` : `$${parsedInput.toFixed(2)} USDT`}
+                </span>
               </div>
               <div className="flex justify-between">
-                <span className="text-[#98A2B3]">Applied Conversion Rate:</span>
+                <span className="text-[#98A2B3]">Applied Rate:</span>
                 <span className="text-[#12B76A] font-bold">${activeRate.toFixed(2)} USDT / PHIVO</span>
               </div>
-              <div className="flex justify-between">
-                <span className="text-[#98A2B3]">Rate Version:</span>
-                <span className="text-white">v{quote?.rateVersion || 1}</span>
-              </div>
               <div className="pt-2 border-t border-white/[0.06] flex justify-between text-sm">
-                <span className="text-white font-bold">Total USDT Proceeds:</span>
-                <span className="text-[#12B76A] font-bold">${estimatedUsdt.toFixed(2)} USDT</span>
+                <span className="text-white font-bold">You Receive:</span>
+                <span className="text-[#12B76A] font-bold">
+                  {isCoinToUsdt ? `$${estimatedOutput.toFixed(2)} USDT` : `${estimatedOutput.toFixed(4)} PHIVO`}
+                </span>
               </div>
             </div>
 
             <p className="text-[11px] text-[#98A2B3] leading-relaxed">
-              Upon confirmation, your PHIVO coin balance will be debited and the resulting USDT funds will be immediately credited to your internal financial ledger balance.
+              Upon confirmation, your {isCoinToUsdt ? 'PHIVO coin' : 'USDT ledger'} balance will be debited and the resulting {isCoinToUsdt ? 'USDT funds' : 'PHIVO coins'} will be credited immediately to your account.
             </p>
 
             <div className="flex items-center gap-3 pt-2">
@@ -639,7 +719,7 @@ export const SwapView: React.FC<SwapViewProps> = ({ user, onNavigateTab }) => {
                 ) : (
                   <>
                     <Zap className="w-3.5 h-3.5 fill-current" />
-                    <span>Confirm & Convert</span>
+                    <span>Confirm &amp; Convert</span>
                   </>
                 )}
               </button>

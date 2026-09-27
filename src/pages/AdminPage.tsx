@@ -37,6 +37,7 @@ import {
   X,
   Zap,
   Power,
+  Gift,
 } from 'lucide-react';
 import { PhivonexLogo } from '../components/brand/PhivonexLogo';
 import { WithdrawalManagement } from '../components/admin/WithdrawalManagement';
@@ -45,6 +46,7 @@ import { FinancialReconciliationView } from '../components/admin/FinancialReconc
 import { AdminAuditLog } from '../components/admin/AdminAuditLog';
 import { TreasuryMovementChart } from '../components/admin/TreasuryMovementChart';
 import { CloudSqlDiagnosticCard } from '../components/admin/CloudSqlDiagnosticCard';
+import { OffersManagement } from '../components/admin/OffersManagement';
 import { AuditLogger, logAction, exportAuditLogsToCsv } from '../services/auditLogger';
 
 interface AdminPageProps {
@@ -57,6 +59,7 @@ export type AdminTab =
   | 'treasury'
   | 'reconciliation'
   | 'economics'
+  | 'offers'
   | 'users'
   | 'nodes'
   | 'orders'
@@ -87,6 +90,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onNavigate, currentPath = 
     if (clean.includes('/treasury')) return 'treasury';
     if (clean.includes('/reconciliation')) return 'reconciliation';
     if (clean.includes('/economics')) return 'economics';
+    if (clean.includes('/offers') || clean.includes('/promotions')) return 'offers';
     if (clean.includes('/users')) return 'users';
     if (clean.includes('/nodes')) return 'nodes';
     if (clean.includes('/orders')) return 'orders';
@@ -580,6 +584,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onNavigate, currentPath = 
     { id: 'treasury' as AdminTab, label: 'Treasury & Reserves', icon: Wallet },
     { id: 'reconciliation' as AdminTab, label: 'Financial Reconciliation', icon: ShieldCheck },
     { id: 'economics' as AdminTab, label: 'Economic Controls', icon: Sliders },
+    { id: 'offers' as AdminTab, label: 'Promotions & Offers', icon: Gift },
     { id: 'users' as AdminTab, label: 'Users', icon: Users },
     { id: 'nodes' as AdminTab, label: 'Nodes Inventory', icon: Server },
     { id: 'orders' as AdminTab, label: 'Node Orders', icon: ShoppingBag },
@@ -1266,6 +1271,24 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onNavigate, currentPath = 
 
           {/* TAB 2: ECONOMIC CONTROLS */}
           {activeTab === 'economics' && <EconomicControls />}
+
+          {/* TAB: PROMOTIONAL OFFERS & BOGO */}
+          {activeTab === 'offers' && (
+            <OffersManagement
+              adminEmail={user?.email}
+              onLogAction={(action, targetType, targetId, details) => {
+                logAction({
+                  adminUserId: user?.id || 'admin',
+                  adminEmail: user?.email || 'admin',
+                  adminPublicId: (user as any)?.publicId || 'ADMIN',
+                  action,
+                  targetType,
+                  targetId,
+                  details,
+                });
+              }}
+            />
+          )}
 
           {/* TAB 3: USERS (WITH SENSITIVE AUDITED ACTIONS) */}
           {activeTab === 'users' && (
