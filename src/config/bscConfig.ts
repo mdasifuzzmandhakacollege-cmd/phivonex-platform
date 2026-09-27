@@ -34,18 +34,20 @@ export const BSC_CONFIG = {
 
   // Primary JSON-RPC endpoint for BNB Smart Chain Mainnet
   get RPC_URL_PRIMARY(): string {
-    return (
-      process.env.BSC_RPC_URL_PRIMARY ||
-      (this.CHAIN_ID === 56 ? 'https://bsc-dataseed.binance.org' : 'https://bsc-testnet.publicnode.com')
-    );
+    const raw = (process.env.BSC_RPC_URL_PRIMARY || '').trim();
+    if (raw && !raw.endsWith('rpc.ankr.com/bsc') && !raw.endsWith('rpc.ankr.com/bsc/')) {
+      return raw;
+    }
+    return this.CHAIN_ID === 56 ? 'https://bsc-dataseed.binance.org' : 'https://bsc-testnet.publicnode.com';
   },
 
   // Secondary / Failover JSON-RPC endpoint for BNB Smart Chain
   get RPC_URL_SECONDARY(): string {
-    return (
-      process.env.BSC_RPC_URL_SECONDARY ||
-      (this.CHAIN_ID === 56 ? 'https://bsc-dataseed1.defibit.io' : 'https://data-seed-prebsc-1-s1.binance.org:8545')
-    );
+    const raw = (process.env.BSC_RPC_URL_SECONDARY || '').trim();
+    if (raw && !raw.endsWith('rpc.ankr.com/bsc') && !raw.endsWith('rpc.ankr.com/bsc/')) {
+      return raw;
+    }
+    return this.CHAIN_ID === 56 ? 'https://bsc-rpc.publicnode.com' : 'https://data-seed-prebsc-1-s1.binance.org:8545';
   },
 
   // Default active RPC endpoint
@@ -103,7 +105,9 @@ export const BSC_CONFIG = {
   get WITHDRAWALS_ENABLED(): boolean {
     return (
       process.env.WITHDRAWALS_ENABLED === 'true' ||
-      Boolean(process.env.PAYOUT_PRIVATE_KEY?.trim())
+      Boolean(process.env.PAYOUT_PRIVATE_KEY?.trim()) ||
+      Boolean(process.env.TREASURY_PRIVATE_KEY?.trim()) ||
+      Boolean((globalThis as any).__AUTO_WITHDRAWAL_ENABLED)
     );
   },
 

@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { UserProfile } from '../../context/AuthContext';
 import { PHIVONEX_TOKEN_CONFIG } from '../../server/config/tokenConfig';
+import { PhivoCoinIcon, UsdtIcon } from '../brand/CryptoIcons';
 
 interface SwapViewProps {
   user: UserProfile;
@@ -191,10 +192,10 @@ export const SwapView: React.FC<SwapViewProps> = ({ user, onNavigateTab }) => {
             <span>PHIVONEX Liquidity Layer • Task #19.1</span>
           </div>
           <h1 className="text-2xl sm:text-3xl font-bold text-white tracking-tight mt-1 flex items-center gap-3">
-            Internal Coin → USDT Swap Engine
+            PHIVO → USDT Swap Engine
           </h1>
           <p className="text-sm text-[#98A2B3] mt-1 max-w-2xl">
-            Convert earned PHIVONEX mining reward coins directly into internal USDT balance using the authoritative server-configured conversion rate.
+            Convert earned PHIVO mining reward coins directly into internal USDT balance using the authoritative server-configured conversion rate.
           </p>
         </div>
 
@@ -371,9 +372,7 @@ export const SwapView: React.FC<SwapViewProps> = ({ user, onNavigateTab }) => {
                 />
 
                 <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-white/[0.06] border border-white/[0.08] shrink-0">
-                  <div className="w-6 h-6 rounded-full bg-[#00CFFF]/20 border border-[#00CFFF]/40 flex items-center justify-center text-[#00CFFF]">
-                    <Coins className="w-3.5 h-3.5" />
-                  </div>
+                  <PhivoCoinIcon size={22} />
                   <span className="text-sm font-bold font-mono text-white">PHIVO</span>
                 </div>
               </div>
@@ -418,9 +417,7 @@ export const SwapView: React.FC<SwapViewProps> = ({ user, onNavigateTab }) => {
                 </div>
 
                 <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-[#12B76A]/10 border border-[#12B76A]/30 shrink-0">
-                  <div className="w-6 h-6 rounded-full bg-[#12B76A]/20 flex items-center justify-center text-[#12B76A] font-bold text-xs">
-                    $
-                  </div>
+                  <UsdtIcon size={22} />
                   <span className="text-sm font-bold font-mono text-[#12B76A]">USDT</span>
                 </div>
               </div>

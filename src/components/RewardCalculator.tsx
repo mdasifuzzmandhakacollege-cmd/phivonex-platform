@@ -60,8 +60,8 @@ export const RewardCalculator: React.FC<RewardCalculatorProps> = ({
   }, [networkScenario, activeNodes]);
 
   // Protocol mathematical constants
-  // Total Genesis Node daily reward emission pool: 177,957.36 PHIV / day
-  // (yielding 48.24 PHIV/day per node at current 3,689 active nodes, matching live telemetry)
+  // Total Genesis Node daily reward emission pool: 177,957.36 PHIVO / day
+  // (yielding 48.24 PHIVO/day per node at current 3,689 active nodes, matching live telemetry)
   const DAILY_TOTAL_POOL = 177957.36;
   const EPOCHS_PER_DAY = 144; // 10-minute epochs
 
@@ -195,7 +195,7 @@ Notice: Illustrative protocol calculation only. Dynamic rewards depend on epoch 
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-[11px] text-[#98A2B3] pt-1">
             <div>
               <span className="text-white block font-semibold">Daily Emission Pool:</span>
-              <span>177,957.36 PHIV fixed daily allocation</span>
+              <span>177,957.36 PHIVO fixed daily allocation</span>
             </div>
             <div>
               <span className="text-white block font-semibold">Active Node Weight:</span>
@@ -450,7 +450,7 @@ Notice: Illustrative protocol calculation only. Dynamic rewards depend on epoch 
               <div className="py-2">
                 <div className="text-3xl sm:text-4xl lg:text-5xl font-extrabold font-mono text-white tracking-tight tabular-nums text-balance">
                   {totalEstimatedReward.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                  <span className="text-xl sm:text-2xl text-[#00C8FF] ml-2 font-bold">PHIV</span>
+                  <span className="text-xl sm:text-2xl text-[#00C8FF] ml-2 font-bold">PHIVO</span>
                 </div>
                 <div className="text-xs font-mono text-[#98A2B3] mt-1">
                   Total projected emission for <strong className="text-white">{nodeCount} {nodeCount === 1 ? 'node' : 'nodes'}</strong> over <strong className="text-white">{durationDays} days</strong>
@@ -462,17 +462,17 @@ Notice: Illustrative protocol calculation only. Dynamic rewards depend on epoch 
                 <div className="p-3 rounded-lg bg-white/[0.02] border border-white/[0.05]">
                   <span className="text-[#98A2B3] block text-[10px] mb-0.5">DAILY RUN-RATE</span>
                   <span className="text-base font-bold text-[#00C8FF] tabular-nums">
-                    {dailyTotal.toFixed(2)} PHIV
+                    {dailyTotal.toFixed(2)} PHIVO
                   </span>
                   <span className="text-[10px] text-[#98A2B3] block mt-0.5">
-                    ~{(dailyTotal / 24).toFixed(2)} PHIV / hr
+                    ~{(dailyTotal / 24).toFixed(2)} PHIVO / hr
                   </span>
                 </div>
 
                 <div className="p-3 rounded-lg bg-white/[0.02] border border-white/[0.05]">
                   <span className="text-[#98A2B3] block text-[10px] mb-0.5">PER NODE DAILY</span>
                   <span className="text-base font-bold text-white tabular-nums">
-                    {dailyPerNode.toFixed(2)} PHIV
+                    {dailyPerNode.toFixed(2)} PHIVO
                   </span>
                   <span className="text-[10px] text-[#32D583] block mt-0.5">
                     At {uptimePercent}% uptime
@@ -617,7 +617,7 @@ Notice: Illustrative protocol calculation only. Dynamic rewards depend on epoch 
                           <span className="text-[#00C8FF]">
                             {Number(d.reward).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                           </span>
-                          <span className="text-xs text-white/70">PHIV</span>
+                          <span className="text-xs text-white/70">PHIVO</span>
                         </div>
                         <div className="mt-2 pt-2 border-t border-white/[0.08] space-y-1 text-[11px]">
                           <div className="flex items-center justify-between text-[#98A2B3]">
@@ -626,7 +626,7 @@ Notice: Illustrative protocol calculation only. Dynamic rewards depend on epoch 
                           </div>
                           <div className="flex items-center justify-between text-[#98A2B3]">
                             <span>Daily Emission Rate:</span>
-                            <span className="text-white font-semibold">{dailyTotal.toFixed(2)} PHIV/d</span>
+                            <span className="text-white font-semibold">{dailyTotal.toFixed(2)} PHIVO/d</span>
                           </div>
                         </div>
                       </div>

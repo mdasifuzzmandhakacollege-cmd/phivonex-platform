@@ -35,6 +35,8 @@ import {
   Download,
   Menu,
   X,
+  Zap,
+  Power,
 } from 'lucide-react';
 import { PhivonexLogo } from '../components/brand/PhivonexLogo';
 import { WithdrawalManagement } from '../components/admin/WithdrawalManagement';
@@ -122,6 +124,40 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onNavigate, currentPath = 
   // CSV Export State
   const [exportingCsv, setExportingCsv] = useState<boolean>(false);
 
+  // Auto-Withdrawal Mode State
+  const [autoWithdrawalEnabled, setAutoWithdrawalEnabled] = useState<boolean>(false);
+  const [togglingAutoWithdrawal, setTogglingAutoWithdrawal] = useState<boolean>(false);
+
+  const handleToggleAutoWithdrawal = async () => {
+    try {
+      setTogglingAutoWithdrawal(true);
+      const nextState = !autoWithdrawalEnabled;
+      const res = await fetch('/api/withdrawals/admin/mode', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: nextState }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setAutoWithdrawalEnabled(data.autoWithdrawalEnabled);
+        setAuditFeedback({
+          type: 'success',
+          message: data.message || `উইথড্রোল মোড সফলভাবে পরিবর্তিত হয়েছে: ${data.mode}`,
+        });
+        fetchAdminData();
+      } else {
+        throw new Error(data.message || 'Failed to toggle payout mode');
+      }
+    } catch (err: any) {
+      setAuditFeedback({
+        type: 'error',
+        message: err.message || 'Failed to toggle payout mode',
+      });
+    } finally {
+      setTogglingAutoWithdrawal(false);
+    }
+  };
+
   // Export system_audit_logs to CSV for compliance reporting
   const handleExportAuditLogs = async (categoryFilter?: string) => {
     try {
@@ -187,6 +223,17 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onNavigate, currentPath = 
       if (summaryRes.ok) {
         const sumData = await summaryRes.json();
         setSummary(sumData);
+      }
+
+      // Fetch Auto-Withdrawal Mode
+      try {
+        const modeRes = await fetch('/api/withdrawals/admin/mode');
+        if (modeRes.ok) {
+          const modeData = await modeRes.json();
+          setAutoWithdrawalEnabled(Boolean(modeData.autoWithdrawalEnabled));
+        }
+      } catch {
+        // non-blocking
       }
 
       // Fetch tab-specific data
@@ -835,6 +882,71 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onNavigate, currentPath = 
                   </div>
                   <div className="text-2xl font-extrabold text-white font-mono">${(summary?.completedWithdrawalsTotal || 0).toFixed(2)}</div>
                   <div className="text-[11px] text-[#32D583]">Settled Lifetime</div>
+                </div>
+              </div>
+
+              {/* Automated Blockchain Payout Engine & Mode Switch on Overview */}
+              <div className={`p-5 rounded-2xl border transition-all ${
+                autoWithdrawalEnabled 
+                  ? 'bg-gradient-to-r from-[#07101D] via-[#052e16]/40 to-[#07101D] border-emerald-500/40 shadow-emerald-500/10' 
+                  : 'bg-gradient-to-r from-[#07101D] via-[#2d1b00]/40 to-[#07101D] border-amber-500/40 shadow-amber-500/10'
+              } shadow-xl flex flex-col md:flex-row md:items-center justify-between gap-4`}>
+                <div className="flex items-center gap-3.5">
+                  <div className={`w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0 ${
+                    autoWithdrawalEnabled ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
+                  }`}>
+                    <Zap className={`w-6 h-6 ${autoWithdrawalEnabled ? 'fill-emerald-400' : ''}`} />
+                  </div>
+                  <div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h3 className="text-base font-bold text-white">Withdrawal Payout Control (উইথড্রোল মোড ব্যবস্থাপনা)</h3>
+                      <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold uppercase tracking-wider border ${
+                        autoWithdrawalEnabled
+                          ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+                          : 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+                      }`}>
+                        {autoWithdrawalEnabled ? '🟢 FULL AUTOMATIC (২৪/৭ অটোমেটিক চালু)' : '⏸️ MANUAL 1-CLICK APPROVAL (ম্যানুয়াল অনুমোদন)'}
+                      </span>
+                    </div>
+                    <p className="text-xs text-[#98A2B3] mt-1 max-w-2xl leading-relaxed">
+                      {autoWithdrawalEnabled ? (
+                        <span>
+                          <strong className="text-emerald-400">ফুল অটোমেটিক মোড চালু:</strong> পাবলিক উইথড্র দেওয়ার সাথে সাথে সিস্টেম স্বয়ংক্রিয়ভাবে ব্লকচেইনে কল করে ব্যালেন্স কেটে সরাসরি ইউজারের ওয়ালেটে মাল পৌছে দিবে (ঘুমিয়ে থাকলেও অটো টাকা চলে যাবে)।
+                        </span>
+                      ) : (
+                        <span>
+                          <strong className="text-amber-400">ম্যানুয়াল মোড চালু:</strong> পাবলিক উইথড্র দিলে রিকোয়েস্ট পেন্ডিং থাকবে। এডমিন প্যানেল থেকে ১-ক্লিকে "Approve" দিলেই সাথে সাথে অটো তার ওয়ালেটে মাল চলে যাবে।
+                        </span>
+                      )}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-3 shrink-0">
+                  <button
+                    onClick={() => setActiveTab('withdrawals')}
+                    className="px-3.5 py-2.5 rounded-xl bg-white/[0.05] hover:bg-white/[0.1] text-white/90 hover:text-white border border-white/[0.08] text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer whitespace-nowrap"
+                  >
+                    <span>উইথড্রোল কিউ দেখুন ({summary?.pendingWithdrawalsCount || 0})</span>
+                    <ArrowUpRight className="w-4 h-4 text-amber-400" />
+                  </button>
+
+                  <button
+                    onClick={handleToggleAutoWithdrawal}
+                    disabled={togglingAutoWithdrawal}
+                    className={`px-4 py-2.5 rounded-xl font-bold text-xs flex items-center gap-2 transition-all cursor-pointer shadow-lg active:scale-95 whitespace-nowrap ${
+                      autoWithdrawalEnabled
+                        ? 'bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40'
+                        : 'bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40'
+                    }`}
+                  >
+                    {togglingAutoWithdrawal ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <Power className="w-4 h-4" />
+                    )}
+                    <span>{autoWithdrawalEnabled ? 'সুইচ করুন: ম্যানুয়াল অনুমোদন' : 'সুইচ করুন: ফুল অটোমেটিক মোড'}</span>
+                  </button>
                 </div>
               </div>
 

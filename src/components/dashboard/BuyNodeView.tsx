@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 import { UserProfile } from '../../context/AuthContext';
 import { GENESIS_NODE_CAP, NODE_BASE_PRICE_USD, RESERVATION_EXPIRY_MINUTES } from '../../config/nodeConfig';
+import { UsdtIcon, BnbIcon, PhivoCoinIcon } from '../brand/CryptoIcons';
 
 interface BuyNodeViewProps {
   user: UserProfile;
@@ -704,8 +705,8 @@ export const BuyNodeView: React.FC<BuyNodeViewProps> = ({ user, onNavigateTab })
                 }`}
               >
                 <div className="flex items-center justify-between mb-2">
-                  <span className="text-xs font-bold text-white flex items-center gap-1.5">
-                    <span className="w-2.5 h-2.5 rounded-full bg-emerald-400" />
+                  <span className="text-xs font-bold text-white flex items-center gap-2">
+                    <UsdtIcon size={18} />
                     USDT Balance
                   </span>
                   <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold ${
@@ -736,8 +737,8 @@ export const BuyNodeView: React.FC<BuyNodeViewProps> = ({ user, onNavigateTab })
                 }`}
               >
                 <div className="flex items-center justify-between mb-2">
-                  <span className="text-xs font-bold text-white flex items-center gap-1.5">
-                    <span className="w-2.5 h-2.5 rounded-full bg-amber-400" />
+                  <span className="text-xs font-bold text-white flex items-center gap-2">
+                    <BnbIcon size={18} />
                     BNB Balance
                   </span>
                   <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold ${
@@ -852,7 +853,7 @@ export const BuyNodeView: React.FC<BuyNodeViewProps> = ({ user, onNavigateTab })
                 }`}
               >
                 <div className="flex items-center gap-2 mb-1">
-                  <Coins className="w-4 h-4 text-[#32D583]" />
+                  <UsdtIcon size={16} />
                   <span className="text-xs font-bold text-white">USDT Settlement</span>
                 </div>
                 <p className="text-[10px] text-[#98A2B3]">

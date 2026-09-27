@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 import { UserProfile } from '../../context/AuthContext';
+import { UsdtIcon, BnbIcon, PhivoCoinIcon } from '../brand/CryptoIcons';
 
 export type DepositAsset = 'BNB' | 'USDT';
 
@@ -346,30 +347,30 @@ export const DepositView: React.FC<DepositViewProps> = ({ user, onNavigateTab })
           <div className="inline-flex p-1.5 rounded-xl bg-black/40 border border-white/[0.08] shrink-0">
             <button
               onClick={() => handleAssetChange('BNB')}
-              className={`flex items-center gap-2 px-5 py-2.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+              className={`flex items-center gap-2.5 px-5 py-2.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
                 isBnbSelected
                   ? 'bg-gradient-to-r from-amber-500 to-amber-600 text-slate-950 shadow-md shadow-amber-500/25 scale-[1.02]'
                   : 'text-[#98A2B3] hover:text-white hover:bg-white/[0.04]'
               }`}
             >
-              <div className={`w-2 h-2 rounded-full ${isBnbSelected ? 'bg-slate-950' : 'bg-amber-400'}`} />
+              <BnbIcon size={18} />
               <span>BNB Deposit</span>
-              <span className={`px-1.5 py-0.5 rounded text-[10px] font-mono ${isBnbSelected ? 'bg-slate-950/20 text-slate-950' : 'bg-amber-500/20 text-amber-300'}`}>
+              <span className={`px-1.5 py-0.5 rounded text-[10px] font-mono ${isBnbSelected ? 'bg-slate-950/20 text-slate-950 font-bold' : 'bg-amber-500/20 text-amber-300'}`}>
                 Native BNB
               </span>
             </button>
 
             <button
               onClick={() => handleAssetChange('USDT')}
-              className={`flex items-center gap-2 px-5 py-2.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+              className={`flex items-center gap-2.5 px-5 py-2.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
                 !isBnbSelected
                   ? 'bg-gradient-to-r from-emerald-400 to-emerald-500 text-slate-950 shadow-md shadow-emerald-500/25 scale-[1.02]'
                   : 'text-[#98A2B3] hover:text-white hover:bg-white/[0.04]'
               }`}
             >
-              <div className={`w-2 h-2 rounded-full ${!isBnbSelected ? 'bg-slate-950' : 'bg-emerald-400'}`} />
+              <UsdtIcon size={18} />
               <span>USDT Deposit</span>
-              <span className={`px-1.5 py-0.5 rounded text-[10px] font-mono ${!isBnbSelected ? 'bg-slate-950/20 text-slate-950' : 'bg-emerald-500/20 text-emerald-300'}`}>
+              <span className={`px-1.5 py-0.5 rounded text-[10px] font-mono ${!isBnbSelected ? 'bg-slate-950/20 text-slate-950 font-bold' : 'bg-emerald-500/20 text-emerald-300'}`}>
                 BEP-20
               </span>
             </button>
@@ -395,13 +396,14 @@ export const DepositView: React.FC<DepositViewProps> = ({ user, onNavigateTab })
         {/* Left: Interactive Address Box */}
         <div className="lg:col-span-8 p-6 lg:p-8 rounded-2xl border border-white/[0.08] bg-[#07101D] space-y-6">
           <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <QrCode className={`w-5 h-5 ${isBnbSelected ? 'text-amber-400' : 'text-emerald-400'}`} />
+            <div className="flex items-center gap-2.5">
+              {isBnbSelected ? <BnbIcon size={24} /> : <UsdtIcon size={24} />}
               <h2 className="text-lg font-bold text-white">
                 Your Assigned {selectedAsset} Deposit Address
               </h2>
             </div>
-            <span className="text-xs font-mono text-[#F0B90B] bg-[#F0B90B]/10 px-2.5 py-1 rounded-md border border-[#F0B90B]/20 font-semibold">
+            <span className="text-xs font-mono text-[#F0B90B] bg-[#F0B90B]/10 px-2.5 py-1 rounded-md border border-[#F0B90B]/20 font-semibold flex items-center gap-1.5">
+              <BnbIcon size={14} />
               BNB Smart Chain (BEP-20)
             </span>
           </div>
@@ -680,9 +682,10 @@ export const DepositView: React.FC<DepositViewProps> = ({ user, onNavigateTab })
                       {dep.publicDepositId}
                     </td>
                     <td className="py-3.5 px-4 font-mono font-bold">
-                      <span className={`px-2 py-0.5 rounded text-[10px] ${
+                      <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[10px] ${
                         dep.asset === 'BNB' ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30' : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
                       }`}>
+                        {dep.asset === 'BNB' ? <BnbIcon size={12} /> : <UsdtIcon size={12} />}
                         {dep.asset || 'BNB'}
                       </span>
                     </td>

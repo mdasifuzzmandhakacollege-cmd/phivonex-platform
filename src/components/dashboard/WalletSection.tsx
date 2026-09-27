@@ -29,6 +29,7 @@ import {
   Calendar,
   DollarSign
 } from 'lucide-react';
+import { PhivoCoinIcon, UsdtIcon, BnbIcon } from '../brand/CryptoIcons';
 
 export interface WalletBreakdown {
   referral: number;
@@ -244,7 +245,7 @@ export const WalletSection: React.FC = () => {
       case 'PROMOTION_BONUS':
         return <Award className="w-4 h-4 text-[#F79009]" />;
       case 'NODE_REWARD':
-        return <Coins className="w-4 h-4 text-[#00CFFF]" />;
+        return <PhivoCoinIcon size={16} />;
       default:
         return <Coins className="w-4 h-4 text-[#98A2B3]" />;
     }
@@ -441,7 +442,7 @@ export const WalletSection: React.FC = () => {
           <div className="p-4 rounded-xl bg-[#0B1528] border border-white/[0.06] hover:border-[#00CFFF]/30 transition-all space-y-2">
             <div className="flex items-center justify-between">
               <span className="text-xs text-[#98A2B3] flex items-center gap-1.5">
-                <Coins className="w-3.5 h-3.5 text-[#00CFFF]" />
+                <PhivoCoinIcon size={16} />
                 <span>Node Mining</span>
               </span>
               <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-[#00CFFF]/10 text-[#00CFFF]">

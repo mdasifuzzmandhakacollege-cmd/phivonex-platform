@@ -44,7 +44,7 @@ export const CoinSupplySection: React.FC = () => {
           </div>
 
           <h2 className="text-sm sm:text-base font-mono uppercase tracking-widest text-[#98A2B3] mb-2">
-            PHIVONEX Coin
+            PHIVO Coin
           </h2>
 
           <div className="text-5xl sm:text-6xl md:text-7xl font-extrabold font-mono tracking-tight text-[#F7FAFC] tabular-nums select-all">

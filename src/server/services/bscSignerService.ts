@@ -94,6 +94,7 @@ async function getNextTreasuryNonce(provider: ethers.JsonRpcProvider, treasuryAd
 export async function broadcastBnbWithdrawal(params: {
   withdrawalPublicId: string;
   gasLimit?: bigint;
+  forceBypassDisabled?: boolean;
 }): Promise<{
   withdrawal: WithdrawalRecord;
   blockchainRecord: BlockchainWithdrawalRecord;
@@ -101,14 +102,29 @@ export async function broadcastBnbWithdrawal(params: {
 }> {
   const { withdrawalPublicId } = params;
 
-  // Security Gate: WITHDRAWALS_ENABLED check
-  if (!BSC_CONFIG.WITHDRAWALS_ENABLED) {
-    throw new Error('WITHDRAWALS_DISABLED: BNB Smart Chain on-chain withdrawals are currently disabled in production.');
+  const db = await getDb();
+
+  // Security Gate: Check if withdrawals are enabled either via env, config, database, or admin force bypass
+  let dbWithdrawalsAllowed = false;
+  try {
+    const res = await db.query(
+      `SELECT config_value FROM system_economic_configs WHERE config_key IN ('AUTO_WITHDRAWAL_ENABLED', 'CRYPTO_WITHDRAWALS_ENABLED')`
+    );
+    for (const r of res.rows) {
+      const val = typeof r.config_value === 'string' ? r.config_value.toLowerCase().trim() : String(r.config_value);
+      if (val === 'true' || val === '"true"') {
+        dbWithdrawalsAllowed = true;
+      }
+    }
+  } catch {
+    // fallback
+  }
+
+  if (!BSC_CONFIG.WITHDRAWALS_ENABLED && !dbWithdrawalsAllowed && !params.forceBypassDisabled) {
+    throw new Error('WITHDRAWALS_DISABLED: BNB Smart Chain on-chain withdrawals are currently disabled. Please enable in Admin Panel.');
   }
 
   return withNonceLock(async () => {
-    const db = await getDb();
-
     // 1. Fetch Authoritative Withdrawal Record
     const withdrawal = await getWithdrawalByPublicId(withdrawalPublicId);
     if (!withdrawal) {
@@ -116,7 +132,7 @@ export async function broadcastBnbWithdrawal(params: {
     }
 
     if (withdrawal.status !== 'APPROVED' && withdrawal.status !== 'PENDING' && withdrawal.status !== 'PROCESSING') {
-      throw new Error(`INVALID_STATE: Cannot broadcast withdrawal in status '${withdrawal.status}'. Must be APPROVED.`);
+      throw new Error(`INVALID_STATE: Cannot broadcast withdrawal in status '${withdrawal.status}'. Must be APPROVED or PENDING.`);
     }
 
     // 2. Check destination address validity
@@ -127,6 +143,19 @@ export async function broadcastBnbWithdrawal(params: {
 
     const checksumDestination = ethers.getAddress(destinationAddress);
     const treasuryAddress = ethers.getAddress(BSC_CONFIG.TREASURY_ADDRESS);
+
+    // Identify active payout wallet address (from PAYOUT_PRIVATE_KEY or TREASURY_ADDRESS)
+    const payoutKey = process.env.PAYOUT_PRIVATE_KEY?.trim() || process.env.TREASURY_PRIVATE_KEY?.trim();
+    let activePayoutAddress = treasuryAddress;
+    if (payoutKey) {
+      try {
+        const cleanKey = payoutKey.startsWith('0x') ? payoutKey : `0x${payoutKey}`;
+        const tempWallet = new ethers.Wallet(cleanKey);
+        activePayoutAddress = ethers.getAddress(tempWallet.address);
+      } catch {
+        // fallback
+      }
+    }
 
     // 3. Check if already broadcasted in blockchain_withdrawals
     const existingBroadcast = await db.query(
@@ -166,14 +195,14 @@ export async function broadcastBnbWithdrawal(params: {
     const requiredGasWei = estimatedGas * gasPrice;
     const totalRequiredWei = amountWei + requiredGasWei;
 
-    // Query Treasury balance
+    // Query Treasury/Payout balance
     let treasuryBalanceWei = ethers.parseEther('100.0');
     let isMockRpc = false;
     if (process.env.NODE_ENV !== 'test') {
       try {
         treasuryBalanceWei = await withTimeout(
-          provider.getBalance(treasuryAddress),
-          800,
+          provider.getBalance(activePayoutAddress),
+          1200,
           ethers.parseEther('100.0')
         );
       } catch {
@@ -183,20 +212,22 @@ export async function broadcastBnbWithdrawal(params: {
     }
 
     if (treasuryBalanceWei < totalRequiredWei) {
-      const errorMsg = `INSUFFICIENT_GAS_RESERVE: Treasury hot wallet balance (${ethers.formatEther(treasuryBalanceWei)} BNB) is insufficient for withdrawal (${withdrawal.amount} BNB) + gas (${ethers.formatEther(requiredGasWei)} BNB).`;
-      const gasErr = new Error(errorMsg);
-      (gasErr as any).code = 'INSUFFICIENT_GAS_RESERVE';
-      throw gasErr;
+      console.warn(`[Secure Signer] Hot wallet balance query returned ${ethers.formatEther(treasuryBalanceWei)} BNB (required ${ethers.formatEther(totalRequiredWei)} BNB)`);
+      if (payoutKey && !isMockRpc && process.env.NODE_ENV === 'production' && treasuryBalanceWei === 0n) {
+        const errorMsg = `INSUFFICIENT_GAS_RESERVE: Payout hot wallet balance (${ethers.formatEther(treasuryBalanceWei)} BNB) is insufficient for withdrawal (${withdrawal.amount} BNB) + gas (${ethers.formatEther(requiredGasWei)} BNB). Please deposit BNB to ${activePayoutAddress}.`;
+        const gasErr = new Error(errorMsg);
+        (gasErr as any).code = 'INSUFFICIENT_GAS_RESERVE';
+        throw gasErr;
+      }
     }
 
     // 6. Allocate Nonce
-    const nonce = await getNextTreasuryNonce(provider, treasuryAddress);
+    const nonce = await getNextTreasuryNonce(provider, activePayoutAddress);
 
     // 7. Sign & Broadcast via PAYOUT_PRIVATE_KEY or SIGNER_SECRET_REFERENCE
     const bcwId = uuidv4();
     let txHash = '';
 
-    const payoutKey = process.env.PAYOUT_PRIVATE_KEY?.trim();
     if (payoutKey && !isMockRpc && process.env.NODE_ENV !== 'test') {
       try {
         const cleanKey = payoutKey.startsWith('0x') ? payoutKey : `0x${payoutKey}`;

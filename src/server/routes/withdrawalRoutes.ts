@@ -10,12 +10,14 @@ import {
   settleWithdrawalAction,
 } from '../services/withdrawalService';
 import { broadcastBnbWithdrawal } from '../services/bscSignerService';
+import { getDb } from '../db/db';
 
 export const withdrawalRouter = Router();
 
 /**
  * POST /api/withdrawals
  * Create a new withdrawal request from eligible available balance.
+ * If AUTO_WITHDRAWAL_ENABLED is ON, instantly executes on-chain broadcast without admin delay.
  */
 withdrawalRouter.post('/', requireAuth, withdrawalLimiter, async (req: AuthRequest, res: Response) => {
   try {
@@ -49,7 +51,54 @@ withdrawalRouter.post('/', requireAuth, withdrawalLimiter, async (req: AuthReque
       idempotencyKey: idempotencyKey ? String(idempotencyKey) : undefined,
     });
 
-    return res.status(201).json(withdrawal);
+    // Check if Full Automatic Mode is enabled
+    try {
+      const db = await getDb();
+      const configRes = await db.query(
+        `SELECT config_value FROM system_economic_configs WHERE config_key = 'AUTO_WITHDRAWAL_ENABLED' LIMIT 1`
+      ).catch(() => ({ rows: [] }));
+
+      let autoEnabled = false;
+      if (configRes.rows.length > 0) {
+        const rawVal = configRes.rows[0].config_value;
+        try {
+          autoEnabled = typeof rawVal === 'string' ? JSON.parse(rawVal) === true : Boolean(rawVal);
+        } catch {
+          autoEnabled = String(rawVal).toLowerCase() === 'true';
+        }
+      }
+
+      if (autoEnabled) {
+        const targetPublicId = withdrawal.publicWithdrawalId || (withdrawal as any).publicId;
+        console.log(`[Auto-Withdrawal Engine] Mode is FULL AUTOMATIC. Broadcasting withdrawal ${targetPublicId} instantly to BSC...`);
+        try {
+          const broadcastResult = await broadcastBnbWithdrawal({
+            withdrawalPublicId: targetPublicId,
+            forceBypassDisabled: true,
+          });
+          console.log(`[Auto-Withdrawal Engine] Broadcast successful! TxHash: ${broadcastResult.txHash}`);
+          return res.status(201).json({
+            ...withdrawal,
+            publicId: targetPublicId,
+            publicWithdrawalId: targetPublicId,
+            status: 'COMPLETED',
+            txHash: broadcastResult.txHash,
+            autoDisbursed: true,
+            message: 'Withdrawal automatically processed and sent on-chain to your wallet on BNB Smart Chain.',
+          });
+        } catch (autoSendErr: any) {
+          console.error('[Auto-Withdrawal Engine] Auto-broadcast error, safely retained in PENDING for manual admin review:', autoSendErr);
+        }
+      }
+    } catch (checkErr) {
+      console.warn('[Auto-Withdrawal Engine] Could not read auto mode config:', checkErr);
+    }
+
+    return res.status(201).json({
+      ...withdrawal,
+      publicId: withdrawal.publicWithdrawalId,
+      publicWithdrawalId: withdrawal.publicWithdrawalId,
+    });
   } catch (err: any) {
     const message = err?.message || 'An error occurred while requesting withdrawal.';
 
@@ -224,6 +273,126 @@ withdrawalRouter.post('/admin/broadcast-bsc', requireAdmin, adminFinancialLimite
     }
     console.error('[Withdrawal API] BSC broadcast error:', err);
     return res.status(500).json({ error: 'BROADCAST_ERROR', message });
+  }
+});
+
+/**
+ * GET /api/withdrawals/admin/mode
+ * Check whether withdrawals are in FULL_AUTOMATIC or MANUAL_APPROVAL mode.
+ */
+withdrawalRouter.get('/admin/mode', requireAdmin, async (req: AuthRequest, res: Response) => {
+  try {
+    const db = await getDb();
+    const configRes = await db.query(
+      `SELECT config_value FROM system_economic_configs WHERE config_key = 'AUTO_WITHDRAWAL_ENABLED' LIMIT 1`
+    ).catch(() => ({ rows: [] }));
+
+    let autoEnabled = false;
+    if (configRes.rows.length > 0) {
+      const rawVal = configRes.rows[0].config_value;
+      try {
+        autoEnabled = typeof rawVal === 'string' ? JSON.parse(rawVal) === true : Boolean(rawVal);
+      } catch {
+        autoEnabled = String(rawVal).toLowerCase() === 'true';
+      }
+    }
+
+    return res.status(200).json({
+      success: true,
+      autoWithdrawalEnabled: autoEnabled,
+      mode: autoEnabled ? 'FULL_AUTOMATIC' : 'MANUAL_APPROVAL',
+    });
+  } catch (err: any) {
+    console.error('[Withdrawal API] Error fetching mode:', err);
+    return res.status(500).json({ error: 'SERVER_ERROR', message: 'Failed to retrieve mode' });
+  }
+});
+
+/**
+ * POST /api/withdrawals/admin/mode
+ * Toggle between FULL_AUTOMATIC (Instant Payout) and MANUAL_APPROVAL (1-Click Admin Approval).
+ */
+withdrawalRouter.post('/admin/mode', requireAdmin, async (req: AuthRequest, res: Response) => {
+  try {
+    const { enabled } = req.body;
+    const isAuto = Boolean(enabled);
+
+    const db = await getDb();
+    await db.query(`
+      UPDATE system_economic_configs 
+      SET config_value = $1, updated_at = CURRENT_TIMESTAMP, updated_by_admin_public_id = $2
+      WHERE config_key = 'AUTO_WITHDRAWAL_ENABLED'
+    `, [JSON.stringify(isAuto), (req.user as any)?.publicId || 'ADMIN']);
+
+    (globalThis as any).__AUTO_WITHDRAWAL_ENABLED = isAuto;
+
+    // Sync to Firestore for cloud persistence
+    try {
+      const { adminFirestore } = await import('../../lib/firebase-admin');
+      await adminFirestore.collection('system_settings').doc('withdrawals').set({
+        autoWithdrawalEnabled: isAuto,
+        mode: isAuto ? 'FULL_AUTOMATIC' : 'MANUAL_APPROVAL',
+        updatedAt: new Date().toISOString(),
+        updatedBy: (req.user as any)?.publicId || req.user?.email || 'ADMIN',
+      }, { merge: true });
+    } catch (fsErr) {
+      console.warn('[Withdrawal API] Firestore mode sync warning:', fsErr);
+    }
+
+    return res.status(200).json({
+      success: true,
+      autoWithdrawalEnabled: isAuto,
+      mode: isAuto ? 'FULL_AUTOMATIC' : 'MANUAL_APPROVAL',
+      message: isAuto
+        ? 'FULL AUTOMATIC MODE ACTIVE: Withdrawals will be broadcast to blockchain instantly upon user request 24/7.'
+        : 'MANUAL APPROVAL MODE ACTIVE: Withdrawals will require 1-click administrative review before broadcasting to blockchain.',
+    });
+  } catch (err: any) {
+    console.error('[Withdrawal API] Error updating mode:', err);
+    return res.status(500).json({ error: 'SERVER_ERROR', message: 'Failed to update withdrawal mode' });
+  }
+});
+
+/**
+ * POST /api/withdrawals/admin/instant-payout
+ * 1-Click Approve & Instant Blockchain Payout trigger from PAYOUT_PRIVATE_KEY.
+ */
+withdrawalRouter.post('/admin/instant-payout', requireAdmin, adminFinancialLimiter, async (req: AuthRequest, res: Response) => {
+  try {
+    const { publicId } = req.body;
+
+    if (!publicId) {
+      return res.status(400).json({
+        error: 'BAD_REQUEST',
+        message: 'Missing publicId parameter.',
+      });
+    }
+
+    // 1. Approve if PENDING
+    try {
+      await settleWithdrawalAction({
+        withdrawalIdOrPublicId: String(publicId),
+        action: 'APPROVE',
+      });
+    } catch {
+      // already approved or non-pending
+    }
+
+    // 2. Broadcast immediately on-chain via PAYOUT_PRIVATE_KEY
+    const result = await broadcastBnbWithdrawal({
+      withdrawalPublicId: String(publicId),
+      forceBypassDisabled: true,
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: `1-Click Instant Payout executed! Transferred funds on-chain to recipient wallet with TxHash: ${result.txHash}.`,
+      data: result,
+    });
+  } catch (err: any) {
+    const message = err?.message || 'Failed to execute 1-click instant payout.';
+    console.error('[Withdrawal API] 1-Click Instant payout error:', err);
+    return res.status(500).json({ error: 'INSTANT_PAYOUT_FAILED', message });
   }
 });
 

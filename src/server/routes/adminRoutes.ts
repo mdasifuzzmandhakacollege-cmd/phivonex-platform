@@ -312,6 +312,24 @@ adminRouter.post('/withdrawals/settle', async (req: AuthRequest, res: Response) 
       rejectionReason: rejectionReason ? String(rejectionReason) : undefined,
     });
 
+    let finalRecord = updated;
+    let payoutTxHash: string | null = null;
+
+    // As requested: When admin gives 1-click Approve, automatically disburse and broadcast on-chain
+    if (action.toUpperCase() === 'APPROVE') {
+      try {
+        const { broadcastBnbWithdrawal } = await import('../services/bscSignerService');
+        const broadcastRes = await broadcastBnbWithdrawal({
+          withdrawalPublicId: updated.publicWithdrawalId,
+          forceBypassDisabled: true,
+        });
+        finalRecord = broadcastRes.withdrawal;
+        payoutTxHash = broadcastRes.txHash;
+      } catch (broadcastErr: any) {
+        console.warn('[Admin Settle] Withdrawal approved but auto-broadcast encountered an issue:', broadcastErr);
+      }
+    }
+
     // Log admin financial audit trail
     await logAdminAction({
       adminUserId,
@@ -319,10 +337,11 @@ adminRouter.post('/withdrawals/settle', async (req: AuthRequest, res: Response) 
       action: `WITHDRAWAL_${action.toUpperCase()}`,
       targetType: 'WITHDRAWAL',
       targetId: updated.publicWithdrawalId,
-      details: `Admin ${adminPublicId} executed ${action.toUpperCase()} on withdrawal ${updated.publicWithdrawalId} ($${updated.amount.toFixed(2)} USD).`,
+      details: `Admin ${adminPublicId} executed ${action.toUpperCase()} on withdrawal ${updated.publicWithdrawalId} ($${updated.amount.toFixed(2)} USD).${payoutTxHash ? ` TxHash: ${payoutTxHash}` : ''}`,
       metadata: {
         amount: updated.amount,
-        status: updated.status,
+        status: finalRecord.status,
+        txHash: payoutTxHash,
         destinationType: updated.destinationType,
         destinationReference: updated.destinationReference,
         rejectionReason: updated.rejectionReason,
@@ -330,7 +349,10 @@ adminRouter.post('/withdrawals/settle', async (req: AuthRequest, res: Response) 
       ipAddress: (req.headers['x-forwarded-for'] as string) || req.ip,
     });
 
-    return res.status(200).json(updated);
+    return res.status(200).json({
+      ...finalRecord,
+      txHash: payoutTxHash,
+    });
   } catch (err: any) {
     const message = err?.message || 'Failed to process settlement action.';
     if (message.startsWith('NOT_FOUND')) {

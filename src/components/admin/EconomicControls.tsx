@@ -763,9 +763,9 @@ export const EconomicControls: React.FC = () => {
               <Coins className="w-4 h-4" />
             </div>
             <div>
-              <h2 className="text-sm font-bold text-white">PHIVONEX Internal Coin Valuation &amp; Swap Conversion Rate</h2>
+              <h2 className="text-sm font-bold text-white">PHIVO Coin Valuation &amp; Swap Conversion Rate</h2>
               <p className="text-xs text-[#98A2B3]">
-                Control the internal coin conversion rate against USDT (1 PHIVONEX Coin = X USDT) and manage swap authorization.
+                Control the internal coin conversion rate against USDT (1 PHIVO = X USDT) and manage swap authorization.
               </p>
             </div>
           </div>

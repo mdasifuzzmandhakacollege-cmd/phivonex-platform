@@ -4,7 +4,7 @@ import { Coins, Server, FileText, Wallet, Cpu, BarChart3, AppWindow, ArrowRight 
 export const EcosystemArchitecture: React.FC = () => {
   const subsystems = [
     {
-      title: 'PHIVONEX Coin',
+      title: 'PHIVO Coin',
       desc: '100M Maximum Capped Settlement Currency',
       icon: Coins,
       color: '#00C8FF',

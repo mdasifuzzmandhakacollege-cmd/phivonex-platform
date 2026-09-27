@@ -1454,13 +1454,13 @@ async function seedEconomicConfigs(client: DatabaseClient) {
       {
         key: 'INTERNAL_COIN_PRICE_USDT',
         value: JSON.stringify({
-          coinSymbol: 'PHX',
+          coinSymbol: 'PHIVO',
           priceUsdt: 0.10,
           effectiveFrom: new Date().toISOString(),
           swapEnabled: true,
         }),
         category: 'COIN_PRICE',
-        description: 'PHIVONEX internal coin conversion valuation rate against USDT',
+        description: 'PHIVONEX internal coin (PHIVO) conversion valuation rate against USDT',
       },
       {
         key: 'INTERNAL_COIN_SWAP_ENABLED',
@@ -1512,6 +1512,13 @@ async function seedEconomicConfigs(client: DatabaseClient) {
         [id, cfg.key, cfg.value, cfg.category, cfg.description]
       );
     }
+
+    // Ensure INTERNAL_COIN_PRICE_USDT always has coinSymbol: 'PHIVO'
+    await client.query(`
+      UPDATE system_economic_configs
+      SET config_value = REPLACE(config_value, '"PHX"', '"PHIVO"')
+      WHERE config_key = 'INTERNAL_COIN_PRICE_USDT' AND config_value LIKE '%PHX%';
+    `);
 
     console.log('[DB Migration] System Economic configuration parameters initialized.');
   } catch (err) {

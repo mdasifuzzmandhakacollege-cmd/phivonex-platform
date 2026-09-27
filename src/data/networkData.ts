@@ -92,8 +92,8 @@ export const INITIAL_LEDGER_EVENTS: LedgerEvent[] = [
     blockNumber: 42188910,
     timestamp: '14 min ago',
     status: 'finalized',
-    details: 'Protocol distributed 14,285 PHIVONEX across 3,689 verified active nodes.',
-    amount: '14,285 PHIV',
+    details: 'Protocol distributed 14,285 PHIVO across 3,689 verified active nodes.',
+    amount: '14,285 PHIVO',
   },
   {
     id: 'evt-10946',
@@ -115,7 +115,7 @@ export const INITIAL_LEDGER_EVENTS: LedgerEvent[] = [
     timestamp: '48 min ago',
     status: 'confirmed',
     details: 'Address 0x71a...94E claimed accumulated participation units.',
-    amount: '382.40 PHIV',
+    amount: '382.40 PHIVO',
   },
   {
     id: 'evt-10944',
@@ -147,7 +147,7 @@ export const FAQ_DATA = [
   },
   {
     q: 'What is the maximum Coin supply?',
-    a: 'The maximum total supply of PHIVONEX Coin is mathematically hardcoded at exactly 100,000,000 (100 Million) coins. The protocol rules and smart contract prevent any minting beyond this absolute ceiling under any circumstance.',
+    a: 'The maximum total supply of PHIVO Coin is mathematically hardcoded at exactly 100,000,000 (100 Million) PHIVO. The protocol rules and smart contract prevent any minting beyond this absolute ceiling under any circumstance.',
   },
   {
     q: 'How many Genesis Nodes are planned?',

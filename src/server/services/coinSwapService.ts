@@ -132,7 +132,7 @@ export async function getSwapQuote(coinAmount: number): Promise<SwapQuoteRespons
     usdtAmount,
     rateVersion,
     swapEnabled,
-    coinSymbol: val.coinSymbol || 'PHIVO',
+    coinSymbol: 'PHIVO',
     effectiveFrom,
   };
 }

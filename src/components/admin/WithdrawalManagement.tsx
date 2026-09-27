@@ -20,7 +20,9 @@ import {
   Activity,
   Layers,
   FileText,
-  AlertCircle
+  AlertCircle,
+  Zap,
+  Power
 } from 'lucide-react';
 import { recordAdminAuditToFirestore } from '../../services/firestoreAuditService';
 import { AuditLogger } from '../../services/auditLogger';
@@ -85,6 +87,82 @@ export const WithdrawalManagement: React.FC<WithdrawalManagementProps> = ({
   const [actionInProgress, setActionInProgress] = useState<boolean>(false);
   const [feedbackMessage, setFeedbackMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
+  // Automated Payout Switch State
+  const [autoWithdrawalEnabled, setAutoWithdrawalEnabled] = useState<boolean>(false);
+  const [togglingMode, setTogglingMode] = useState<boolean>(false);
+  const [instantPayoutLoadingId, setInstantPayoutLoadingId] = useState<string | null>(null);
+
+  // Fetch Auto-Withdrawal Mode
+  const fetchMode = useCallback(async () => {
+    try {
+      const res = await fetch('/api/withdrawals/admin/mode');
+      if (res.ok) {
+        const data = await res.json();
+        setAutoWithdrawalEnabled(Boolean(data.autoWithdrawalEnabled));
+      }
+    } catch (e) {
+      console.warn('[WithdrawalManagement] Failed to read auto mode:', e);
+    }
+  }, []);
+
+  const handleToggleMode = async () => {
+    try {
+      setTogglingMode(true);
+      const nextState = !autoWithdrawalEnabled;
+      const res = await fetch('/api/withdrawals/admin/mode', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: nextState }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setAutoWithdrawalEnabled(data.autoWithdrawalEnabled);
+        setFeedbackMessage({
+          type: 'success',
+          text: data.message,
+        });
+      } else {
+        throw new Error(data.message || 'Failed to toggle mode');
+      }
+    } catch (err: any) {
+      setFeedbackMessage({
+        type: 'error',
+        text: err.message || 'Failed to toggle payout mode',
+      });
+    } finally {
+      setTogglingMode(false);
+    }
+  };
+
+  const handleInstantPayout = async (publicId: string) => {
+    try {
+      setInstantPayoutLoadingId(publicId);
+      const res = await fetch('/api/withdrawals/admin/instant-payout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ publicId }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setFeedbackMessage({
+          type: 'success',
+          text: data.message || `Instant payout broadcasted successfully! TxHash: ${data.data?.txHash}`,
+        });
+        fetchWithdrawals();
+        if (onRefreshSummary) onRefreshSummary();
+      } else {
+        throw new Error(data.message || 'Failed to execute instant payout');
+      }
+    } catch (err: any) {
+      setFeedbackMessage({
+        type: 'error',
+        text: err.message || 'Instant payout execution failed',
+      });
+    } finally {
+      setInstantPayoutLoadingId(null);
+    }
+  };
+
   // Detail Modal / Drawer
   const [inspectItem, setInspectItem] = useState<AdminWithdrawalRecord | null>(null);
 
@@ -123,7 +201,8 @@ export const WithdrawalManagement: React.FC<WithdrawalManagementProps> = ({
 
   useEffect(() => {
     fetchWithdrawals();
-  }, [fetchWithdrawals]);
+    fetchMode();
+  }, [fetchWithdrawals, fetchMode]);
 
   // Handle action submission
   const handleExecuteStateTransition = async () => {
@@ -160,7 +239,9 @@ export const WithdrawalManagement: React.FC<WithdrawalManagementProps> = ({
 
       setFeedbackMessage({
         type: 'success',
-        text: `Successfully transitioned withdrawal ${item.publicWithdrawalId} to ${action}. Ledger updated accordingly.`,
+        text: data.txHash
+          ? `Successfully approved and broadcasted payout on-chain! TxHash: ${data.txHash}`
+          : `Successfully transitioned withdrawal ${item.publicWithdrawalId} to ${action}. Ledger updated accordingly.`,
       });
 
       // Record treasury/settlement movement to Cloud Firestore via AuditLogger
@@ -282,6 +363,63 @@ export const WithdrawalManagement: React.FC<WithdrawalManagementProps> = ({
 
   return (
     <div className="space-y-6">
+      {/* Automated Blockchain Payout Engine & Mode Switch */}
+      <div className={`p-5 rounded-2xl border transition-all ${
+        autoWithdrawalEnabled 
+          ? 'bg-gradient-to-r from-[#07101D] via-[#052e16]/30 to-[#07101D] border-emerald-500/40 shadow-emerald-500/10' 
+          : 'bg-gradient-to-r from-[#07101D] via-[#2d1b00]/30 to-[#07101D] border-amber-500/40 shadow-amber-500/10'
+      } shadow-xl flex flex-col md:flex-row md:items-center justify-between gap-4`}>
+        <div className="flex items-center gap-3.5">
+          <div className={`w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0 ${
+            autoWithdrawalEnabled ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
+          }`}>
+            <Zap className={`w-6 h-6 ${autoWithdrawalEnabled ? 'fill-emerald-400' : ''}`} />
+          </div>
+          <div>
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="text-base font-bold text-white">Automated Blockchain Payout Engine (উইথড্রোল কন্ট্রোল ইঞ্জিন)</h3>
+              <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold uppercase tracking-wider border ${
+                autoWithdrawalEnabled
+                  ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+                  : 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+              }`}>
+                {autoWithdrawalEnabled ? '🟢 FULL AUTOMATIC (২৪/৭ অটোমেটিক চালু)' : '⏸️ MANUAL APPROVAL MODE (ম্যানুয়াল অনুমোদন)'}
+              </span>
+            </div>
+            <p className="text-xs text-[#98A2B3] mt-1 max-w-2xl leading-relaxed">
+              {autoWithdrawalEnabled ? (
+                <span>
+                  <strong className="text-emerald-400">ফুল অটোমেটিক সক্রিয়:</strong> পাবলিক উইথড্র দেওয়ার সাথে সাথে ব্যাকএন্ড স্বয়ংক্রিয়ভাবে ব্লকচেইনে কল করে সরাসরি ইউজারের ওয়ালেটে মাল পাঠিয়ে দেবে (এডমিন ঘুমিয়ে থাকলেও অটো টাকা চলে যাবে)।
+                </span>
+              ) : (
+                <span>
+                  <strong className="text-amber-400">ম্যানুয়াল অনুমোদন সক্রিয়:</strong> পাবলিক উইথড্র দিলে রিকোয়েস্ট নিচে পেন্ডিং লিস্টে জমা হবে। এডমিন ১-ক্লিকে "Approve & Payout" দিলেই সাথে সাথে অটো তার ওয়ালেটে মাল চলে যাবে।
+                </span>
+              )}
+            </p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-3 shrink-0">
+          <button
+            onClick={handleToggleMode}
+            disabled={togglingMode}
+            className={`px-4 py-2.5 rounded-xl font-bold text-xs flex items-center gap-2 transition-all cursor-pointer shadow-lg active:scale-95 whitespace-nowrap ${
+              autoWithdrawalEnabled
+                ? 'bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40'
+                : 'bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40'
+            }`}
+          >
+            {togglingMode ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <Power className="w-4 h-4" />
+            )}
+            <span>{autoWithdrawalEnabled ? 'সুইচ করুন: ম্যানুয়াল অনুমোদন' : 'সুইচ করুন: ফুল অটোমেটিক মোড'}</span>
+          </button>
+        </div>
+      </div>
+
       {/* Top Metric Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <div className="p-5 rounded-2xl bg-[#07101D] border border-white/[0.08] relative overflow-hidden shadow-lg">
@@ -627,32 +765,24 @@ export const WithdrawalManagement: React.FC<WithdrawalManagementProps> = ({
                         {w.status === 'PENDING' && (
                           <>
                             <button
-                              onClick={() => setSelectedTarget({ item: w, action: 'APPROVE' })}
-                              className="px-2.5 py-1 rounded-lg bg-sky-500/10 hover:bg-sky-500/20 text-sky-400 border border-sky-500/30 text-[11px] font-bold transition-all shadow-sm active:scale-95"
-                              title="Approve withdrawal request"
+                              onClick={() => handleInstantPayout(w.publicWithdrawalId)}
+                              disabled={instantPayoutLoadingId === w.publicWithdrawalId}
+                              className="px-3.5 py-1.5 rounded-xl bg-gradient-to-r from-emerald-500/30 via-teal-500/30 to-emerald-500/30 hover:from-emerald-500/40 hover:to-teal-500/40 text-emerald-300 border border-emerald-500/50 text-[11px] font-extrabold transition-all shadow-md active:scale-95 flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+                              title="১-ক্লিকে এপ্রুভ ও ইউজারের ব্লকচেইন ওয়ালেটে মাল পৌছে দিন"
                             >
-                              Approve
-                            </button>
-                            <button
-                              onClick={() => setSelectedTarget({ item: w, action: 'MARK_PROCESSING' })}
-                              className="px-2.5 py-1 rounded-lg bg-purple-500/10 hover:bg-purple-500/20 text-purple-300 border border-purple-500/30 text-[11px] font-bold transition-all shadow-sm active:scale-95"
-                              title="Directly mark processing"
-                            >
-                              Mark Processing
+                              {instantPayoutLoadingId === w.publicWithdrawalId ? (
+                                <Loader2 className="w-3.5 h-3.5 animate-spin text-emerald-400" />
+                              ) : (
+                                <Zap className="w-3.5 h-3.5 text-amber-400 fill-amber-400" />
+                              )}
+                              <span>⚡ Approve &amp; Send (১-ক্লিক ট্রান্সফার)</span>
                             </button>
                             <button
                               onClick={() => setSelectedTarget({ item: w, action: 'REJECT' })}
-                              className="px-2 py-1 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/30 text-[11px] font-bold transition-all shadow-sm active:scale-95"
-                              title="Reject and release reserved funds"
+                              className="px-2.5 py-1.5 rounded-xl bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/30 text-[11px] font-bold transition-all shadow-sm active:scale-95"
+                              title="উইথড্রোল বাতিল করে ইউজারের ব্যালেন্সে ফেরত দিন"
                             >
-                              Reject
-                            </button>
-                            <button
-                              onClick={() => setSelectedTarget({ item: w, action: 'FAIL' })}
-                              className="px-2 py-1 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 text-[11px] font-bold transition-all shadow-sm active:scale-95"
-                              title="Fail and release reserved funds"
-                            >
-                              Fail
+                              Reject &amp; Refund
                             </button>
                           </>
                         )}
@@ -660,6 +790,19 @@ export const WithdrawalManagement: React.FC<WithdrawalManagementProps> = ({
                         {/* APPROVED State Transitions */}
                         {w.status === 'APPROVED' && (
                           <>
+                            <button
+                              onClick={() => handleInstantPayout(w.publicWithdrawalId)}
+                              disabled={instantPayoutLoadingId === w.publicWithdrawalId}
+                              className="px-3 py-1 rounded-lg bg-gradient-to-r from-amber-500/25 to-emerald-500/25 hover:from-amber-500/35 hover:to-emerald-500/35 text-emerald-300 border border-emerald-500/40 text-[11px] font-extrabold transition-all shadow-sm active:scale-95 flex items-center gap-1.5 cursor-pointer"
+                              title="Broadcast On-Chain Payout via PAYOUT_PRIVATE_KEY"
+                            >
+                              {instantPayoutLoadingId === w.publicWithdrawalId ? (
+                                <Loader2 className="w-3 h-3 animate-spin text-emerald-400" />
+                              ) : (
+                                <Zap className="w-3 h-3 text-amber-400 fill-amber-400" />
+                              )}
+                              <span>⚡ Broadcast Payout</span>
+                            </button>
                             <button
                               onClick={() => setSelectedTarget({ item: w, action: 'MARK_PROCESSING' })}
                               className="px-2.5 py-1 rounded-lg bg-purple-500/10 hover:bg-purple-500/20 text-purple-300 border border-purple-500/30 text-[11px] font-bold transition-all shadow-sm active:scale-95"

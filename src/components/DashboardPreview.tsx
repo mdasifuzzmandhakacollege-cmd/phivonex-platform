@@ -116,13 +116,13 @@ export const DashboardPreview: React.FC = () => {
 
                 <div className="p-4 rounded-xl bg-[#080B12] border border-white/[0.06]">
                   <span className="text-[11px] text-[#98A2B3] block mb-1">Accrued Rewards</span>
-                  <span className="text-xl font-bold font-mono text-[#00C8FF] tabular-nums">142.80 PHIV</span>
+                  <span className="text-xl font-bold font-mono text-[#00C8FF] tabular-nums">142.80 PHIVO</span>
                   <span className="text-[10px] text-[#98A2B3] block mt-0.5">Epoch #0284</span>
                 </div>
 
                 <div className="p-4 rounded-xl bg-[#080B12] border border-white/[0.06]">
                   <span className="text-[11px] text-[#98A2B3] block mb-1">Claimable Rewards</span>
-                  <span className="text-xl font-bold font-mono text-white tabular-nums">48.24 PHIV</span>
+                  <span className="text-xl font-bold font-mono text-white tabular-nums">48.24 PHIVO</span>
                   <span className="text-[10px] text-[#32D583] block mt-0.5">Settlement Ready</span>
                 </div>
 

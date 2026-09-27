@@ -4,7 +4,7 @@ import { Coins, Server, Award, FileText, Wallet, AppWindow, Cpu, ShieldCheck } f
 export const Introduction: React.FC = () => {
   const subsystems = [
     {
-      name: 'PHIVONEX Coin',
+      name: 'PHIVO Coin',
       desc: '100,000,000 capped native asset powering transaction settlement and network fuel.',
       icon: Coins,
       accent: '#00CFFF',

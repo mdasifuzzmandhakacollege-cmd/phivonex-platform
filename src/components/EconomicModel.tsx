@@ -4,7 +4,7 @@ import { Coins, Server, Award, Landmark, Database, ArrowRight } from 'lucide-rea
 export const EconomicModel: React.FC = () => {
   const modules = [
     {
-      title: 'PHIVONEX Coin',
+      title: 'PHIVO Coin',
       cap: '100,000,000 Cap',
       role: 'Unit of Account & Gas',
       desc: 'Used for transaction fees, state commitment staking, and ecosystem utility. Strict 100M cap prevents dilution.',

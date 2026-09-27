@@ -7,7 +7,7 @@ export const PrinciplesGrid: React.FC = () => {
       kicker: 'LIMITED',
       title: 'Defined Supply',
       description:
-        'A fixed ceiling of 100,000,000 PHIVONEX Coins and exactly 10,000 Genesis Nodes. Inflationary dilution is prevented by immutable protocol rules.',
+        'A fixed ceiling of 100,000,000 PHIVO Coins and exactly 10,000 Genesis Nodes. Inflationary dilution is prevented by immutable protocol rules.',
       specs: [
         'Strict 100,000,000 maximum coin ceiling',
         'Capped 10,000 Genesis Node registry',

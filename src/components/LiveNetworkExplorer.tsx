@@ -39,12 +39,12 @@ export const LiveNetworkExplorer: React.FC<LiveNetworkExplorerProps> = ({ onInsp
         case 'reward_epoch_completed':
           title = `Reward Epoch #${Math.floor(285 + Math.random() * 5)} Finalized`;
           details = 'Consensus quorum reached across active nodes.';
-          amount = '14,285 PHIV';
+          amount = '14,285 PHIVO';
           break;
         case 'reward_claim_confirmed':
           title = 'Validator Reward Settled';
           details = `Address 0x${Math.random().toString(16).substring(2, 6)}... claimed rewards.`;
-          amount = `${(Math.random() * 450 + 50).toFixed(2)} PHIV`;
+          amount = `${(Math.random() * 450 + 50).toFixed(2)} PHIVO`;
           break;
         case 'ledger_checkpoint':
           title = 'Cryptographic State Root Published';
