@@ -234,19 +234,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const code = err?.code || '';
       if (code === 'auth/unauthorized-domain') {
         throw new Error(
-          'This domain is not authorized for Google Sign-In. Please add your domain to Firebase Console > Authentication > Settings > Authorized domains.'
+          'Domain not authorized: In Firebase Console > Authentication > Settings > Authorized domains, domain names are case-sensitive. Please add "phivonex.com" and "www.phivonex.com" in all lowercase.'
         );
       }
       if (code === 'auth/internal-error' || code === 'auth/operation-not-allowed' || code === 'auth/configuration-not-found') {
         throw new Error(
-          'Google Sign-in is not active in Firebase Console. Please enable Google in Firebase Console > Authentication > Sign-in method and add this domain to Authorized domains.'
+          'Google Sign-in configuration notice: Please ensure "phivonex.com" is in Authorized domains (lowercase) and Google provider is active.'
         );
       }
       if (code === 'auth/popup-closed-by-user') {
-        throw new Error('Google Sign-In popup was closed. Please try again.');
+        throw new Error('Google Sign-In popup was closed before completing. Please try again.');
       }
       if (code === 'auth/popup-blocked') {
-        throw new Error('Google Sign-In popup was blocked by your browser. Please allow popups and try again.');
+        throw new Error('Google Sign-In popup was blocked by your browser. Please allow popups for phivonex.com and try again.');
       }
       throw new Error(err.message || 'Failed to authenticate with Google.');
     }

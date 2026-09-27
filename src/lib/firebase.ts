@@ -16,6 +16,9 @@ const app = getApps().length > 0 ? getApp() : initializeApp({
 // Initialize Auth
 export const auth = getAuth(app);
 export const googleAuthProvider = new GoogleAuthProvider();
+googleAuthProvider.setCustomParameters({
+  prompt: 'select_account'
+});
 
 // Initialize Firestore with specific database ID if configured
 const configAny = firebaseConfig as any;
