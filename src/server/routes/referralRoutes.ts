@@ -114,16 +114,17 @@ router.get('/me', requireAuth, async (req: AuthRequest, res: Response): Promise<
     }
 
     // Determine domain/host for referral link
-    let baseUrl = process.env.APP_URL;
-    if (!baseUrl || baseUrl.includes('MY_APP_URL')) {
-      const host = process.env.CUSTOM_DOMAIN || req.get('host') || 'phivonex.com';
-      const protocol = req.protocol === 'https' || req.get('x-forwarded-proto') === 'https' ? 'https' : 'http';
-      baseUrl = `${protocol}://${host}`;
-    }
+    // Default to the official custom domain phivonex.com
+    const host = (req.get('x-forwarded-host') || req.get('host') || '').toLowerCase();
+    let baseUrl = 'https://phivonex.com';
 
-    // Convert internal Google AI Studio dev cluster URL to public shared URL
-    if (baseUrl.includes('ais-dev-')) {
-      baseUrl = baseUrl.replace('ais-dev-', 'ais-pre-');
+    if (process.env.APP_URL && !process.env.APP_URL.includes('MY_APP_URL') && !process.env.APP_URL.includes('.run.app')) {
+      baseUrl = process.env.APP_URL;
+    } else if (host.includes('ais-pre-') || host.includes('ais-dev-')) {
+      const protocol = req.protocol === 'https' || req.get('x-forwarded-proto') === 'https' ? 'https' : 'http';
+      baseUrl = `${protocol}://${host}`.replace('ais-dev-', 'ais-pre-');
+    } else if (host.includes('phivonex.com')) {
+      baseUrl = 'https://phivonex.com';
     }
 
     const cleanBaseUrl = baseUrl.replace(/\/$/, '');
