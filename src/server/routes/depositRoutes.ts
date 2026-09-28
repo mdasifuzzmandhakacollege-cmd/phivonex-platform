@@ -9,7 +9,7 @@ import { bscRpcManager } from '../providers/bscRpcProvider';
 import { getDb } from '../db/db';
 import { ethers } from 'ethers';
 import { v4 as uuidv4 } from 'uuid';
-import { generateDepositPublicId } from '../utils/idGenerator';
+import { generateDepositPublicId, generateLedgerTransactionPublicId } from '../utils/idGenerator';
 import { postLedgerCredit } from '../services/walletLedgerService';
 import { notifyUsdtDepositConfirmed } from '../services/notificationService';
 
@@ -108,6 +108,18 @@ depositRouter.post('/rescan', requireAuth, depositLimiter, async (req: AuthReque
  * Automated test / development endpoint to simulate a blockchain deposit event.
  */
 depositRouter.post('/simulate-test-deposit', requireAuth, async (req: AuthRequest, res: Response): Promise<void> => {
+  const isProduction =
+    (process.env.APP_ENV || '').toLowerCase() === 'production' ||
+    (process.env.NODE_ENV || '').toLowerCase() === 'production';
+  if (isProduction) {
+    res.status(403).json({
+      success: false,
+      error: 'FORBIDDEN',
+      message: 'Deposit simulation endpoint is strictly forbidden and disabled in production environments.',
+    });
+    return;
+  }
+
   try {
     const userId = req.user!.id;
     const { amount, txHash, fromAddress, confirmations, blockNumber, currentBlockNumber, asset } = req.body;
@@ -396,96 +408,145 @@ depositRouter.post('/submit-txhash', requireAuth, depositLimiter, async (req: Au
       return;
     }
 
-    // 5. Record deposit in blockchain_deposits
-    const depositId = uuidv4();
-    const publicDepositId = generateDepositPublicId();
-    const now = new Date();
-
-    const insertRes = await db.query(
-      `
-      INSERT INTO blockchain_deposits (
-        id, public_deposit_id, user_id, chain_id, asset,
-        tx_hash, log_index, from_address, to_address, amount, block_number,
-        confirmations, status, detected_at, confirmed_at, credited_at, created_at, updated_at
-      )
-      VALUES ($1, $2, $3, $4, 'USDT', $5, $6, $7, $8, $9, $10, $11, 'CREDITED', $12, $12, $12, $12, $12)
-      ON CONFLICT (chain_id, tx_hash, log_index, to_address) DO UPDATE
-        SET status = 'CREDITED',
-            credited_at = COALESCE(blockchain_deposits.credited_at, EXCLUDED.credited_at),
-            updated_at = CURRENT_TIMESTAMP
-      RETURNING id, public_deposit_id
-      `,
-      [
-        depositId,
-        publicDepositId,
-        userId,
-        BSC_CONFIG.CHAIN_ID,
-        cleanTxHash,
-        realLogIndex,
-        fromAddress,
-        toAddress,
-        detectedAmount,
-        blockNumber,
-        confirmations,
-        now,
-      ]
-    );
-
-    const actualDepositId = insertRes.rows[0]?.id || depositId;
-    const actualPublicDepositId = insertRes.rows[0]?.public_deposit_id || publicDepositId;
-
-    // 6. Post financial ledger credit atomically
-    await postLedgerCredit({
-      userId,
-      sourceType: 'BLOCKCHAIN_DEPOSIT',
-      sourceId: actualDepositId,
-      sourceRef: actualPublicDepositId,
-      amount: detectedAmount,
-      description: `On-chain USDT BEP-20 deposit verified via TxHash ${cleanTxHash.slice(0, 10)}...`,
-      currency: 'USDT',
-    });
-
-    // 7. Sync to Firestore for cloud persistence
+    // 5. Atomic PostgreSQL Transaction: BEGIN / COMMIT / ROLLBACK for Deposit INSERT and Ledger CREDIT
+    await db.query('BEGIN');
     try {
-      const { adminFirestore } = await import('../../lib/firebase-admin');
-      await adminFirestore.collection('blockchain_deposits').doc(depositId).set({
-        id: depositId,
-        publicDepositId,
-        userId,
-        txHash: cleanTxHash,
-        amount: detectedAmount,
-        asset: 'USDT',
-        status: 'CREDITED',
-        createdAt: now.toISOString(),
-      }, { merge: true });
-    } catch (fsErr) {
-      console.warn('[Deposit API] Firestore deposit backup notice:', fsErr);
-    }
+      const depositId = uuidv4();
+      const publicDepositId = generateDepositPublicId();
+      const now = new Date();
 
-    // 8. Notify user
-    try {
-      await notifyUsdtDepositConfirmed({
-        userId,
-        amountUsdt: detectedAmount,
-        depositId,
-        txHash: cleanTxHash,
+      const insertRes = await db.query(
+        `
+        INSERT INTO blockchain_deposits (
+          id, public_deposit_id, user_id, chain_id, asset,
+          tx_hash, log_index, from_address, to_address, amount, block_number,
+          confirmations, status, detected_at, confirmed_at, credited_at, created_at, updated_at
+        )
+        VALUES ($1, $2, $3, $4, 'USDT', $5, $6, $7, $8, $9, $10, $11, 'CREDITED', $12, $12, $12, $12, $12)
+        ON CONFLICT (chain_id, tx_hash, log_index, to_address) DO NOTHING
+        RETURNING id, public_deposit_id, user_id
+        `,
+        [
+          depositId,
+          publicDepositId,
+          userId,
+          BSC_CONFIG.CHAIN_ID,
+          cleanTxHash,
+          realLogIndex,
+          fromAddress,
+          toAddress,
+          detectedAmount,
+          blockNumber,
+          confirmations,
+          now,
+        ]
+      );
+
+      if (insertRes.rows.length === 0) {
+        await db.query('ROLLBACK');
+        res.status(409).json({
+          success: false,
+          error: 'TX_ALREADY_USED',
+          message: 'This transaction hash and log index have already been submitted and credited.',
+        });
+        return;
+      }
+
+      const actualDepositId = insertRes.rows[0].id;
+      const actualPublicDepositId = insertRes.rows[0].public_deposit_id;
+      const actualUserId = insertRes.rows[0].user_id;
+
+      if (actualUserId !== userId) {
+        await db.query('ROLLBACK');
+        res.status(409).json({
+          success: false,
+          error: 'DUPLICATE_TX_USER_MISMATCH',
+          message: 'Transaction already linked to another user account.',
+        });
+        return;
+      }
+
+      const ledgerId = uuidv4();
+      const publicTxnId = generateLedgerTransactionPublicId();
+      const ledgerRes = await db.query(
+        `
+        INSERT INTO financial_ledger_entries (
+          id, public_txn_id, user_id, entry_type, source_type, source_id,
+          source_ref, description, amount, currency, status, created_at
+        )
+        VALUES ($1, $2, $3, 'CREDIT', 'BLOCKCHAIN_DEPOSIT', $4, $5, $6, $7, 'USDT', 'SETTLED', $8)
+        ON CONFLICT (source_type, source_id, entry_type) DO NOTHING
+        RETURNING id, user_id
+        `,
+        [
+          ledgerId,
+          publicTxnId,
+          actualUserId,
+          actualDepositId,
+          actualPublicDepositId,
+          `On-chain USDT BEP-20 deposit verified via TxHash ${cleanTxHash.slice(0, 10)}...`,
+          detectedAmount,
+          now,
+        ]
+      );
+
+      if (ledgerRes.rows.length === 0 || ledgerRes.rows[0].user_id !== actualUserId) {
+        await db.query('ROLLBACK');
+        res.status(409).json({
+          success: false,
+          error: 'LEDGER_CREDIT_FAILED',
+          message: 'Ledger credit failed or already exists. Rolled back deposit.',
+        });
+        return;
+      }
+
+      await db.query('COMMIT');
+
+      // 6. Sync to Firestore for cloud persistence (non-blocking)
+      try {
+        const { adminFirestore } = await import('../../lib/firebase-admin');
+        await adminFirestore.collection('blockchain_deposits').doc(actualDepositId).set({
+          id: actualDepositId,
+          publicDepositId: actualPublicDepositId,
+          userId,
+          txHash: cleanTxHash,
+          amount: detectedAmount,
+          asset: 'USDT',
+          status: 'CREDITED',
+          createdAt: now.toISOString(),
+        }, { merge: true });
+      } catch (fsErr) {
+        console.warn('[Deposit API] Firestore deposit backup notice:', fsErr);
+      }
+
+      // 7. Notify user (non-blocking)
+      try {
+        await notifyUsdtDepositConfirmed({
+          userId,
+          amountUsdt: detectedAmount,
+          depositId: actualDepositId,
+          txHash: cleanTxHash,
+        });
+      } catch {
+        // Non-critical notification failure
+      }
+
+      res.status(200).json({
+        success: true,
+        message: `Deposit verified successfully! Credited ${detectedAmount} USDT to your account.`,
+        data: {
+          publicDepositId: actualPublicDepositId,
+          amount: detectedAmount,
+          asset: 'USDT',
+          txHash: cleanTxHash,
+          confirmations,
+          logIndex: realLogIndex,
+        },
       });
-    } catch {
-      // Non-critical notification failure
+    } catch (txErr: any) {
+      await db.query('ROLLBACK').catch(() => {});
+      throw txErr;
     }
-
-    res.status(200).json({
-      success: true,
-      message: `Deposit verified successfully! Credited ${detectedAmount} USDT to your account.`,
-      data: {
-        publicDepositId,
-        amount: detectedAmount,
-        asset: 'USDT',
-        txHash: cleanTxHash,
-        confirmations,
-        logIndex: realLogIndex,
-      },
-    });
   } catch (err: any) {
     console.error('[Deposit API] Error processing submitted TxHash:', err);
     res.status(500).json({
