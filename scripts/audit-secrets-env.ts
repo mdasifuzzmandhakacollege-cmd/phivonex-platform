@@ -32,12 +32,19 @@ function auditSecretsAndEnv() {
   // 1. Environment Contract Validation Test (Fail Closed on missing required variables in production)
   console.log('--- 1. ENVIRONMENT CONTRACT VALIDATION ---');
   let testEnvPass = false;
+  const originalAppEnv = process.env.APP_ENV;
+  const originalNodeEnv = process.env.NODE_ENV;
   try {
     // In test environment, validateProductionConfig returns silently without throwing
+    process.env.APP_ENV = 'test';
+    process.env.NODE_ENV = 'test';
     validateProductionConfig();
     testEnvPass = true;
   } catch {
     testEnvPass = false;
+  } finally {
+    if (originalAppEnv !== undefined) process.env.APP_ENV = originalAppEnv; else delete process.env.APP_ENV;
+    if (originalNodeEnv !== undefined) process.env.NODE_ENV = originalNodeEnv; else delete process.env.NODE_ENV;
   }
   assert(testEnvPass, 'Env Validation: Test environment mode bypasses production-only blocking requirements');
 
