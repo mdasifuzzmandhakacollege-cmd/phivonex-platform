@@ -467,6 +467,18 @@ async function initSchema(client) {
         CONSTRAINT chk_node_order_amount CHECK (amount_usd > 0)
       );
 
+      CREATE TABLE IF NOT EXISTS node_owners (
+        id UUID PRIMARY KEY,
+        node_id UUID NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        acquired_via VARCHAR(64) NOT NULL DEFAULT 'PURCHASE',
+        acquired_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        is_current_owner BOOLEAN NOT NULL DEFAULT TRUE,
+        CONSTRAINT unique_node_user_owner UNIQUE (node_id, user_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_node_owners_node ON node_owners (node_id);
+      CREATE INDEX IF NOT EXISTS idx_node_owners_user ON node_owners (user_id);
+
       CREATE TABLE IF NOT EXISTS referral_commissions (
         id UUID PRIMARY KEY,
         public_commission_id VARCHAR(50) UNIQUE NOT NULL,
@@ -768,6 +780,7 @@ async function initSchema(client) {
 
       CREATE UNIQUE INDEX IF NOT EXISTS idx_node_orders_public_id ON node_orders (public_order_id);
       CREATE UNIQUE INDEX IF NOT EXISTS idx_node_orders_idempotency ON node_orders (idempotency_key) WHERE idempotency_key IS NOT NULL AND idempotency_key != '';
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_active_user_order ON node_orders (user_id) WHERE status = 'PENDING';
       CREATE INDEX IF NOT EXISTS idx_node_orders_user ON node_orders (user_id);
       CREATE INDEX IF NOT EXISTS idx_node_orders_status ON node_orders (status);
       CREATE INDEX IF NOT EXISTS idx_node_orders_node_id ON node_orders (node_id);
@@ -1732,244 +1745,6 @@ var init_db = __esm({
   "src/server/db/db.ts"() {
     init_idGenerator();
     init_nodeConfig();
-  }
-});
-
-// src/server/services/publicNetworkService.ts
-import { EventEmitter } from "events";
-async function getPublicNetworkSummary() {
-  const db = await getDb();
-  const nodeCountRes = await db.query(
-    `SELECT status, COUNT(*)::int AS count FROM nodes GROUP BY status`
-  );
-  let activeNodes = 0;
-  let reservedNodes = 0;
-  let availableNodes = 0;
-  let retiredNodes = 0;
-  for (const row of nodeCountRes.rows) {
-    const cnt = Number(row.count || 0);
-    if (row.status === "ACTIVE") activeNodes = cnt;
-    else if (row.status === "RESERVED") reservedNodes = cnt;
-    else if (row.status === "AVAILABLE") availableNodes = cnt;
-    else if (row.status === "RETIRED") retiredNodes = cnt;
-  }
-  const totalAllocated = activeNodes + reservedNodes + retiredNodes;
-  if (availableNodes === 0 && totalAllocated < GENESIS_NODE_CAP) {
-    availableNodes = Math.max(0, GENESIS_NODE_CAP - totalAllocated);
-  }
-  const allocatedNodes = activeNodes + reservedNodes;
-  const allocationPercent = Number((allocatedNodes / GENESIS_NODE_CAP * 100).toFixed(2));
-  const epochRes = await db.query(
-    `SELECT COALESCE(MAX(epoch_number), 1)::int AS max_epoch FROM reward_epochs`
-  );
-  const currentRewardEpoch = Number(epochRes.rows[0]?.max_epoch || 1);
-  const txnRes = await db.query(
-    `SELECT COUNT(*)::int AS count FROM financial_ledger_entries`
-  );
-  const totalNetworkTransactions = Number(txnRes.rows[0]?.count || 0);
-  let conversionRateUsd = 0.1;
-  try {
-    const configRes = await db.query(
-      `SELECT config_value FROM system_economic_configs WHERE config_key = 'INTERNAL_COIN_PRICE_USDT'`
-    );
-    if (configRes.rows.length > 0) {
-      const valStr = configRes.rows[0].config_value;
-      const val = typeof valStr === "string" ? JSON.parse(valStr) : valStr;
-      if (val && typeof val.priceUsdt === "number") {
-        conversionRateUsd = val.priceUsdt;
-      }
-    }
-  } catch (err) {
-    console.warn("[Public API] Error loading INTERNAL_COIN_PRICE_USDT config value for summary:", err);
-  }
-  return {
-    genesisNodeCap: GENESIS_NODE_CAP,
-    activeNodes,
-    reservedNodes,
-    availableNodes,
-    retiredNodes,
-    allocationPercent,
-    currentRewardEpoch,
-    totalNetworkTransactions,
-    networkStatus: "OPERATIONAL",
-    updatedAt: (/* @__PURE__ */ new Date()).toISOString(),
-    conversionRateUsd
-  };
-}
-async function getPublicNetworkEvents(limit = 20) {
-  const db = await getDb();
-  const events = [];
-  try {
-    const activeNodesRes = await db.query(
-      `SELECT public_node_id, activated_at 
-       FROM nodes 
-       WHERE status = 'ACTIVE' AND activated_at IS NOT NULL 
-       ORDER BY activated_at DESC 
-       LIMIT $1`,
-      [limit]
-    );
-    for (const row of activeNodesRes.rows) {
-      const ts = new Date(row.activated_at).toISOString();
-      events.push({
-        id: `evt-node-${row.public_node_id}`,
-        type: "node.activated",
-        title: `${row.public_node_id} Activated`,
-        description: `Genesis validator node ${row.public_node_id} successfully activated on-chain.`,
-        timestamp: ts,
-        publicId: row.public_node_id
-      });
-    }
-    const epochRes = await db.query(
-      `SELECT public_epoch_id, epoch_number, status, settled_at, created_at 
-       FROM reward_epochs 
-       ORDER BY created_at DESC 
-       LIMIT $1`,
-      [limit]
-    );
-    for (const row of epochRes.rows) {
-      const ts = new Date(row.settled_at || row.created_at).toISOString();
-      events.push({
-        id: `evt-epoch-${row.public_epoch_id}`,
-        type: "reward.epoch.completed",
-        title: `Reward Epoch #${row.epoch_number} ${row.status === "COMPLETED" ? "Completed" : "Initiated"}`,
-        description: `Mining reward epoch #${row.epoch_number} state verified on protocol ledger.`,
-        timestamp: ts,
-        publicId: row.public_epoch_id
-      });
-    }
-    const matchingRes = await db.query(
-      `SELECT public_settlement_id, business_date, settled_at 
-       FROM binary_matching_settlements 
-       WHERE status = 'COMPLETED' 
-       ORDER BY settled_at DESC 
-       LIMIT $1`,
-      [limit]
-    );
-    for (const row of matchingRes.rows) {
-      const ts = new Date(row.settled_at).toISOString();
-      const dateStr = typeof row.business_date === "string" ? row.business_date.split("T")[0] : new Date(row.business_date).toISOString().split("T")[0];
-      events.push({
-        id: `evt-match-${row.public_settlement_id}`,
-        type: "matching.completed",
-        title: `Matching Settlement Completed`,
-        description: `Binary team network consensus settlement finalized for date ${dateStr}.`,
-        timestamp: ts,
-        publicId: row.public_settlement_id
-      });
-    }
-    const promoRes = await db.query(
-      `SELECT public_bonus_id, milestone, qualified_at 
-       FROM promotion_bonuses 
-       WHERE status = 'EARNED' 
-       ORDER BY qualified_at DESC 
-       LIMIT $1`,
-      [limit]
-    );
-    for (const row of promoRes.rows) {
-      const ts = new Date(row.qualified_at).toISOString();
-      events.push({
-        id: `evt-promo-${row.public_bonus_id}`,
-        type: "promotion.earned",
-        title: `Promotion Milestone (${row.milestone}) Qualified`,
-        description: `Network operator volume qualification reached milestone Tier ${row.milestone}.`,
-        timestamp: ts,
-        publicId: row.public_bonus_id
-      });
-    }
-    const fleRes = await db.query(
-      `SELECT public_txn_id, source_type, created_at 
-       FROM financial_ledger_entries 
-       ORDER BY created_at DESC 
-       LIMIT $1`,
-      [limit]
-    );
-    for (const row of fleRes.rows) {
-      const ts = new Date(row.created_at).toISOString();
-      events.push({
-        id: `evt-fle-${row.public_txn_id}`,
-        type: "ledger.checkpoint",
-        title: `Ledger Checkpoint ${row.public_txn_id}`,
-        description: `Cryptographic financial ledger entry posted for channel ${row.source_type}.`,
-        timestamp: ts,
-        publicId: row.public_txn_id
-      });
-    }
-    events.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-    return events.slice(0, limit);
-  } catch (err) {
-    console.error("[PublicNetworkService] Error fetching public network events:", err);
-    return [];
-  }
-}
-function broadcastPublicEvent(event) {
-  publicNetworkEventEmitter.emit("networkEvent", event);
-}
-var publicNetworkEventEmitter;
-var init_publicNetworkService = __esm({
-  "src/server/services/publicNetworkService.ts"() {
-    init_db();
-    init_nodeConfig();
-    publicNetworkEventEmitter = new EventEmitter();
-    publicNetworkEventEmitter.setMaxListeners(100);
-  }
-});
-
-// src/server/services/systemConfigBroadcaster.ts
-var systemConfigBroadcaster_exports = {};
-__export(systemConfigBroadcaster_exports, {
-  broadcastSystemConfigChange: () => broadcastSystemConfigChange
-});
-async function broadcastSystemConfigChange(key, value, category = "SYSTEM") {
-  const timestamp = (/* @__PURE__ */ new Date()).toISOString();
-  const normalizedKey = key.toUpperCase();
-  try {
-    await adminFirestore.collection("system_settings").doc("configs").set(
-      {
-        [normalizedKey]: value,
-        updatedAt: timestamp,
-        lastUpdatedKey: normalizedKey
-      },
-      { merge: true }
-    );
-    if (normalizedKey.includes("WITHDRAWAL")) {
-      await adminFirestore.collection("system_settings").doc("withdrawals").set(
-        {
-          [normalizedKey]: value,
-          minWithdrawalAmount: normalizedKey === "MIN_WITHDRAWAL_AMOUNT" ? Number(value) : void 0,
-          autoWithdrawalEnabled: normalizedKey === "AUTO_WITHDRAWAL_ENABLED" ? Boolean(value) : void 0,
-          updatedAt: timestamp
-        },
-        { merge: true }
-      );
-    }
-    if (normalizedKey.includes("COIN") || normalizedKey.includes("PRICE") || normalizedKey.includes("NODE")) {
-      await adminFirestore.collection("system_settings").doc("economic").set(
-        {
-          [normalizedKey]: value,
-          updatedAt: timestamp
-        },
-        { merge: true }
-      );
-    }
-  } catch (fsErr) {
-    console.warn("[SystemConfigBroadcaster] Firestore real-time sync warning:", fsErr);
-  }
-  try {
-    publicNetworkEventEmitter.emit("networkEvent", {
-      type: "system_config",
-      key: normalizedKey,
-      value,
-      category,
-      updatedAt: timestamp
-    });
-  } catch (sseErr) {
-    console.warn("[SystemConfigBroadcaster] SSE broadcast warning:", sseErr);
-  }
-}
-var init_systemConfigBroadcaster = __esm({
-  "src/server/services/systemConfigBroadcaster.ts"() {
-    init_firebase_admin();
-    init_publicNetworkService();
   }
 });
 
@@ -3085,9 +2860,9 @@ __export(walletLedgerService_exports, {
 });
 import { v4 as uuidv46 } from "uuid";
 async function postLedgerCredit(params) {
-  const { userId, sourceType, sourceId, sourceRef, amount, description, currency, createdAt } = params;
+  const { userId, sourceType, sourceId, sourceRef, amount, description, currency, createdAt, dbClient } = params;
   if (!amount || amount <= 0) return null;
-  const db = await getDb();
+  const db = dbClient || await getDb();
   const id = uuidv46();
   const publicTxnId = generateLedgerTransactionPublicId();
   const effectiveTime = createdAt || /* @__PURE__ */ new Date();
@@ -3148,9 +2923,9 @@ async function postLedgerCredit(params) {
   return null;
 }
 async function postLedgerReversal(params) {
-  const { userId, sourceType, sourceId, sourceRef, amount, description, currency, createdAt } = params;
+  const { userId, sourceType, sourceId, sourceRef, amount, description, currency, createdAt, dbClient } = params;
   if (!amount || amount <= 0) return null;
-  const db = await getDb();
+  const db = dbClient || await getDb();
   const id = uuidv46();
   const publicTxnId = generateLedgerTransactionPublicId();
   const effectiveTime = createdAt || /* @__PURE__ */ new Date();
@@ -3211,9 +2986,9 @@ async function postLedgerReversal(params) {
   return null;
 }
 async function postLedgerDebit(params) {
-  const { userId, sourceType, sourceId, sourceRef, amount, description, currency, createdAt } = params;
+  const { userId, sourceType, sourceId, sourceRef, amount, description, currency, createdAt, dbClient } = params;
   if (!amount || amount <= 0) return null;
-  const db = await getDb();
+  const db = dbClient || await getDb();
   const id = uuidv46();
   const publicTxnId = generateLedgerTransactionPublicId();
   const effectiveTime = createdAt || /* @__PURE__ */ new Date();
@@ -3273,8 +3048,8 @@ async function postLedgerDebit(params) {
   }
   return null;
 }
-async function syncUserLedger(userId) {
-  const db = await getDb();
+async function syncUserLedger(userId, dbClient) {
+  const db = dbClient || await getDb();
   const commRes = await db.query(
     `
     SELECT id, public_commission_id, amount_usd, status, earned_at, reversed_at
@@ -3291,7 +3066,8 @@ async function syncUserLedger(userId) {
       sourceRef: c.public_commission_id,
       amount: Number(c.amount_usd),
       description: "Direct Referral Commission - Node Activation",
-      createdAt: new Date(c.earned_at)
+      createdAt: new Date(c.earned_at),
+      dbClient: db
     });
     if (c.status === "REVERSED") {
       await postLedgerReversal({
@@ -3301,7 +3077,8 @@ async function syncUserLedger(userId) {
         sourceRef: c.public_commission_id,
         amount: Number(c.amount_usd),
         description: "Direct Referral Commission Reversal",
-        createdAt: c.reversed_at ? new Date(c.reversed_at) : /* @__PURE__ */ new Date()
+        createdAt: c.reversed_at ? new Date(c.reversed_at) : /* @__PURE__ */ new Date(),
+        dbClient: db
       });
     }
   }
@@ -3322,7 +3099,8 @@ async function syncUserLedger(userId) {
       sourceRef: m.public_settlement_id,
       amount: Number(m.total_bonus_usd),
       description: `Daily Binary Matching Settlement (${bDate})`,
-      createdAt: new Date(m.settled_at)
+      createdAt: new Date(m.settled_at),
+      dbClient: db
     });
     if (m.status === "REVERSED") {
       await postLedgerReversal({
@@ -3332,7 +3110,8 @@ async function syncUserLedger(userId) {
         sourceRef: m.public_settlement_id,
         amount: Number(m.total_bonus_usd),
         description: `Daily Binary Matching Settlement Reversal (${bDate})`,
-        createdAt: /* @__PURE__ */ new Date()
+        createdAt: /* @__PURE__ */ new Date(),
+        dbClient: db
       });
     }
   }
@@ -3352,7 +3131,8 @@ async function syncUserLedger(userId) {
       sourceRef: p.public_bonus_id,
       amount: Number(p.amount_usd),
       description: `Promotion Milestone Bonus - ${p.milestone}`,
-      createdAt: new Date(p.qualified_at)
+      createdAt: new Date(p.qualified_at),
+      dbClient: db
     });
     if (p.status === "REVERSED") {
       await postLedgerReversal({
@@ -3362,39 +3142,8 @@ async function syncUserLedger(userId) {
         sourceRef: p.public_bonus_id,
         amount: Number(p.amount_usd),
         description: `Promotion Milestone Bonus Reversal - ${p.milestone}`,
-        createdAt: /* @__PURE__ */ new Date()
-      });
-    }
-  }
-  const rewardRes = await db.query(
-    `
-    SELECT id, public_reward_id, amount, currency, status, accrued_at, reversed_at
-    FROM node_rewards
-    WHERE owner_user_id = $1 AND (currency = 'USD' OR currency IS NULL)
-    `,
-    [userId]
-  );
-  for (const r of rewardRes.rows) {
-    await postLedgerCredit({
-      userId,
-      sourceType: "NODE_REWARD",
-      sourceId: r.id,
-      sourceRef: r.public_reward_id,
-      amount: Number(r.amount),
-      currency: "USD",
-      description: "Genesis Node Mining Reward Accrual",
-      createdAt: new Date(r.accrued_at)
-    });
-    if (r.status === "REVERSED") {
-      await postLedgerReversal({
-        userId,
-        sourceType: "NODE_REWARD",
-        sourceId: r.id,
-        sourceRef: r.public_reward_id,
-        amount: Number(r.amount),
-        currency: "USD",
-        description: "Genesis Node Mining Reward Reversal",
-        createdAt: r.reversed_at ? new Date(r.reversed_at) : /* @__PURE__ */ new Date()
+        createdAt: /* @__PURE__ */ new Date(),
+        dbClient: db
       });
     }
   }
@@ -3417,7 +3166,8 @@ async function syncUserLedger(userId) {
       amount: Number(d.amount),
       currency: assetName === "BNB" ? "BNB" : "USDT",
       description: `${assetName} Blockchain Deposit (${d.tx_hash ? d.tx_hash.slice(0, 10) : "Verified"})`,
-      createdAt: new Date(effectiveDate)
+      createdAt: new Date(effectiveDate),
+      dbClient: db
     });
   }
 }
@@ -4527,14 +4277,34 @@ async function logWithdrawalStateTransition(params) {
   }
 }
 function withUserLock2(userId, fn) {
-  const previousLock = userLocks2.get(userId) || Promise.resolve();
-  const res = previousLock.then(
-    () => fn(),
-    () => fn()
+  const currentLock = userLocks2.get(userId) || Promise.resolve();
+  let releaseLock;
+  const newLock = new Promise((resolve) => {
+    releaseLock = resolve;
+  });
+  userLocks2.set(userId, currentLock.then(() => newLock));
+  return currentLock.then(
+    async () => {
+      try {
+        return await fn();
+      } finally {
+        releaseLock();
+        if (userLocks2.get(userId) === newLock) {
+          userLocks2.delete(userId);
+        }
+      }
+    },
+    async () => {
+      try {
+        return await fn();
+      } finally {
+        releaseLock();
+        if (userLocks2.get(userId) === newLock) {
+          userLocks2.delete(userId);
+        }
+      }
+    }
   );
-  userLocks2.set(userId, res.catch(() => {
-  }));
-  return res;
 }
 async function getMinWithdrawalAmount() {
   try {
@@ -4571,116 +4341,150 @@ async function createWithdrawalRequest(params) {
     if (!destinationReference || !destinationReference.trim()) {
       throw new Error("INVALID_DESTINATION_REF: Destination address or reference details are required.");
     }
-    const db = await getDb();
-    const cleanIdempotencyKey = idempotencyKey ? idempotencyKey.trim() : null;
-    if (cleanIdempotencyKey) {
-      const existing = await db.query(
-        `SELECT * FROM withdrawals WHERE user_id = $1 AND idempotency_key = $2`,
-        [userId, cleanIdempotencyKey]
-      );
-      if (existing.rows.length > 0) {
-        return mapRowToWithdrawalRecord(existing.rows[0]);
+    const destRef = destinationReference.trim();
+    const destTypeUpper = destinationType.trim().toUpperCase();
+    if (destTypeUpper.includes("USDT") || destTypeUpper.includes("BEP20") || destTypeUpper.includes("BSC") || destTypeUpper.includes("TRC20")) {
+      if (destTypeUpper.includes("TRC20")) {
+        if (!destRef.startsWith("T") || destRef.length < 30) {
+          throw new Error(`INVALID_DESTINATION_ADDRESS: '${destRef}' is not a valid TRC-20 address.`);
+        }
+      } else {
+        if (!destRef.startsWith("0x") || destRef.length !== 42 || !/^0x[a-fA-F0-9]{40}$/.test(destRef)) {
+          throw new Error(`INVALID_DESTINATION_ADDRESS: '${destRef}' is not a valid BSC/BEP-20 (EVM) destination address.`);
+        }
       }
     }
-    const recentDuplicate = await db.query(
-      `
-      SELECT * FROM withdrawals
-      WHERE user_id = $1
-        AND amount = $2
-        AND destination_reference = $3
-        AND status = 'PENDING'
-        AND created_at > NOW() - INTERVAL '5 seconds'
-      `,
-      [userId, cleanAmount, destinationReference.trim()]
-    );
-    if (recentDuplicate.rows.length > 0) {
-      return mapRowToWithdrawalRecord(recentDuplicate.rows[0]);
-    }
-    const walletSummary = await getWalletSummary(userId);
-    if (cleanAmount > walletSummary.availableBalance) {
-      const err = new Error(
-        `INSUFFICIENT_BALANCE: Requested withdrawal amount ($${cleanAmount.toFixed(2)}) exceeds available eligible ledger balance ($${walletSummary.availableBalance.toFixed(2)}).`
+    const db = await getDb();
+    return db.transaction(async (trx) => {
+      await trx.query(`SELECT id FROM users WHERE id = $1 FOR UPDATE`, [userId]);
+      const cleanIdempotencyKey = idempotencyKey ? idempotencyKey.trim() : null;
+      if (cleanIdempotencyKey) {
+        const existing = await trx.query(
+          `SELECT * FROM withdrawals WHERE user_id = $1 AND idempotency_key = $2`,
+          [userId, cleanIdempotencyKey]
+        );
+        if (existing.rows.length > 0) {
+          return mapRowToWithdrawalRecord(existing.rows[0]);
+        }
+      }
+      const recentDuplicate = await trx.query(
+        `
+        SELECT * FROM withdrawals
+        WHERE user_id = $1
+          AND amount = $2
+          AND destination_reference = $3
+          AND status = 'PENDING'
+          AND created_at > NOW() - INTERVAL '5 seconds'
+        `,
+        [userId, cleanAmount, destinationReference.trim()]
       );
-      err.code = "INSUFFICIENT_BALANCE";
-      err.availableBalance = walletSummary.availableBalance;
-      throw err;
-    }
-    const id = uuidv419();
-    const publicWithdrawalId = generateWithdrawalPublicId();
-    const now = /* @__PURE__ */ new Date();
-    const insertRes = await db.query(
-      `
-      INSERT INTO withdrawals (
-        id, public_withdrawal_id, user_id, amount, currency,
-        destination_type, destination_reference, status,
-        requested_at, idempotency_key, created_at, updated_at
-      )
-      VALUES ($1, $2, $3, $4, 'USD', $5, $6, 'PENDING', $7, $8, $7, $7)
-      RETURNING *
-      `,
-      [
-        id,
-        publicWithdrawalId,
-        userId,
-        cleanAmount,
-        destinationType.trim(),
-        destinationReference.trim(),
-        now,
-        cleanIdempotencyKey
-      ]
-    );
-    const withdrawal = mapRowToWithdrawalRecord(insertRes.rows[0]);
-    await logWithdrawalStateTransition({
-      withdrawalId: withdrawal.id,
-      publicWithdrawalId: withdrawal.publicWithdrawalId,
-      userId: withdrawal.userId,
-      previousStatus: null,
-      newStatus: "PENDING",
-      actorType: "USER",
-      amount: withdrawal.amount,
-      destinationType: withdrawal.destinationType,
-      destinationReference: withdrawal.destinationReference,
-      reason: "Withdrawal request created by user"
-    });
-    await postLedgerDebit({
-      userId,
-      sourceType: "WITHDRAWAL",
-      sourceId: withdrawal.id,
-      sourceRef: withdrawal.publicWithdrawalId,
-      amount: cleanAmount,
-      description: `Withdrawal Request - ${withdrawal.destinationType} (${withdrawal.destinationReference.slice(0, 12)}...)`,
-      createdAt: now
-    });
-    try {
-      await notifyWithdrawalStatus({
-        userId,
-        amountUsdt: cleanAmount,
-        status: "PENDING",
-        withdrawalId: withdrawal.id
-      });
-    } catch (notifErr) {
-      console.warn("[Notification] Error triggering withdrawal pending notification:", notifErr);
-    }
-    try {
-      const userRes = await db.query(
-        `SELECT email, full_name, public_id FROM users WHERE id = $1`,
+      if (recentDuplicate.rows.length > 0) {
+        return mapRowToWithdrawalRecord(recentDuplicate.rows[0]);
+      }
+      await syncUserLedger(userId, trx);
+      const creditsRes = await trx.query(
+        `SELECT COALESCE(SUM(amount), 0) AS total FROM financial_ledger_entries WHERE user_id = $1 AND entry_type = 'CREDIT' AND status = 'SETTLED'`,
         [userId]
       );
-      if (userRes.rowCount > 0) {
-        const user = userRes.rows[0];
-        const { queueEventEmail: queueEventEmail2 } = await Promise.resolve().then(() => (init_emailService(), emailService_exports));
-        await queueEventEmail2(user.email, "WITHDRAWAL_STATUS", {
-          displayName: user.full_name,
-          publicId: user.public_id,
-          amount: String(cleanAmount),
+      const debitsRes = await trx.query(
+        `SELECT COALESCE(SUM(amount), 0) AS total FROM financial_ledger_entries WHERE user_id = $1 AND entry_type = 'DEBIT' AND status = 'SETTLED'`,
+        [userId]
+      );
+      const reversalsRes = await trx.query(
+        `SELECT COALESCE(SUM(amount), 0) AS total FROM financial_ledger_entries WHERE user_id = $1 AND entry_type = 'REVERSAL' AND status = 'SETTLED'`,
+        [userId]
+      );
+      const totalCredits = Number(creditsRes.rows[0]?.total || 0);
+      const totalDebits = Number(debitsRes.rows[0]?.total || 0);
+      const totalReversals = Number(reversalsRes.rows[0]?.total || 0);
+      const availableBalance = Math.max(0, totalCredits - totalDebits + totalReversals);
+      console.log(`[WithdrawalService] User ${userId} available balance: ${availableBalance}, requested: ${cleanAmount}`);
+      if (cleanAmount > availableBalance) {
+        const err = new Error(
+          `INSUFFICIENT_BALANCE: Requested withdrawal amount ($${cleanAmount.toFixed(2)}) exceeds available eligible ledger balance ($${availableBalance.toFixed(2)}).`
+        );
+        err.code = "INSUFFICIENT_BALANCE";
+        err.availableBalance = availableBalance;
+        throw err;
+      }
+      const id = uuidv419();
+      const publicWithdrawalId = generateWithdrawalPublicId();
+      const now = /* @__PURE__ */ new Date();
+      const insertRes = await trx.query(
+        `
+        INSERT INTO withdrawals (
+          id, public_withdrawal_id, user_id, amount, currency,
+          destination_type, destination_reference, status,
+          requested_at, idempotency_key, created_at, updated_at
+        )
+        VALUES ($1, $2, $3, $4, 'USD', $5, $6, 'PENDING', $7, $8, $7, $7)
+        RETURNING *
+        `,
+        [
+          id,
+          publicWithdrawalId,
+          userId,
+          cleanAmount,
+          destinationType.trim(),
+          destinationReference.trim(),
+          now,
+          cleanIdempotencyKey
+        ]
+      );
+      const withdrawal = mapRowToWithdrawalRecord(insertRes.rows[0]);
+      await logWithdrawalStateTransition({
+        withdrawalId: withdrawal.id,
+        publicWithdrawalId: withdrawal.publicWithdrawalId,
+        userId: withdrawal.userId,
+        previousStatus: null,
+        newStatus: "PENDING",
+        actorType: "USER",
+        amount: withdrawal.amount,
+        destinationType: withdrawal.destinationType,
+        destinationReference: withdrawal.destinationReference,
+        reason: "Withdrawal request created by user"
+      });
+      await postLedgerDebit({
+        userId,
+        sourceType: "WITHDRAWAL",
+        sourceId: withdrawal.id,
+        sourceRef: withdrawal.publicWithdrawalId,
+        amount: cleanAmount,
+        description: `Withdrawal Request - ${withdrawal.destinationType} (${withdrawal.destinationReference.slice(0, 12)}...)`,
+        createdAt: now,
+        dbClient: trx
+      });
+      try {
+        await notifyWithdrawalStatus({
+          userId,
+          amountUsdt: cleanAmount,
           status: "PENDING",
           withdrawalId: withdrawal.id
         });
+      } catch (notifErr) {
+        console.warn("[Notification] Error triggering withdrawal pending notification:", notifErr);
       }
-    } catch (emailErr) {
-      console.warn("[EmailEngine] Failed to send Withdrawal Pending email:", emailErr);
-    }
-    return withdrawal;
+      try {
+        const userRes = await trx.query(
+          `SELECT email, full_name, public_id FROM users WHERE id = $1`,
+          [userId]
+        );
+        if (userRes.rowCount > 0) {
+          const user = userRes.rows[0];
+          const { queueEventEmail: queueEventEmail2 } = await Promise.resolve().then(() => (init_emailService(), emailService_exports));
+          await queueEventEmail2(user.email, "WITHDRAWAL_STATUS", {
+            displayName: user.full_name,
+            publicId: user.public_id,
+            amount: String(cleanAmount),
+            status: "PENDING",
+            withdrawalId: withdrawal.id
+          });
+        }
+      } catch (emailErr) {
+        console.warn("[EmailEngine] Failed to send Withdrawal Pending email:", emailErr);
+      }
+      return withdrawal;
+    });
   });
 }
 async function getUserWithdrawals(userId, page = 1, limit = 20, statusFilter) {
@@ -4869,6 +4673,10 @@ async function settleWithdrawalAction(params) {
   if (normalizedAction === "COMPLETE") {
     if (withdrawal.status !== "APPROVED" && withdrawal.status !== "PROCESSING" && withdrawal.status !== "PENDING") {
       throw new Error(`INVALID_STATE: Cannot COMPLETE withdrawal in status ${withdrawal.status}. Must be PENDING, APPROVED, or PROCESSING.`);
+    }
+    const txHash = params.txHash?.trim();
+    if (!txHash || !/^0x[a-fA-F0-9]{64}$/.test(txHash)) {
+      throw new Error("INVALID_TX_HASH: A valid 66-character on-chain transaction hash (starting with 0x) is required to mark a withdrawal as COMPLETED.");
     }
     const res = await db.query(
       `
@@ -6156,318 +5964,6 @@ var adminFinancialLimiter = createRateLimiter({
   keyPrefix: "admin_fin"
 });
 
-// src/server/services/captchaService.ts
-init_db();
-import crypto3 from "crypto";
-var currentConfig = {
-  enabled: false,
-  mode: "HYBRID",
-  siteKey: "6Ld5jNItAAAAAPas1Dlc5_iyihVbkxOEKQNqAsFn",
-  projectId: "phivonex-production",
-  thresholdScore: 0.5,
-  enforcedActions: {
-    login: false,
-    register: false,
-    forgotPassword: false,
-    withdrawal: false,
-    swap: false,
-    buyNode: false
-  }
-};
-var SECRET_SALT = process.env.CAPTCHA_SECRET_KEY || "phivonex-enterprise-captcha-secure-salt-2026";
-var challengeNonces = /* @__PURE__ */ new Set();
-async function initializeCaptchaConfig() {
-  try {
-    const { adminFirestore: adminFirestore2 } = await Promise.resolve().then(() => (init_firebase_admin(), firebase_admin_exports));
-    const doc = await adminFirestore2.collection("system_security_settings").doc("captcha_config").get();
-    if (doc.exists) {
-      const data = doc.data();
-      currentConfig = {
-        ...currentConfig,
-        ...data,
-        enforcedActions: {
-          ...currentConfig.enforcedActions,
-          ...data.enforcedActions || {}
-        }
-      };
-      console.log("[CaptchaService] Loaded configuration from Firestore.");
-    }
-  } catch (err) {
-    console.log("[CaptchaService] Using default configuration (Firestore sync deferred).");
-  }
-}
-function getCaptchaConfig() {
-  return { ...currentConfig };
-}
-async function updateCaptchaConfig(newConfig) {
-  currentConfig = {
-    ...currentConfig,
-    ...newConfig,
-    enforcedActions: {
-      ...currentConfig.enforcedActions,
-      ...newConfig.enforcedActions || {}
-    }
-  };
-  try {
-    const { broadcastSystemConfigChange: broadcastSystemConfigChange2 } = await Promise.resolve().then(() => (init_systemConfigBroadcaster(), systemConfigBroadcaster_exports));
-    await broadcastSystemConfigChange2("CAPTCHA_CONFIG", currentConfig, "SECURITY");
-  } catch (err) {
-    console.warn("[CaptchaService] Failed to broadcast captcha config:", err);
-  }
-  return { ...currentConfig };
-}
-function generateChallenge(action = "GENERAL", clientIp = "127.0.0.1") {
-  const challengeId = crypto3.randomBytes(8).toString("hex");
-  const num1 = Math.floor(Math.random() * 8) + 1;
-  const num2 = Math.floor(Math.random() * 8) + 1;
-  const answer = num1 + num2;
-  const expiresAt = Date.now() + 10 * 60 * 1e3;
-  const chars = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
-  let visualCode = "";
-  for (let i = 0; i < 4; i++) {
-    visualCode += chars[Math.floor(Math.random() * chars.length)];
-  }
-  const payload = `${challengeId}:${action}:${clientIp}:${answer}:${visualCode}:${expiresAt}`;
-  const signature = crypto3.createHmac("sha256", SECRET_SALT).update(payload).digest("hex");
-  const token = Buffer.from(
-    JSON.stringify({ challengeId, action, clientIp, visualCode, answer, expiresAt, signature })
-  ).toString("base64");
-  return {
-    token,
-    challengeId,
-    question: `Solve security check: ${num1} + ${num2}`,
-    visualCode,
-    expiresAt
-  };
-}
-async function verifyCaptcha(token, action, clientIp, additionalData) {
-  const startTime = Date.now();
-  let result = {
-    success: false,
-    isBot: true,
-    challengeType: "CRYPTOGRAPHIC_SHIELD",
-    verifiedAt: (/* @__PURE__ */ new Date()).toISOString()
-  };
-  const actionKey = action.toLowerCase();
-  if (!currentConfig.enabled || actionKey in currentConfig.enforcedActions && !currentConfig.enforcedActions[actionKey]) {
-    result = {
-      success: true,
-      score: 1,
-      action,
-      isBot: false,
-      challengeType: "CRYPTOGRAPHIC_SHIELD",
-      verifiedAt: (/* @__PURE__ */ new Date()).toISOString()
-    };
-    await recordAuditLog(action, clientIp, "PASSED", 1, "BYPASS_DISABLED", Date.now() - startTime, additionalData?.userId);
-    return result;
-  }
-  if (!token || typeof token !== "string") {
-    result.reasons = ["NO_TOKEN_PROVIDED"];
-    await recordAuditLog(action, clientIp, "INVALID", 0, "NO_TOKEN_PROVIDED", Date.now() - startTime, additionalData?.userId);
-    return result;
-  }
-  if (token.startsWith("PHX_CAPTCHA_VERIFIED_") || token.startsWith("ENTERPRISE_PASS_") || token.startsWith("CAPTCHA_BYPASS_")) {
-    result = {
-      success: true,
-      score: 1,
-      action,
-      isBot: false,
-      challengeType: "CRYPTOGRAPHIC_SHIELD",
-      verifiedAt: (/* @__PURE__ */ new Date()).toISOString()
-    };
-    await recordAuditLog(action, clientIp, "PASSED", 1, "CRYPTOGRAPHIC_SHIELD", Date.now() - startTime, additionalData?.userId);
-    return result;
-  }
-  try {
-    const parsed = JSON.parse(Buffer.from(token, "base64").toString("utf-8"));
-    if (parsed && parsed.challengeId && parsed.signature && parsed.expiresAt) {
-      if (Date.now() > parsed.expiresAt) {
-        result.reasons = ["CHALLENGE_EXPIRED"];
-        await recordAuditLog(action, clientIp, "EXPIRED", 0, "CHALLENGE_EXPIRED", Date.now() - startTime, additionalData?.userId);
-        return result;
-      }
-      const providedAns = additionalData?.answer;
-      const providedVisual = (additionalData?.visualCode || "").toUpperCase().trim();
-      const expVisual = (parsed.visualCode || "").toUpperCase().trim();
-      const expAns = parsed.answer;
-      let matched = false;
-      if (providedVisual && expVisual && providedVisual === expVisual) {
-        matched = true;
-      }
-      if (!matched && providedAns !== void 0 && providedAns !== "" && expAns !== void 0) {
-        if (Number(providedAns) === Number(expAns)) {
-          matched = true;
-        }
-      }
-      if (!matched) {
-        for (let cand = 0; cand <= 20; cand++) {
-          const payload = `${parsed.challengeId}:${parsed.action}:${parsed.clientIp}:${cand}:${providedVisual}:${parsed.expiresAt}`;
-          const testSig = crypto3.createHmac("sha256", SECRET_SALT).update(payload).digest("hex");
-          if (testSig === parsed.signature) {
-            matched = true;
-            break;
-          }
-        }
-      }
-      if (!matched && !providedAns && !providedVisual) {
-        matched = true;
-      }
-      if (matched) {
-        challengeNonces.add(parsed.challengeId);
-        if (challengeNonces.size > 1e4) {
-          challengeNonces.clear();
-        }
-        result = {
-          success: true,
-          score: 0.98,
-          action: parsed.action,
-          isBot: false,
-          challengeType: "CRYPTOGRAPHIC_SHIELD",
-          verifiedAt: (/* @__PURE__ */ new Date()).toISOString()
-        };
-        await recordAuditLog(action, clientIp, "PASSED", 0.98, "CRYPTOGRAPHIC_SHIELD", Date.now() - startTime, additionalData?.userId);
-        return result;
-      }
-    }
-  } catch (parseErr) {
-  }
-  try {
-    const apiKey = process.env.RECAPTCHA_API_KEY || process.env.GOOGLE_API_KEY;
-    if (apiKey) {
-      const assessmentUrl = `https://recaptchaenterprise.googleapis.com/v1/projects/${currentConfig.projectId}/assessments?key=${apiKey}`;
-      const assessmentRes = await fetch(assessmentUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          event: {
-            token,
-            expectedAction: action,
-            siteKey: currentConfig.siteKey
-          }
-        })
-      });
-      if (assessmentRes.ok) {
-        const assessmentData = await assessmentRes.json();
-        const score = assessmentData.riskAnalysis?.score ?? 0.9;
-        const validToken = assessmentData.tokenProperties?.valid ?? true;
-        const isBot = !validToken || score < currentConfig.thresholdScore;
-        result = {
-          success: !isBot,
-          score,
-          action: assessmentData.tokenProperties?.action || action,
-          isBot,
-          challengeType: "GOOGLE_ENTERPRISE",
-          verifiedAt: (/* @__PURE__ */ new Date()).toISOString()
-        };
-        const status = isBot ? "BLOCKED" : "PASSED";
-        await recordAuditLog(action, clientIp, status, score, "GOOGLE_ENTERPRISE", Date.now() - startTime, additionalData?.userId);
-        return result;
-      }
-    }
-    const googleSecret = process.env.RECAPTCHA_SECRET_KEY || "6Ld5EnterpriseSecretPlaceholder";
-    const params = new URLSearchParams({
-      secret: googleSecret,
-      response: token,
-      remoteip: clientIp
-    });
-    const googleRes = await fetch(`https://www.google.com/recaptcha/api/siteverify?${params.toString()}`, {
-      method: "POST"
-    });
-    if (googleRes.ok) {
-      const googleData = await googleRes.json();
-      if (googleData.success) {
-        const score = typeof googleData.score === "number" ? googleData.score : 0.9;
-        const isBot = score < currentConfig.thresholdScore;
-        result = {
-          success: !isBot,
-          score,
-          action: googleData.action || action,
-          hostname: googleData.hostname,
-          isBot,
-          challengeType: "GOOGLE_ENTERPRISE",
-          verifiedAt: (/* @__PURE__ */ new Date()).toISOString()
-        };
-        const status = isBot ? "BLOCKED" : "PASSED";
-        await recordAuditLog(action, clientIp, status, score, "GOOGLE_ENTERPRISE", Date.now() - startTime, additionalData?.userId);
-        return result;
-      }
-    }
-  } catch (gErr) {
-    console.warn("[CaptchaService] Google reCAPTCHA endpoint check error:", gErr);
-  }
-  if (token.startsWith("PHX_CAPTCHA_VERIFIED_") || token.startsWith("ENTERPRISE_PASS_")) {
-    result = {
-      success: true,
-      score: 0.9,
-      action,
-      isBot: false,
-      challengeType: "CRYPTOGRAPHIC_SHIELD",
-      verifiedAt: (/* @__PURE__ */ new Date()).toISOString()
-    };
-    await recordAuditLog(action, clientIp, "PASSED", 0.9, "CRYPTOGRAPHIC_SHIELD", Date.now() - startTime, additionalData?.userId);
-    return result;
-  }
-  result.reasons = ["VERIFICATION_REJECTED"];
-  await recordAuditLog(action, clientIp, "BLOCKED", 0.1, "REJECTED", Date.now() - startTime, additionalData?.userId);
-  return result;
-}
-async function recordAuditLog(action, clientIp, status, score, challengeType, executionTimeMs, userId) {
-  const auditEntry = {
-    id: `cpt-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
-    action,
-    clientIp,
-    userId: userId || "ANONYMOUS",
-    status,
-    score,
-    challengeType,
-    executionTimeMs,
-    createdAt: (/* @__PURE__ */ new Date()).toISOString()
-  };
-  try {
-    const { adminFirestore: adminFirestore2 } = await Promise.resolve().then(() => (init_firebase_admin(), firebase_admin_exports));
-    await adminFirestore2.collection("captcha_audit_logs").doc(auditEntry.id).set(auditEntry);
-  } catch {
-  }
-  try {
-    const db = await getDb();
-    await db.query(
-      `INSERT INTO security_audit_logs (user_id, event_type, ip_address, status, metadata, created_at)
-       VALUES ($1, $2, $3, $4, $5, NOW())`,
-      [
-        userId || null,
-        `CAPTCHA_${status}_${action.toUpperCase()}`,
-        clientIp,
-        status === "PASSED" ? "SUCCESS" : "FAILED",
-        JSON.stringify({ score, challengeType, executionTimeMs, auditId: auditEntry.id })
-      ]
-    );
-  } catch {
-  }
-}
-async function getCaptchaStatistics() {
-  let logs = [];
-  try {
-    const { adminFirestore: adminFirestore2 } = await Promise.resolve().then(() => (init_firebase_admin(), firebase_admin_exports));
-    const snapshot = await adminFirestore2.collection("captcha_audit_logs").orderBy("createdAt", "desc").limit(50).get();
-    logs = snapshot.docs.map((doc) => doc.data());
-  } catch {
-  }
-  const total = logs.length;
-  const passed = logs.filter((l) => l.status === "PASSED").length;
-  const blocked = logs.filter((l) => l.status === "BLOCKED").length;
-  const avgScore = total > 0 ? (logs.reduce((acc, l) => acc + (l.score || 0), 0) / total).toFixed(2) : "0.92";
-  const passRate = total > 0 ? Math.round(passed / total * 100) : 100;
-  return {
-    totalChallenges: total || 142,
-    passedCount: passed || 138,
-    blockedBotsCount: blocked || 4,
-    passRatePercent: passRate,
-    averageScore: Number(avgScore),
-    config: currentConfig,
-    recentLogs: logs
-  };
-}
-
 // src/server/routes/authRoutes.ts
 var router = Router();
 var SESSION_COOKIE_NAME = "phx_session";
@@ -6559,19 +6055,8 @@ async function syncUserToFirebase(userData) {
 }
 router.post("/register/request-verification", registrationLimiter, async (req, res) => {
   try {
-    const { fullName, email, country, password, referralCode, phone, captchaToken, captchaAnswer, captchaVisualCode } = req.body;
+    const { fullName, email, country, password, referralCode, phone } = req.body;
     const clientIp = req.headers["x-forwarded-for"]?.split(",")[0]?.trim() || req.ip || "127.0.0.1";
-    const captchaResult = await verifyCaptcha(captchaToken, "REGISTER", clientIp, {
-      answer: captchaAnswer,
-      visualCode: captchaVisualCode
-    });
-    if (!captchaResult.success) {
-      res.status(403).json({
-        error: "CAPTCHA_REQUIRED",
-        message: "Security check failed. Please complete the CAPTCHA verification."
-      });
-      return;
-    }
     if (!fullName || typeof fullName !== "string" || fullName.trim().length < 2) {
       res.status(400).json({ error: "INVALID_NAME", message: "Full name is required (min 2 characters)." });
       return;
@@ -6622,9 +6107,9 @@ router.post("/register/request-verification", registrationLimiter, async (req, r
       }
     }
     const passwordHash = await hashPassword(password);
-    const crypto5 = await import("crypto");
-    const rawCode = crypto5.randomInt(1e5, 999999).toString();
-    const codeHash = crypto5.createHash("sha256").update(rawCode).digest("hex");
+    const crypto4 = await import("crypto");
+    const rawCode = crypto4.randomInt(1e5, 999999).toString();
+    const codeHash = crypto4.createHash("sha256").update(rawCode).digest("hex");
     const existingPending = await db.query(
       `SELECT last_sent_at FROM pending_registrations WHERE email = $1`,
       [normalizedEmail]
@@ -6667,13 +6152,18 @@ router.post("/register/request-verification", registrationLimiter, async (req, r
     );
     const { sendVerificationCodeEmail: sendVerificationCodeEmail2 } = await Promise.resolve().then(() => (init_emailService(), emailService_exports));
     const sent = await sendVerificationCodeEmail2(normalizedEmail, rawCode);
-    if (!sent) {
-      console.warn(`[Auth API] Email broadcast completed with provider warnings.`);
+    if (!sent && process.env.NODE_ENV === "production") {
+      res.status(500).json({
+        error: "EMAIL_DELIVERY_FAILED",
+        message: "Unable to send verification email at this time. Please try again later."
+      });
+      return;
     }
+    const isProduction = process.env.NODE_ENV === "production";
     res.status(200).json({
-      message: process.env.RESEND_API_KEY ? "Verification code sent successfully to your email address." : `Verification code generated: ${rawCode}`,
+      message: process.env.RESEND_API_KEY || isProduction ? "Verification code sent successfully to your email address." : `Verification code generated: ${rawCode}`,
       email: normalizedEmail,
-      code: !process.env.RESEND_API_KEY ? rawCode : void 0
+      code: !process.env.RESEND_API_KEY && !isProduction ? rawCode : void 0
     });
   } catch (err) {
     console.error("[Auth API] Error in /register/request-verification:", err);
@@ -6709,8 +6199,8 @@ router.post("/register/verify-email", registrationLimiter, async (req, res) => {
       res.status(400).json({ error: "TOKEN_EXPIRED", message: "Verification code has expired. Please request a new code." });
       return;
     }
-    const crypto5 = await import("crypto");
-    const codeHash = crypto5.createHash("sha256").update(code.trim()).digest("hex");
+    const crypto4 = await import("crypto");
+    const codeHash = crypto4.createHash("sha256").update(code.trim()).digest("hex");
     if (record.code_hash !== codeHash) {
       await db.query(
         `UPDATE pending_registrations SET failed_attempts = failed_attempts + 1 WHERE email = $1`,
@@ -7030,6 +6520,13 @@ router.post("/google", authLimiter, async (req, res) => {
     if (existing.rowCount > 0) {
       userRecord = existing.rows[0];
       userId = userRecord.id;
+      if (userRecord.status === "SUSPENDED" || userRecord.status === "LOCKED") {
+        res.status(403).json({
+          error: "ACCOUNT_SUSPENDED",
+          message: "This account has been suspended or locked. Please contact support."
+        });
+        return;
+      }
       await db.query(`UPDATE users SET last_login_at = CURRENT_TIMESTAMP WHERE id = $1`, [userId]);
     } else {
       userId = uuidv45();
@@ -7119,19 +6616,8 @@ router.post("/google", authLimiter, async (req, res) => {
 });
 router.post("/login", loginLimiter, async (req, res) => {
   try {
-    const { identifier, password, rememberMe = true, captchaToken, captchaAnswer, captchaVisualCode } = req.body;
+    const { identifier, password, rememberMe = true } = req.body;
     const clientIp = req.headers["x-forwarded-for"]?.split(",")[0]?.trim() || req.ip || "127.0.0.1";
-    const captchaResult = await verifyCaptcha(captchaToken, "LOGIN", clientIp, {
-      answer: captchaAnswer,
-      visualCode: captchaVisualCode
-    });
-    if (!captchaResult.success) {
-      res.status(403).json({
-        error: "CAPTCHA_REQUIRED",
-        message: "Security check failed. Please complete the CAPTCHA verification."
-      });
-      return;
-    }
     if (!identifier || !password) {
       res.status(400).json({
         error: "MISSING_FIELDS",
@@ -8138,8 +7624,241 @@ init_walletLedgerService();
 
 // src/server/services/economicService.ts
 init_db();
-init_systemConfigBroadcaster();
 import { v4 as uuidv47 } from "uuid";
+
+// src/server/services/systemConfigBroadcaster.ts
+init_firebase_admin();
+
+// src/server/services/publicNetworkService.ts
+init_db();
+init_nodeConfig();
+import { EventEmitter } from "events";
+var publicNetworkEventEmitter = new EventEmitter();
+publicNetworkEventEmitter.setMaxListeners(100);
+async function getPublicNetworkSummary() {
+  const db = await getDb();
+  const nodeCountRes = await db.query(
+    `SELECT status, COUNT(*)::int AS count FROM nodes GROUP BY status`
+  );
+  let activeNodes = 0;
+  let reservedNodes = 0;
+  let availableNodes = 0;
+  let retiredNodes = 0;
+  for (const row of nodeCountRes.rows) {
+    const cnt = Number(row.count || 0);
+    if (row.status === "ACTIVE") activeNodes = cnt;
+    else if (row.status === "RESERVED") reservedNodes = cnt;
+    else if (row.status === "AVAILABLE") availableNodes = cnt;
+    else if (row.status === "RETIRED") retiredNodes = cnt;
+  }
+  const totalAllocated = activeNodes + reservedNodes + retiredNodes;
+  if (availableNodes === 0 && totalAllocated < GENESIS_NODE_CAP) {
+    availableNodes = Math.max(0, GENESIS_NODE_CAP - totalAllocated);
+  }
+  const allocatedNodes = activeNodes + reservedNodes;
+  const allocationPercent = Number((allocatedNodes / GENESIS_NODE_CAP * 100).toFixed(2));
+  const epochRes = await db.query(
+    `SELECT COALESCE(MAX(epoch_number), 1)::int AS max_epoch FROM reward_epochs`
+  );
+  const currentRewardEpoch = Number(epochRes.rows[0]?.max_epoch || 1);
+  const txnRes = await db.query(
+    `SELECT COUNT(*)::int AS count FROM financial_ledger_entries`
+  );
+  const totalNetworkTransactions = Number(txnRes.rows[0]?.count || 0);
+  let conversionRateUsd = null;
+  try {
+    const configRes = await db.query(
+      `SELECT config_value, status FROM system_economic_configs WHERE config_key = 'INTERNAL_COIN_PRICE_USDT'`
+    );
+    if (configRes.rows.length > 0 && configRes.rows[0].status === "ACTIVE") {
+      const valStr = configRes.rows[0].config_value;
+      const val = typeof valStr === "string" ? JSON.parse(valStr) : valStr;
+      if (val && typeof val.priceUsdt === "number" && val.priceUsdt > 0) {
+        conversionRateUsd = val.priceUsdt;
+      }
+    }
+  } catch (err) {
+    console.warn("[Public API] Error loading INTERNAL_COIN_PRICE_USDT config value for summary:", err);
+  }
+  let networkStatus = "OPERATIONAL";
+  try {
+    await db.query("SELECT 1");
+  } catch {
+    networkStatus = "DEGRADED";
+  }
+  return {
+    genesisNodeCap: GENESIS_NODE_CAP,
+    activeNodes,
+    reservedNodes,
+    availableNodes,
+    retiredNodes,
+    allocationPercent,
+    currentRewardEpoch,
+    totalNetworkTransactions,
+    networkStatus,
+    updatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+    conversionRateUsd
+  };
+}
+async function getPublicNetworkEvents(limit = 20) {
+  const db = await getDb();
+  const events = [];
+  try {
+    const activeNodesRes = await db.query(
+      `SELECT public_node_id, activated_at 
+       FROM nodes 
+       WHERE status = 'ACTIVE' AND activated_at IS NOT NULL 
+       ORDER BY activated_at DESC 
+       LIMIT $1`,
+      [limit]
+    );
+    for (const row of activeNodesRes.rows) {
+      const ts = new Date(row.activated_at).toISOString();
+      events.push({
+        id: `evt-node-${row.public_node_id}`,
+        type: "node.activated",
+        title: `${row.public_node_id} Activated`,
+        description: `Genesis validator node ${row.public_node_id} successfully activated on protocol ledger.`,
+        timestamp: ts,
+        publicId: row.public_node_id
+      });
+    }
+    const epochRes = await db.query(
+      `SELECT public_epoch_id, epoch_number, status, settled_at, created_at 
+       FROM reward_epochs 
+       ORDER BY created_at DESC 
+       LIMIT $1`,
+      [limit]
+    );
+    for (const row of epochRes.rows) {
+      const ts = new Date(row.settled_at || row.created_at).toISOString();
+      events.push({
+        id: `evt-epoch-${row.public_epoch_id}`,
+        type: "reward.epoch.completed",
+        title: `Reward Epoch #${row.epoch_number} ${row.status === "COMPLETED" ? "Completed" : "Initiated"}`,
+        description: `Mining reward epoch #${row.epoch_number} state verified on protocol ledger.`,
+        timestamp: ts,
+        publicId: row.public_epoch_id
+      });
+    }
+    const matchingRes = await db.query(
+      `SELECT public_settlement_id, business_date, settled_at 
+       FROM binary_matching_settlements 
+       WHERE status = 'COMPLETED' 
+       ORDER BY settled_at DESC 
+       LIMIT $1`,
+      [limit]
+    );
+    for (const row of matchingRes.rows) {
+      const ts = new Date(row.settled_at).toISOString();
+      const dateStr = typeof row.business_date === "string" ? row.business_date.split("T")[0] : new Date(row.business_date).toISOString().split("T")[0];
+      events.push({
+        id: `evt-match-${row.public_settlement_id}`,
+        type: "matching.completed",
+        title: `Matching Settlement Completed`,
+        description: `Binary team network consensus settlement finalized for date ${dateStr}.`,
+        timestamp: ts,
+        publicId: row.public_settlement_id
+      });
+    }
+    const promoRes = await db.query(
+      `SELECT public_bonus_id, milestone, qualified_at 
+       FROM promotion_bonuses 
+       WHERE status = 'EARNED' 
+       ORDER BY qualified_at DESC 
+       LIMIT $1`,
+      [limit]
+    );
+    for (const row of promoRes.rows) {
+      const ts = new Date(row.qualified_at).toISOString();
+      events.push({
+        id: `evt-promo-${row.public_bonus_id}`,
+        type: "promotion.earned",
+        title: `Promotion Milestone (${row.milestone}) Qualified`,
+        description: `Network operator volume qualification reached milestone Tier ${row.milestone}.`,
+        timestamp: ts,
+        publicId: row.public_bonus_id
+      });
+    }
+    const fleRes = await db.query(
+      `SELECT public_txn_id, source_type, created_at 
+       FROM financial_ledger_entries 
+       ORDER BY created_at DESC 
+       LIMIT $1`,
+      [limit]
+    );
+    for (const row of fleRes.rows) {
+      const ts = new Date(row.created_at).toISOString();
+      events.push({
+        id: `evt-fle-${row.public_txn_id}`,
+        type: "ledger.checkpoint",
+        title: `Ledger Checkpoint ${row.public_txn_id}`,
+        description: `Cryptographic financial ledger entry posted for channel ${row.source_type}.`,
+        timestamp: ts,
+        publicId: row.public_txn_id
+      });
+    }
+    events.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+    return events.slice(0, limit);
+  } catch (err) {
+    console.error("[PublicNetworkService] Error fetching public network events:", err);
+    return [];
+  }
+}
+function broadcastPublicEvent(event) {
+  publicNetworkEventEmitter.emit("networkEvent", event);
+}
+
+// src/server/services/systemConfigBroadcaster.ts
+async function broadcastSystemConfigChange(key, value, category = "SYSTEM") {
+  const timestamp = (/* @__PURE__ */ new Date()).toISOString();
+  const normalizedKey = key.toUpperCase();
+  try {
+    await adminFirestore.collection("system_settings").doc("configs").set(
+      {
+        [normalizedKey]: value,
+        updatedAt: timestamp,
+        lastUpdatedKey: normalizedKey
+      },
+      { merge: true }
+    );
+    if (normalizedKey.includes("WITHDRAWAL")) {
+      await adminFirestore.collection("system_settings").doc("withdrawals").set(
+        {
+          [normalizedKey]: value,
+          minWithdrawalAmount: normalizedKey === "MIN_WITHDRAWAL_AMOUNT" ? Number(value) : void 0,
+          autoWithdrawalEnabled: normalizedKey === "AUTO_WITHDRAWAL_ENABLED" ? Boolean(value) : void 0,
+          updatedAt: timestamp
+        },
+        { merge: true }
+      );
+    }
+    if (normalizedKey.includes("COIN") || normalizedKey.includes("PRICE") || normalizedKey.includes("NODE")) {
+      await adminFirestore.collection("system_settings").doc("economic").set(
+        {
+          [normalizedKey]: value,
+          updatedAt: timestamp
+        },
+        { merge: true }
+      );
+    }
+  } catch (fsErr) {
+    console.warn("[SystemConfigBroadcaster] Firestore real-time sync warning:", fsErr);
+  }
+  try {
+    publicNetworkEventEmitter.emit("networkEvent", {
+      type: "system_config",
+      key: normalizedKey,
+      value,
+      category,
+      updatedAt: timestamp
+    });
+  } catch (sseErr) {
+    console.warn("[SystemConfigBroadcaster] SSE broadcast warning:", sseErr);
+  }
+}
+
+// src/server/services/economicService.ts
 function parseConfigValue(val) {
   if (typeof val === "string") {
     try {
@@ -8190,8 +7909,8 @@ async function getAllEconomicConfigs() {
   `);
   return res.rows.map(mapRowToConfigRecord);
 }
-async function getEconomicConfigByKey(configKey) {
-  const db = await getDb();
+async function getEconomicConfigByKey(configKey, dbClient) {
+  const db = dbClient || await getDb();
   const res = await db.query(
     `SELECT * FROM system_economic_configs WHERE config_key = $1`,
     [configKey.trim().toUpperCase()]
@@ -8306,7 +8025,12 @@ function validateEconomicValue(key, value) {
   }
   if (key === "NODE_REWARD_RATE_PER_EPOCH") {
     if (value !== null && value !== void 0) {
-      const num = Number(value);
+      let num;
+      if (typeof value === "object" && value !== null) {
+        num = Number(value.rateUsd !== void 0 ? value.rateUsd : value.rewardPerNode !== void 0 ? value.rewardPerNode : NaN);
+      } else {
+        num = Number(value);
+      }
       if (isNaN(num) || num <= 0) {
         throw new Error("INVALID_VALUE: Reward rate must be null (unconfigured) or a positive number greater than 0.");
       }
@@ -8315,7 +8039,8 @@ function validateEconomicValue(key, value) {
   if (key === "INTERNAL_COIN_PRICE_USDT") {
     if (typeof value === "object" && value !== null) {
       const price = Number(value.priceUsdt);
-      if (isNaN(price) || price <= 0) {
+      const isEnabled = value.swapEnabled !== false;
+      if (isEnabled && (isNaN(price) || price <= 0)) {
         throw new Error("INVALID_VALUE: Internal coin price in USDT must be a positive number.");
       }
     } else {
@@ -8386,8 +8111,8 @@ async function getEconomicAuditLogs(page = 1, limit = 20, configKey) {
     }
   };
 }
-async function getNodeBasePrice() {
-  const cfg = await getEconomicConfigByKey("NODE_BASE_PRICE_USD");
+async function getNodeBasePrice(dbClient) {
+  const cfg = await getEconomicConfigByKey("NODE_BASE_PRICE_USD", dbClient);
   if (cfg && typeof cfg.configValue === "number") {
     return cfg.configValue;
   }
@@ -8405,8 +8130,8 @@ async function getBnbPriceUsd() {
   }
   return null;
 }
-async function isNodeSalesEnabled() {
-  const cfg = await getEconomicConfigByKey("NODE_SALES_ENABLED");
+async function isNodeSalesEnabled(dbClient) {
+  const cfg = await getEconomicConfigByKey("NODE_SALES_ENABLED", dbClient);
   if (cfg) {
     return cfg.status === "ACTIVE" && Boolean(cfg.configValue);
   }
@@ -8436,19 +8161,24 @@ async function getNodeRewardRatePerEpoch() {
 }
 async function getInternalCoinPrice() {
   const cfg = await getEconomicConfigByKey("INTERNAL_COIN_PRICE_USDT");
-  if (cfg && typeof cfg.configValue === "object" && cfg.configValue !== null) {
-    return {
-      coinSymbol: "PHIVO",
-      priceUsdt: Number(cfg.configValue.priceUsdt || 0.1),
-      effectiveFrom: cfg.configValue.effectiveFrom || cfg.effectiveFrom,
-      swapEnabled: cfg.configValue.swapEnabled !== false
-    };
+  if (cfg && cfg.status === "ACTIVE" && typeof cfg.configValue === "object" && cfg.configValue !== null) {
+    const price = Number(cfg.configValue.priceUsdt);
+    if (!isNaN(price) && price > 0) {
+      return {
+        coinSymbol: "PHIVO",
+        priceUsdt: price,
+        effectiveFrom: cfg.configValue.effectiveFrom || cfg.effectiveFrom,
+        swapEnabled: cfg.configValue.swapEnabled !== false,
+        configured: true
+      };
+    }
   }
   return {
     coinSymbol: "PHIVO",
-    priceUsdt: 0.1,
-    effectiveFrom: (/* @__PURE__ */ new Date()).toISOString(),
-    swapEnabled: true
+    priceUsdt: null,
+    effectiveFrom: null,
+    swapEnabled: false,
+    configured: false
   };
 }
 async function isCoinSwapEnabled() {
@@ -8459,8 +8189,42 @@ async function isCoinSwapEnabled() {
   return true;
 }
 async function getTokenPriceTrend(timeframe = "24h") {
+  const db = await getDb();
   const coinConfig = await getInternalCoinPrice();
-  const currentPrice = coinConfig.priceUsdt > 0 ? coinConfig.priceUsdt : 1.85;
+  const supplyRes = await db.query(
+    `SELECT COALESCE(SUM(amount), 0)::float AS sum 
+     FROM financial_ledger_entries 
+     WHERE currency = 'PHIVO' AND entry_type = 'CREDIT' AND status = 'SETTLED'`
+  );
+  const circulatingSupply = Math.max(0, Number(supplyRes.rows[0]?.sum || 0));
+  if (!coinConfig.configured || coinConfig.priceUsdt === null || coinConfig.priceUsdt <= 0) {
+    return {
+      tokenSymbol: "PHIVO",
+      tokenName: "PHIVONEX Protocol Token",
+      currentPrice: null,
+      open24h: null,
+      high24h: null,
+      low24h: null,
+      change24h: 0,
+      change24hPercent: 0,
+      volume24h: 0,
+      marketCap: 0,
+      circulatingSupply,
+      timeframe,
+      updatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+      points: [],
+      configured: false
+    };
+  }
+  const currentPrice = coinConfig.priceUsdt;
+  const marketCap = Math.round(circulatingSupply * currentPrice);
+  const swapVolRes = await db.query(
+    `SELECT COALESCE(SUM(amount), 0)::float AS vol 
+     FROM financial_ledger_entries 
+     WHERE source_type = 'COIN_SWAP' AND entry_type = 'DEBIT' AND currency = 'PHIVO' AND status = 'SETTLED'`
+  );
+  const totalSwapPhivo = Number(swapVolRes.rows[0]?.vol || 0);
+  const volume24h = Number((totalSwapPhivo * currentPrice).toFixed(2));
   const now = Date.now();
   let stepMinutes = 60;
   let numSteps = 24;
@@ -8475,67 +8239,39 @@ async function getTokenPriceTrend(timeframe = "24h") {
     numSteps = 24;
   }
   const points = [];
-  const baseVolatility = 0.032;
-  const openPrice = currentPrice * 0.945;
-  let minPrice = Infinity;
-  let maxPrice = -Infinity;
-  let totalVolumeUsd = 0;
-  let prevClose = openPrice;
   for (let i = 0; i < numSteps; i++) {
     const pointTime = new Date(now - (numSteps - 1 - i) * stepMinutes * 60 * 1e3);
-    const progress = i / (numSteps - 1);
-    const wave = Math.sin(progress * Math.PI * 3.4) * (currentPrice * baseVolatility * 0.45);
-    const microNoise = Math.cos(i * 2.1) * (currentPrice * 6e-3);
-    const interpolated = openPrice + (currentPrice - openPrice) * Math.pow(progress, 0.88) + wave + microNoise;
-    const finalClose = i === numSteps - 1 ? currentPrice : Number(Math.max(0.01, interpolated).toFixed(4));
-    const candleOpen = Number(prevClose.toFixed(4));
-    const candleClose = Number(finalClose.toFixed(4));
-    const rawHighExtension = Math.abs(Math.sin(i * 2.3 + 0.4)) * 0.011 * currentPrice + 3e-3;
-    const rawLowExtension = Math.abs(Math.cos(i * 1.9 + 0.7)) * 0.011 * currentPrice + 3e-3;
-    const candleHigh = Number(Math.max(candleOpen, candleClose, Math.max(candleOpen, candleClose) + rawHighExtension).toFixed(4));
-    const candleLow = Number(Math.min(candleOpen, candleClose, Math.max(0.01, Math.min(candleOpen, candleClose) - rawLowExtension)).toFixed(4));
-    const candleVolume = Math.round(18500 + Math.sin(i * 0.8) * 8200 + Math.abs(Math.cos(i * 1.4)) * 12e3);
-    const candleVolumeUsd = Number((candleVolume * candleClose).toFixed(2));
-    const candleChange = Number((candleClose - candleOpen).toFixed(4));
-    const candleChangePercent = candleOpen > 0 ? Number((candleChange / candleOpen * 100).toFixed(2)) : 0;
-    minPrice = Math.min(minPrice, candleLow);
-    maxPrice = Math.max(maxPrice, candleHigh);
-    totalVolumeUsd += candleVolumeUsd;
-    prevClose = candleClose;
     const timeLabel = timeframe === "1h" || timeframe === "6h" || timeframe === "24h" ? pointTime.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : pointTime.toLocaleDateString([], { month: "short", day: "numeric" });
     points.push({
       timestamp: pointTime.toISOString(),
       timeLabel,
-      price: candleClose,
-      open: candleOpen,
-      high: candleHigh,
-      low: candleLow,
-      close: candleClose,
-      volume: candleVolume,
-      volumeUsd: candleVolumeUsd,
-      change: candleChange,
-      changePercent: candleChangePercent
+      price: currentPrice,
+      open: currentPrice,
+      high: currentPrice,
+      low: currentPrice,
+      close: currentPrice,
+      volume: Math.round(totalSwapPhivo / numSteps),
+      volumeUsd: Number((totalSwapPhivo / numSteps * currentPrice).toFixed(2)),
+      change: 0,
+      changePercent: 0
     });
   }
-  const change24h = Number((currentPrice - openPrice).toFixed(4));
-  const change24hPercent = Number((change24h / openPrice * 100).toFixed(2));
-  const circulatingSupply = 245e5;
-  const marketCap = Math.round(circulatingSupply * currentPrice);
   return {
     tokenSymbol: "PHIVO",
     tokenName: "PHIVONEX Protocol Token",
     currentPrice: Number(currentPrice.toFixed(4)),
-    open24h: Number(openPrice.toFixed(4)),
-    high24h: Number(maxPrice.toFixed(4)),
-    low24h: Number(minPrice.toFixed(4)),
-    change24h,
-    change24hPercent,
-    volume24h: Number(totalVolumeUsd.toFixed(2)),
+    open24h: Number(currentPrice.toFixed(4)),
+    high24h: Number(currentPrice.toFixed(4)),
+    low24h: Number(currentPrice.toFixed(4)),
+    change24h: 0,
+    change24hPercent: 0,
+    volume24h,
     marketCap,
     circulatingSupply,
     timeframe,
     updatedAt: (/* @__PURE__ */ new Date()).toISOString(),
-    points
+    points,
+    configured: true
   };
 }
 
@@ -8635,7 +8371,8 @@ async function processNodeActivationCommission(db, orderId, nodeId, buyerUserId)
       sourceRef: row.public_commission_id,
       amount: Number(row.amount_usd),
       description: `Direct Referral Commission - Node ${nodePublicId} Activation`,
-      createdAt: new Date(row.earned_at)
+      createdAt: new Date(row.earned_at),
+      dbClient: db
     });
   } catch (ledgErr) {
     console.warn("[WalletLedger] Error posting referral commission to ledger:", ledgErr);
@@ -9034,10 +8771,12 @@ async function getVolumeHistory(userId, page = 1, limit = 20) {
 }
 
 // src/server/services/nodeOrderService.ts
-init_publicNetworkService();
 init_notificationService();
 async function cleanupExpiredReservations(dbClient) {
-  const db = dbClient || await getDb();
+  if (dbClient) {
+    return 0;
+  }
+  const db = await getDb();
   try {
     const expiredOrdersRes = await db.query(
       `
@@ -9075,16 +8814,33 @@ async function cleanupExpiredReservations(dbClient) {
     return 0;
   }
 }
-async function createNodeReservation(userId, idempotencyKey, paymentMethod = "SIMULATED_INSTANT") {
-  const salesEnabled = await isNodeSalesEnabled();
+async function createNodeReservation(userId, idempotencyKey, paymentMethod = "SIMULATED_INSTANT", dbClient) {
+  const db = dbClient || await getDb();
+  if (dbClient) {
+    return executeReservation(dbClient, userId, idempotencyKey, paymentMethod);
+  }
+  try {
+    return await db.transaction(async (trx) => {
+      return executeReservation(trx, userId, idempotencyKey, paymentMethod);
+    });
+  } catch (err) {
+    console.error("[CreateNodeReservation Error]", err);
+    throw err;
+  }
+}
+async function executeReservation(db, userId, idempotencyKey, paymentMethod = "SIMULATED_INSTANT") {
+  const salesEnabled = await isNodeSalesEnabled(db);
   if (!salesEnabled) {
     const error = new Error("NODE_SALES_PAUSED: Genesis Node sales and reservations are currently paused by administration.");
     error.code = "NODE_SALES_PAUSED";
     error.statusCode = 403;
     throw error;
   }
-  const db = await getDb();
-  await cleanupExpiredReservations(db);
+  await db.query(`SELECT id FROM users WHERE id = $1 FOR UPDATE`, [userId]);
+  try {
+    await cleanupExpiredReservations(db);
+  } catch {
+  }
   if (idempotencyKey && idempotencyKey.trim().length > 0) {
     const existingByIdempotency = await db.query(
       `
@@ -9106,6 +8862,7 @@ async function createNodeReservation(userId, idempotencyKey, paymentMethod = "SI
       const secondsRemaining = Math.max(0, Math.floor((expiresMs - nowMs) / 1e3));
       return {
         order: {
+          id: row.id,
           publicOrderId: row.public_order_id,
           publicNodeId: row.public_node_id,
           nodeNumber: row.node_number,
@@ -9137,6 +8894,7 @@ async function createNodeReservation(userId, idempotencyKey, paymentMethod = "SI
     WHERE o.user_id = $1 AND o.status = 'PENDING' AND o.expires_at > CURRENT_TIMESTAMP
     ORDER BY o.created_at DESC
     LIMIT 1
+    FOR UPDATE
     `,
     [userId]
   );
@@ -9177,6 +8935,7 @@ async function createNodeReservation(userId, idempotencyKey, paymentMethod = "SI
       WHERE status = 'AVAILABLE'
       ORDER BY node_number ASC
       LIMIT 1
+      FOR UPDATE
       `
     );
     if (candidateRes.rows.length === 0) {
@@ -9206,7 +8965,7 @@ async function createNodeReservation(userId, idempotencyKey, paymentMethod = "SI
     const publicOrderId = generateOrderPublicId();
     const cleanIdempotencyKey = idempotencyKey && idempotencyKey.trim().length > 0 ? idempotencyKey.trim() : null;
     const expiresAt = new Date(Date.now() + RESERVATION_EXPIRY_MINUTES * 60 * 1e3);
-    const nodePrice = await getNodeBasePrice();
+    const nodePrice = await getNodeBasePrice(db);
     const orderInsertRes = await db.query(
       `
       INSERT INTO node_orders (
@@ -9503,6 +9262,7 @@ async function settleNodeOrder(userId, orderIdentifier, paymentReference, dbClie
   }
   return {
     order: {
+      id: finalOrder.id,
       publicOrderId: finalOrder.public_order_id,
       publicNodeId: finalNode.public_node_id,
       nodeNumber: finalOrder.node_number,
@@ -9572,8 +9332,8 @@ async function cancelNodeOrder(userId, orderIdentifier) {
     message: "Node reservation cancelled successfully and released back to available inventory."
   };
 }
-async function getUserOrders(userId) {
-  const db = await getDb();
+async function getUserOrders(userId, dbClient) {
+  const db = dbClient || await getDb();
   await cleanupExpiredReservations(db);
   const ordersRes = await db.query(
     `
@@ -9653,82 +9413,91 @@ async function getUserOrderById(userId, orderIdentifier) {
 }
 async function purchaseNodeWithDepositBalance(userId, preferredAsset = "USDT") {
   const db = await getDb();
-  const nodePrice = await getNodeBasePrice();
-  const depositRes = await db.query(
-    `
-    SELECT COALESCE(SUM(amount), 0) AS total_credited
-    FROM blockchain_deposits
-    WHERE user_id = $1 AND status = 'CREDITED'
-    `,
-    [userId]
-  );
-  const totalCreditedDeposits = Number(depositRes.rows[0]?.total_credited || 0);
-  const debitsRes = await db.query(
-    `
-    SELECT COALESCE(SUM(amount), 0) AS total_debits
-    FROM financial_ledger_entries
-    WHERE user_id = $1 AND entry_type = 'DEBIT' AND source_type = 'NODE_PURCHASE'
-    `,
-    [userId]
-  );
-  const totalNodeDebits = Number(debitsRes.rows[0]?.total_debits || 0);
-  const availableDepositBalance = Math.max(0, totalCreditedDeposits - totalNodeDebits);
-  if (availableDepositBalance < nodePrice) {
-    const error = new Error(
-      `Your current deposited balance is $${availableDepositBalance.toFixed(2)} USD. You need $${nodePrice.toFixed(2)} USD to activate a Genesis Node. Please deposit funds first.`
-    );
-    error.code = "INSUFFICIENT_DEPOSIT_BALANCE";
-    error.statusCode = 400;
-    error.currentBalance = availableDepositBalance;
-    error.requiredAmount = nodePrice;
-    error.redirectToDeposit = true;
-    throw error;
-  }
-  let reservation;
-  try {
-    reservation = await createNodeReservation(userId, `dep_node_${userId}_${Date.now()}`, `DEPOSIT_${preferredAsset}`);
-  } catch (err) {
-    const existingOrders = await getUserOrders(userId);
-    const pending = existingOrders.find((o) => o.status === "PENDING" && o.secondsRemaining > 0);
-    if (pending) {
-      reservation = { order: pending, isExisting: true };
-    } else {
-      throw err;
+  return await db.transaction(async (trx) => {
+    try {
+      await trx.query(`SELECT id FROM users WHERE id = $1 FOR UPDATE`, [userId]);
+      const nodePrice = await getNodeBasePrice(trx);
+      const depositRes = await trx.query(
+        `
+        SELECT COALESCE(SUM(amount), 0) AS total_credited
+        FROM blockchain_deposits
+        WHERE user_id = $1 AND status = 'CREDITED'
+        `,
+        [userId]
+      );
+      const totalCreditedDeposits = Number(depositRes.rows[0]?.total_credited || 0);
+      const debitsRes = await trx.query(
+        `
+        SELECT COALESCE(SUM(amount), 0) AS total_debits
+        FROM financial_ledger_entries
+        WHERE user_id = $1 AND entry_type = 'DEBIT' AND source_type = 'NODE_PURCHASE'
+        `,
+        [userId]
+      );
+      const totalNodeDebits = Number(debitsRes.rows[0]?.total_debits || 0);
+      const availableDepositBalance = Math.max(0, totalCreditedDeposits - totalNodeDebits);
+      if (availableDepositBalance < nodePrice) {
+        const error = new Error(
+          `Your current deposited balance is $${availableDepositBalance.toFixed(2)} USD. You need $${nodePrice.toFixed(2)} USD to activate a Genesis Node. Please deposit funds first.`
+        );
+        error.code = "INSUFFICIENT_DEPOSIT_BALANCE";
+        error.statusCode = 400;
+        error.currentBalance = availableDepositBalance;
+        error.requiredAmount = nodePrice;
+        error.redirectToDeposit = true;
+        throw error;
+      }
+      let reservation;
+      try {
+        reservation = await createNodeReservation(userId, `dep_node_${userId}_${uuidv413()}`, `DEPOSIT_${preferredAsset}`, trx);
+      } catch (err) {
+        const existingOrders = await getUserOrders(userId, trx);
+        const pending = existingOrders.find((o) => o.status === "PENDING" && o.secondsRemaining > 0);
+        if (pending) {
+          reservation = { order: pending, isExisting: true };
+        } else {
+          throw err;
+        }
+      }
+      const debitTxnId = uuidv413();
+      const publicTxnId = generateLedgerTransactionPublicId();
+      await trx.query(
+        `
+        INSERT INTO financial_ledger_entries (
+          id, public_txn_id, user_id, entry_type, source_type, source_id,
+          source_ref, description, amount, currency, status, created_at
+        )
+        VALUES ($1, $2, $3, 'DEBIT', 'NODE_PURCHASE', $4, $5, $6, $7, $8, 'SETTLED', CURRENT_TIMESTAMP)
+        `,
+        [
+          debitTxnId,
+          publicTxnId,
+          userId,
+          reservation.order.id,
+          reservation.order.publicNodeId,
+          `Genesis Node ${reservation.order.publicNodeId} purchase paid via ${preferredAsset} deposit balance`,
+          nodePrice,
+          preferredAsset
+        ]
+      );
+      const settlement = await settleNodeOrder(
+        userId,
+        reservation.order.publicOrderId,
+        `DEPOSIT_BAL_PAYMENT_${preferredAsset}_${publicTxnId}`,
+        trx
+      );
+      const newRemainingBalance = Math.max(0, availableDepositBalance - nodePrice);
+      return {
+        order: settlement.order,
+        node: settlement.node,
+        depositDeducted: nodePrice,
+        remainingDepositBalance: newRemainingBalance
+      };
+    } catch (innerErr) {
+      console.error("[purchaseNodeWithDepositBalance Inner Error]", innerErr);
+      throw innerErr;
     }
-  }
-  const debitTxnId = uuidv413();
-  const publicTxnId = generateLedgerTransactionPublicId();
-  await db.query(
-    `
-    INSERT INTO financial_ledger_entries (
-      id, public_txn_id, user_id, entry_type, source_type, source_id,
-      source_ref, description, amount, currency, status, created_at
-    )
-    VALUES ($1, $2, $3, 'DEBIT', 'NODE_PURCHASE', $4, $5, $6, $7, $8, 'SETTLED', CURRENT_TIMESTAMP)
-    `,
-    [
-      debitTxnId,
-      publicTxnId,
-      userId,
-      reservation.order.publicOrderId,
-      reservation.order.publicNodeId,
-      `Genesis Node ${reservation.order.publicNodeId} purchase paid via ${preferredAsset} deposit balance`,
-      nodePrice,
-      preferredAsset
-    ]
-  );
-  const settlement = await settleNodeOrder(
-    userId,
-    reservation.order.publicOrderId,
-    `DEPOSIT_BAL_PAYMENT_${preferredAsset}_${publicTxnId}`
-  );
-  const newRemainingBalance = Math.max(0, availableDepositBalance - nodePrice);
-  return {
-    order: settlement.order,
-    node: settlement.node,
-    depositDeducted: nodePrice,
-    remainingDepositBalance: newRemainingBalance
-  };
+  });
 }
 
 // src/server/services/nodeRewardService.ts
@@ -9765,7 +9534,6 @@ function getConfiguredRewardPerNode(override) {
 }
 
 // src/server/services/nodeRewardService.ts
-init_walletLedgerService();
 init_notificationService();
 async function createRewardEpoch(params) {
   const db = await getDb();
@@ -9917,15 +9685,6 @@ async function closeAndSettleEpoch(epochId, options) {
       actualPublicRewardId = existing.rows[0].public_reward_id;
       actualAmount = Number(existing.rows[0].amount);
     }
-    await postLedgerCredit({
-      userId: node.owner_user_id,
-      sourceType: "NODE_REWARD",
-      sourceId: actualRewardId,
-      sourceRef: actualPublicRewardId,
-      amount: actualAmount,
-      description: `Genesis Node Mining Reward - ${publicEpochId} (Node ${node.public_node_id})`,
-      createdAt: now
-    });
     try {
       await notifyPhivoReward({
         userId: node.owner_user_id,
@@ -10363,7 +10122,7 @@ async function processNodePurchaseWithAssetBalance(userId, asset = "USDT") {
     try {
       reservation = await createNodeReservation(
         userId,
-        `node_bal_req_${selectedAsset}_${userId}_${Date.now()}`,
+        `node_bal_req_${selectedAsset}_${userId}_${uuidv415()}`,
         `DEPOSIT_${selectedAsset}`
       );
     } catch (err) {
@@ -10387,58 +10146,59 @@ async function processNodePurchaseWithAssetBalance(userId, asset = "USDT") {
         isDuplicate: true
       };
     }
-    await db.query("BEGIN");
     try {
-      const orderId = reservation.order.id || reservation.order.publicOrderId;
-      const existingDebitRes = await db.query(
-        `SELECT id FROM financial_ledger_entries WHERE source_id = $1 AND source_type = 'NODE_PURCHASE'`,
-        [orderId]
-      );
-      let debitTxnId = uuidv415();
-      let publicTxnId = generateLedgerTransactionPublicId();
-      if (existingDebitRes.rows.length === 0) {
-        await db.query(
-          `
-          INSERT INTO financial_ledger_entries (
-            id, public_txn_id, user_id, entry_type, source_type, source_id,
-            source_ref, description, amount, currency, status, created_at
-          )
-          VALUES ($1, $2, $3, 'DEBIT', 'NODE_PURCHASE', $4, $5, $6, $7, $8, 'SETTLED', CURRENT_TIMESTAMP)
-          `,
-          [
-            debitTxnId,
-            publicTxnId,
-            userId,
-            orderId,
-            reservation.order.publicNodeId,
-            `Genesis Node ${reservation.order.publicNodeId} activation paid via ${selectedAsset} deposit balance`,
-            requiredAmount,
-            selectedAsset
-          ]
+      const result = await db.transaction(async (trx) => {
+        const orderId = reservation.order.id || reservation.order.publicOrderId;
+        const existingDebitRes = await trx.query(
+          `SELECT id FROM financial_ledger_entries WHERE source_id = $1 AND source_type = 'NODE_PURCHASE'`,
+          [orderId]
         );
-      } else {
-        debitTxnId = existingDebitRes.rows[0].id;
-      }
-      const settlement = await settleNodeOrder(
-        userId,
-        reservation.order.publicOrderId,
-        `DEPOSIT_PAYMENT_${selectedAsset}_${publicTxnId}`,
-        db
-      );
-      await db.query("COMMIT");
-      const remainingBalance = Math.max(0, Number((availableBalance - requiredAmount).toFixed(4)));
-      return {
-        success: true,
-        assetUsed: selectedAsset,
-        deductedAmount: requiredAmount,
-        remainingAssetBalance: remainingBalance,
-        order: settlement.order,
-        node: settlement.node,
-        isDuplicate: settlement.isDuplicate
-      };
-    } catch (err) {
-      await db.query("ROLLBACK");
-      throw err;
+        let debitTxnId = uuidv415();
+        let publicTxnId = generateLedgerTransactionPublicId();
+        if (existingDebitRes.rows.length === 0) {
+          await trx.query(
+            `
+            INSERT INTO financial_ledger_entries (
+              id, public_txn_id, user_id, entry_type, source_type, source_id,
+              source_ref, description, amount, currency, status, created_at
+            )
+            VALUES ($1, $2, $3, 'DEBIT', 'NODE_PURCHASE', $4, $5, $6, $7, $8, 'SETTLED', CURRENT_TIMESTAMP)
+            `,
+            [
+              debitTxnId,
+              publicTxnId,
+              userId,
+              orderId,
+              reservation.order.publicNodeId,
+              `Genesis Node ${reservation.order.publicNodeId} activation paid via ${selectedAsset} deposit balance`,
+              requiredAmount,
+              selectedAsset
+            ]
+          );
+        } else {
+          debitTxnId = existingDebitRes.rows[0].id;
+        }
+        const settlement = await settleNodeOrder(
+          userId,
+          reservation.order.publicOrderId,
+          `DEPOSIT_PAYMENT_${selectedAsset}_${publicTxnId}`,
+          trx
+        );
+        const remainingBalance = Math.max(0, Number((availableBalance - requiredAmount).toFixed(4)));
+        return {
+          success: true,
+          assetUsed: selectedAsset,
+          deductedAmount: requiredAmount,
+          remainingAssetBalance: remainingBalance,
+          order: settlement.order,
+          node: settlement.node,
+          isDuplicate: settlement.isDuplicate
+        };
+      });
+      return result;
+    } catch (txErr) {
+      console.error("[ProcessNodePurchase TX Error]", txErr);
+      throw txErr;
     }
   });
 }
@@ -11928,10 +11688,10 @@ async function getUserMatchingHistory(userId, page = 1, limit = 10) {
 }
 async function updateMatchingConfig(adminUserId, params) {
   const db = await getDb();
-  const currentConfig2 = await getActiveMatchingConfig(db);
+  const currentConfig = await getActiveMatchingConfig(db);
   await db.query("BEGIN");
   try {
-    const nextVersion = currentConfig2.version + 1;
+    const nextVersion = currentConfig.version + 1;
     const configId = uuidv417();
     await db.query(
       `
@@ -11965,7 +11725,7 @@ async function updateMatchingConfig(adminUserId, params) {
         auditId,
         configId,
         adminUserId,
-        JSON.stringify(currentConfig2),
+        JSON.stringify(currentConfig),
         JSON.stringify({
           id: configId,
           matchingEnabled: params.matchingEnabled,
@@ -12625,7 +12385,6 @@ rewardRouter.post("/epochs/:id/settle", requireAdmin, async (req, res) => {
 });
 
 // src/server/routes/publicNetworkRoutes.ts
-init_publicNetworkService();
 import { Router as Router12 } from "express";
 var publicNetworkRouter = Router12();
 publicNetworkRouter.get("/price-trend", async (req, res) => {
@@ -12838,24 +12597,11 @@ function sanitizeProductionErrors(err, req, res, next) {
 init_withdrawalService();
 init_bscSignerService();
 init_db();
-init_systemConfigBroadcaster();
 var withdrawalRouter = Router13();
 withdrawalRouter.post("/", requireAuth, withdrawalLimiter, async (req, res) => {
   try {
     const userId = req.user.id;
-    const { amount, destinationType, destinationReference, idempotencyKey, captchaToken, captchaAnswer, captchaVisualCode } = req.body;
-    const clientIp = req.headers["x-forwarded-for"]?.split(",")[0]?.trim() || req.ip || "127.0.0.1";
-    const captchaResult = await verifyCaptcha(captchaToken, "WITHDRAWAL", clientIp, {
-      answer: captchaAnswer,
-      visualCode: captchaVisualCode,
-      userId
-    });
-    if (!captchaResult.success) {
-      return res.status(403).json({
-        error: "CAPTCHA_REQUIRED",
-        message: "Security authorization check failed. Please complete the CAPTCHA verification to proceed with withdrawal."
-      });
-    }
+    const { amount, destinationType, destinationReference, idempotencyKey } = req.body;
     const numAmount = parseFloat(amount);
     if (isNaN(numAmount) || !isFinite(numAmount) || numAmount <= 0) {
       return res.status(400).json({
@@ -15066,133 +14812,33 @@ import { Router as Router15 } from "express";
 
 // src/server/services/bscKeyService.ts
 init_bscConfig();
-init_db();
 import { ethers as ethers6 } from "ethers";
-import { v4 as uuidv422 } from "uuid";
-var DEV_FALLBACK_XPUB = "xpub6EF8jXqFeFEW5bwMU7RpQtHkzE4KJxcqJtvkCjJumzW8CPpacXkb92ek4WzLQXjL93HycJwTPUAcuNxCqFPKKU5m5Z2Vq4nCyh5CyPeBFFr";
-function getDepositAddressXpub() {
-  const xpub = (BSC_CONFIG.DEPOSIT_ADDRESS_XPUB || "").trim();
-  if (xpub && xpub.startsWith("xpub")) {
-    try {
-      ethers6.HDNodeWallet.fromExtendedKey(xpub);
-      return xpub;
-    } catch (err) {
-      console.warn(`[bscKeyService] Corrupted DEPOSIT_ADDRESS_XPUB, using fallback: ${err.message}`);
-    }
-  }
-  return DEV_FALLBACK_XPUB;
-}
-function deriveAddressFromXpub(xpub, derivationIndex) {
-  if (derivationIndex < 0 || !Number.isInteger(derivationIndex)) {
-    throw new Error(`INVALID_DERIVATION_INDEX: Derivation index must be a non-negative integer (got: ${derivationIndex})`);
-  }
-  if (!xpub || !xpub.trim().startsWith("xpub")) {
-    throw new Error(`INVALID_XPUB: Expected valid extended public key starting with 'xpub' (got: ${xpub ? xpub.slice(0, 8) + "..." : "empty"})`);
-  }
-  const branchRoot = ethers6.HDNodeWallet.fromExtendedKey(xpub.trim());
-  const childNode = branchRoot.deriveChild(derivationIndex);
-  const checksumAddress = ethers6.getAddress(childNode.address);
-  const derivationReference = `m/44'/60'/0'/0/${derivationIndex}`;
-  return {
-    address: checksumAddress,
-    derivationReference
-  };
-}
 async function getOrCreateUserDepositAddress(userId, requestedAsset = "USDT") {
-  const db = await getDb();
   const assetName = requestedAsset.toUpperCase() === "BNB" ? "BNB" : "USDT";
   const chainId = BSC_CONFIG.CHAIN_ID;
   const rawTreasury = BSC_CONFIG.TREASURY_WALLET_ADDRESS || process.env.TREASURY_WALLET_ADDRESS;
   const treasury = rawTreasury && ethers6.isAddress(rawTreasury) ? rawTreasury : "0x39F47C356d45eA49826a76C252794c4C83572D76";
-  const xpub = (BSC_CONFIG.DEPOSIT_ADDRESS_XPUB || "").trim();
-  if (!xpub || !xpub.startsWith("xpub")) {
-    const checksumTreasury = ethers6.getAddress(treasury);
-    return {
-      id: `treasury-${userId}-${assetName}`,
-      userId,
-      chainId,
-      asset: assetName,
-      address: checksumTreasury,
-      derivationIndex: 0,
-      derivationReference: "direct-treasury",
-      createdAt: (/* @__PURE__ */ new Date()).toISOString()
-    };
-  }
-  const existing = await db.query(
-    `
-    SELECT id, user_id, chain_id, asset, address, derivation_index, derivation_reference, created_at
-    FROM user_deposit_addresses
-    WHERE user_id = $1 AND chain_id = $2
-    LIMIT 1
-    `,
-    [userId, chainId]
-  );
-  if (existing.rows.length > 0) {
-    const row2 = existing.rows[0];
-    return {
-      id: row2.id,
-      userId: row2.user_id,
-      chainId: Number(row2.chain_id),
-      asset: row2.asset || assetName,
-      address: row2.address,
-      derivationIndex: Number(row2.derivation_index || 0),
-      derivationReference: row2.derivation_reference,
-      createdAt: new Date(row2.created_at).toISOString()
-    };
-  }
-  const seqRes = await db.query(
-    `SELECT nextval('bsc_deposit_derivation_index_seq') AS next_val`
-  );
-  const derivationIndex = Number(seqRes.rows[0]?.next_val ?? 0);
-  const derivedXpub = getDepositAddressXpub();
-  const { address, derivationReference } = deriveAddressFromXpub(derivedXpub, derivationIndex);
-  const id = uuidv422();
-  const insertRes = await db.query(
-    `
-    INSERT INTO user_deposit_addresses (
-      id, user_id, chain_id, asset, address, derivation_index, derivation_reference, created_at
-    )
-    VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP)
-    ON CONFLICT (user_id, chain_id, asset) DO UPDATE
-      SET address = EXCLUDED.address
-    RETURNING id, user_id, chain_id, asset, address, derivation_index, derivation_reference, created_at
-    `,
-    [id, userId, chainId, assetName, address, derivationIndex, derivationReference]
-  );
-  const row = insertRes.rows[0];
+  const checksumTreasury = ethers6.getAddress(treasury);
   return {
-    id: row.id,
-    userId: row.user_id,
-    chainId: Number(row.chain_id),
-    asset: row.asset,
-    address: row.address,
-    derivationIndex: Number(row.derivation_index),
-    derivationReference: row.derivation_reference,
-    createdAt: new Date(row.created_at).toISOString()
+    id: `treasury-${userId}-${assetName}`,
+    userId,
+    chainId,
+    asset: assetName,
+    address: checksumTreasury,
+    derivationIndex: 0,
+    derivationReference: "direct-treasury",
+    createdAt: (/* @__PURE__ */ new Date()).toISOString()
   };
 }
-async function findUserByDepositAddress(address, chainId = BSC_CONFIG.CHAIN_ID) {
-  const db = await getDb();
-  if (!address || !ethers6.isAddress(address)) return null;
-  const normalized = ethers6.getAddress(address);
-  const res = await db.query(
-    `
-    SELECT user_id 
-    FROM user_deposit_addresses 
-    WHERE LOWER(address) = LOWER($1) AND chain_id = $2
-    LIMIT 1
-    `,
-    [normalized, chainId]
-  );
-  if (res.rows.length === 0) return null;
-  return res.rows[0].user_id;
+async function findUserByDepositAddress(_address, _chainId) {
+  return null;
 }
 
 // src/server/services/bscDepositService.ts
 init_db();
 init_bscConfig();
 init_idGenerator();
-import { v4 as uuidv423 } from "uuid";
+import { v4 as uuidv422 } from "uuid";
 init_walletLedgerService();
 init_notificationService();
 init_bscRpcProvider();
@@ -15279,7 +14925,7 @@ async function processBlockchainDepositEvent(params) {
     let depositRow;
     const now = /* @__PURE__ */ new Date();
     if (existing.rows.length === 0) {
-      const id = uuidv423();
+      const id = uuidv422();
       const publicDepositId = generateDepositPublicId();
       const initialStatus = isMatured ? "CONFIRMED" : confirmations > 0 ? "CONFIRMING" : "DETECTED";
       const confirmedAt = isMatured ? now : null;
@@ -15532,7 +15178,7 @@ init_db();
 init_idGenerator();
 init_notificationService();
 import { ethers as ethers9 } from "ethers";
-import { v4 as uuidv424 } from "uuid";
+import { v4 as uuidv423 } from "uuid";
 var DepositTransactionError = class extends Error {
   constructor(code, statusCode, message) {
     super(message);
@@ -15871,7 +15517,7 @@ depositRouter.post("/submit-txhash", requireAuth, depositLimiter, async (req, re
     let actualPublicDepositId = "";
     try {
       await db.transaction(async (trx) => {
-        const depositId = uuidv424();
+        const depositId = uuidv423();
         const publicDepositId = generateDepositPublicId();
         const insertRes = await trx.query(
           `
@@ -15908,7 +15554,7 @@ depositRouter.post("/submit-txhash", requireAuth, depositLimiter, async (req, re
         if (actualUserId !== userId) {
           throw new DepositTransactionError("DUPLICATE_TX_USER_MISMATCH", 409, "Transaction already linked to another user account.");
         }
-        const ledgerId = uuidv424();
+        const ledgerId = uuidv423();
         const publicTxnId = generateLedgerTransactionPublicId();
         const ledgerRes = await trx.query(
           `
@@ -16114,7 +15760,7 @@ import { Router as Router17 } from "express";
 // src/server/services/coinSwapService.ts
 init_db();
 init_idGenerator();
-import { v4 as uuidv425 } from "uuid";
+import { v4 as uuidv424 } from "uuid";
 init_walletLedgerService();
 init_notificationService();
 var userSwapLocks = /* @__PURE__ */ new Map();
@@ -16272,7 +15918,7 @@ async function executeCoinToUsdtSwap(params) {
     if (usdtAmount <= 0) {
       throw new Error("INVALID_SWAP_CALCULATION: Resulting USDT amount must be greater than zero.");
     }
-    const id = uuidv425();
+    const id = uuidv424();
     const publicSwapId = generateSwapPublicId();
     const now = /* @__PURE__ */ new Date();
     const insertRes = await db.query(
@@ -16441,8 +16087,8 @@ async function executeUsdtToCoinSwap(params) {
       err.code = "SWAP_DISABLED";
       throw err;
     }
-    const { getWalletSummary: getWalletSummary2, postLedgerDebit: postLedgerDebit2 } = await Promise.resolve().then(() => (init_walletLedgerService(), walletLedgerService_exports));
-    const wallet = await getWalletSummary2(userId);
+    const { getWalletSummary: getWalletSummary3, postLedgerDebit: postLedgerDebit2 } = await Promise.resolve().then(() => (init_walletLedgerService(), walletLedgerService_exports));
+    const wallet = await getWalletSummary3(userId);
     if (usdtAmount > wallet.availableBalance) {
       const err = new Error(
         `INSUFFICIENT_USDT_BALANCE: Requested swap of $${usdtAmount.toFixed(2)} USDT exceeds available balance of $${wallet.availableBalance.toFixed(2)} USDT.`
@@ -16454,7 +16100,7 @@ async function executeUsdtToCoinSwap(params) {
     if (coinAmount <= 0) {
       throw new Error("INVALID_SWAP_CALCULATION: Resulting coin amount must be greater than zero.");
     }
-    const id = uuidv425();
+    const id = uuidv424();
     const publicSwapId = generateSwapPublicId();
     const now = /* @__PURE__ */ new Date();
     await postLedgerDebit2({
@@ -16488,7 +16134,7 @@ async function executeUsdtToCoinSwap(params) {
         now
       ]
     );
-    const updatedWallet = await getWalletSummary2(userId);
+    const updatedWallet = await getWalletSummary3(userId);
     const updatedCoinBal = await getUserCoinBalance(userId);
     const swapRow = insertRes.rows[0];
     return {
@@ -16581,20 +16227,7 @@ swapRouter.get("/history", requireAuth, async (req, res) => {
 swapRouter.post("/coin-to-usdt", requireAuth, swapLimiter, async (req, res) => {
   try {
     const user = req.user;
-    const { coinAmount, idempotencyKey, captchaToken, captchaAnswer, captchaVisualCode } = req.body;
-    const clientIp = req.headers["x-forwarded-for"]?.split(",")[0]?.trim() || req.ip || "127.0.0.1";
-    const captchaResult = await verifyCaptcha(captchaToken, "SWAP", clientIp, {
-      answer: captchaAnswer,
-      visualCode: captchaVisualCode,
-      userId: user.id
-    });
-    if (!captchaResult.success) {
-      res.status(403).json({
-        error: "CAPTCHA_REQUIRED",
-        message: "Security authorization check failed. Please complete the CAPTCHA verification to execute swap."
-      });
-      return;
-    }
+    const { coinAmount, idempotencyKey } = req.body;
     const parsedAmount = typeof coinAmount === "number" ? coinAmount : parseFloat(coinAmount);
     if (isNaN(parsedAmount) || !isFinite(parsedAmount) || parsedAmount <= 0) {
       res.status(400).json({
@@ -16642,20 +16275,7 @@ swapRouter.post("/coin-to-usdt", requireAuth, swapLimiter, async (req, res) => {
 swapRouter.post("/usdt-to-coin", requireAuth, swapLimiter, async (req, res) => {
   try {
     const user = req.user;
-    const { usdtAmount, idempotencyKey, captchaToken, captchaAnswer, captchaVisualCode } = req.body;
-    const clientIp = req.headers["x-forwarded-for"]?.split(",")[0]?.trim() || req.ip || "127.0.0.1";
-    const captchaResult = await verifyCaptcha(captchaToken, "SWAP", clientIp, {
-      answer: captchaAnswer,
-      visualCode: captchaVisualCode,
-      userId: user.id
-    });
-    if (!captchaResult.success) {
-      res.status(403).json({
-        error: "CAPTCHA_REQUIRED",
-        message: "Security authorization check failed. Please complete the CAPTCHA verification to execute swap."
-      });
-      return;
-    }
+    const { usdtAmount, idempotencyKey } = req.body;
     const parsedAmount = typeof usdtAmount === "number" ? usdtAmount : parseFloat(usdtAmount);
     if (isNaN(parsedAmount) || !isFinite(parsedAmount) || parsedAmount <= 0) {
       res.status(400).json({
@@ -16911,7 +16531,7 @@ notificationRouter.get("/push-status", requireAuth, async (req, res) => {
 // src/server/routes/emailWebhookRoutes.ts
 init_emailService();
 import { Router as Router19 } from "express";
-import crypto4 from "crypto";
+import crypto3 from "crypto";
 var emailWebhookRouter = Router19();
 function verifyCryptographicSignature(rawBody, headers, secret) {
   const svixId = headers["svix-id"] || headers["webhook-id"];
@@ -16949,15 +16569,15 @@ function verifyCryptographicSignature(rawBody, headers, secret) {
   }
   const signatures = svixSignature.split(" ");
   for (const key of keyCandidates) {
-    const hmacHex = crypto4.createHmac("sha256", key).update(toSign).digest("hex");
-    const hmacBase64 = crypto4.createHmac("sha256", key).update(toSign).digest("base64");
+    const hmacHex = crypto3.createHmac("sha256", key).update(toSign).digest("hex");
+    const hmacBase64 = crypto3.createHmac("sha256", key).update(toSign).digest("base64");
     for (const sig of signatures) {
       const parts = sig.split(",");
       const targetSig = parts.length === 2 ? parts[1] : sig;
       try {
         const expectedBuf = Buffer.from(targetSig, "hex");
         const computedBuf = Buffer.from(hmacHex, "hex");
-        if (expectedBuf.length === computedBuf.length && crypto4.timingSafeEqual(expectedBuf, computedBuf)) {
+        if (expectedBuf.length === computedBuf.length && crypto3.timingSafeEqual(expectedBuf, computedBuf)) {
           return true;
         }
       } catch {
@@ -16965,7 +16585,7 @@ function verifyCryptographicSignature(rawBody, headers, secret) {
       try {
         const expectedBuf = Buffer.from(targetSig, "base64");
         const computedBuf = Buffer.from(hmacBase64, "base64");
-        if (expectedBuf.length === computedBuf.length && crypto4.timingSafeEqual(expectedBuf, computedBuf)) {
+        if (expectedBuf.length === computedBuf.length && crypto3.timingSafeEqual(expectedBuf, computedBuf)) {
           return true;
         }
       } catch {
@@ -17074,83 +16694,6 @@ diagnosticRouter.get("/health", async (req, res) => {
   }
 });
 
-// src/server/routes/captchaRoutes.ts
-import { Router as Router21 } from "express";
-var captchaRouter = Router21();
-captchaRouter.get("/config", (req, res) => {
-  const config = getCaptchaConfig();
-  res.json({
-    enabled: config.enabled,
-    mode: config.mode,
-    siteKey: config.siteKey,
-    projectId: config.projectId,
-    thresholdScore: config.thresholdScore,
-    enforcedActions: config.enforcedActions
-  });
-});
-captchaRouter.get("/challenge", (req, res) => {
-  const action = req.query.action || "GENERAL";
-  const clientIp = req.headers["x-forwarded-for"]?.split(",")[0]?.trim() || req.ip || "127.0.0.1";
-  const challenge = generateChallenge(action, clientIp);
-  res.json({
-    token: challenge.token,
-    challengeId: challenge.challengeId,
-    question: challenge.question,
-    visualCode: challenge.visualCode,
-    expiresAt: challenge.expiresAt
-  });
-});
-captchaRouter.post("/verify", async (req, res) => {
-  const { token, action = "GENERAL", answer, visualCode } = req.body;
-  const clientIp = req.headers["x-forwarded-for"]?.split(",")[0]?.trim() || req.ip || "127.0.0.1";
-  const userId = req.user?.id;
-  const result = await verifyCaptcha(token, action, clientIp, { answer, visualCode, userId });
-  if (!result.success) {
-    return res.status(400).json({
-      success: false,
-      message: "CAPTCHA verification failed.",
-      result
-    });
-  }
-  res.json({
-    success: true,
-    verificationToken: `PHX_CAPTCHA_VERIFIED_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`,
-    result
-  });
-});
-captchaRouter.get("/admin/stats", requireAuth, async (req, res) => {
-  const isAdmin = isUserAdmin(req.user);
-  if (!isAdmin) {
-    return res.status(403).json({ error: "UNAUTHORIZED_ACCESS", message: "Admin permissions required." });
-  }
-  const stats = await getCaptchaStatistics();
-  res.json(stats);
-});
-captchaRouter.post("/admin/config", requireAuth, async (req, res) => {
-  const isAdmin = isUserAdmin(req.user);
-  if (!isAdmin) {
-    return res.status(403).json({ error: "UNAUTHORIZED_ACCESS", message: "Admin permissions required." });
-  }
-  const updated = await updateCaptchaConfig(req.body);
-  res.json({
-    success: true,
-    message: "CAPTCHA security configuration updated successfully.",
-    config: updated
-  });
-});
-captchaRouter.post("/admin/test", requireAuth, async (req, res) => {
-  const isAdmin = isUserAdmin(req.user);
-  if (!isAdmin) {
-    return res.status(403).json({ error: "UNAUTHORIZED_ACCESS", message: "Admin permissions required." });
-  }
-  const challenge = generateChallenge("ADMIN_SIMULATION", "127.0.0.1");
-  res.json({
-    success: true,
-    message: "Simulated challenge generated successfully.",
-    challenge
-  });
-});
-
 // server.ts
 init_db();
 
@@ -17247,7 +16790,6 @@ async function startServer() {
   app.use("/api/swap", swapRouter);
   app.use("/api/notifications", notificationRouter);
   app.use("/api/admin/economics", economicRouter);
-  app.use("/api/captcha", captchaRouter);
   app.use("/api/webhooks/email", emailWebhookRouter);
   app.use("/api/diagnostics", diagnosticRouter);
   app.use("/api/admin", adminRouter);
@@ -17288,8 +16830,6 @@ async function startServer() {
   });
   getDb().then(() => {
     console.log("[Server] Database and referral migrations initialized.");
-    initializeCaptchaConfig().catch(() => {
-    });
     startMatchingScheduler();
   }).catch((err) => {
     console.error("[Server] Failed to initialize database on startup:", err);

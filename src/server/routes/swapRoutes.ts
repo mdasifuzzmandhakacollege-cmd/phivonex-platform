@@ -1,7 +1,6 @@
 import { Router, Response } from 'express';
 import { requireAuth, AuthRequest } from '../middleware/authMiddleware';
 import { swapLimiter } from '../middleware/rateLimiter';
-import { verifyCaptcha } from '../services/captchaService';
 import {
   getSwapQuote,
   executeCoinToUsdtSwap,
@@ -99,21 +98,7 @@ swapRouter.get('/history', requireAuth, async (req: AuthRequest, res: Response):
 swapRouter.post('/coin-to-usdt', requireAuth, swapLimiter, async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const user = req.user!;
-    const { coinAmount, idempotencyKey, captchaToken, captchaAnswer, captchaVisualCode } = req.body;
-    const clientIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.ip || '127.0.0.1';
-
-    const captchaResult = await verifyCaptcha(captchaToken, 'SWAP', clientIp, {
-      answer: captchaAnswer,
-      visualCode: captchaVisualCode,
-      userId: user.id,
-    });
-    if (!captchaResult.success) {
-      res.status(403).json({
-        error: 'CAPTCHA_REQUIRED',
-        message: 'Security authorization check failed. Please complete the CAPTCHA verification to execute swap.',
-      });
-      return;
-    }
+    const { coinAmount, idempotencyKey } = req.body;
 
     const parsedAmount = typeof coinAmount === 'number' ? coinAmount : parseFloat(coinAmount);
     if (isNaN(parsedAmount) || !isFinite(parsedAmount) || parsedAmount <= 0) {
@@ -173,21 +158,7 @@ swapRouter.post('/coin-to-usdt', requireAuth, swapLimiter, async (req: AuthReque
 swapRouter.post('/usdt-to-coin', requireAuth, swapLimiter, async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const user = req.user!;
-    const { usdtAmount, idempotencyKey, captchaToken, captchaAnswer, captchaVisualCode } = req.body;
-    const clientIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.ip || '127.0.0.1';
-
-    const captchaResult = await verifyCaptcha(captchaToken, 'SWAP', clientIp, {
-      answer: captchaAnswer,
-      visualCode: captchaVisualCode,
-      userId: user.id,
-    });
-    if (!captchaResult.success) {
-      res.status(403).json({
-        error: 'CAPTCHA_REQUIRED',
-        message: 'Security authorization check failed. Please complete the CAPTCHA verification to execute swap.',
-      });
-      return;
-    }
+    const { usdtAmount, idempotencyKey } = req.body;
 
     const parsedAmount = typeof usdtAmount === 'number' ? usdtAmount : parseFloat(usdtAmount);
     if (isNaN(parsedAmount) || !isFinite(parsedAmount) || parsedAmount <= 0) {

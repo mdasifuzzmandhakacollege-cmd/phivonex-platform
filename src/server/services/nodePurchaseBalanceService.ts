@@ -123,7 +123,7 @@ export async function processNodePurchaseWithAssetBalance(
 }> {
   return withUserLock(userId, async () => {
     const db = await getDb();
-    const selectedAsset = asset.toUpperCase() === 'BNB' ? 'BNB' : 'USDT';
+    const selectedAsset: 'BNB' | 'USDT' = asset.toUpperCase() === 'BNB' ? 'BNB' : 'USDT';
 
     // 1. Perform balance & rate validation
     const validation = await validateUserNodePurchaseBalances(userId);
@@ -171,7 +171,7 @@ export async function processNodePurchaseWithAssetBalance(
     try {
       reservation = await createNodeReservation(
         userId,
-        `node_bal_req_${selectedAsset}_${userId}_${Date.now()}`,
+        `node_bal_req_${selectedAsset}_${userId}_${uuidv4()}`,
         `DEPOSIT_${selectedAsset}`
       );
     } catch (err: any) {
@@ -199,67 +199,68 @@ export async function processNodePurchaseWithAssetBalance(
     }
 
     // 4. Atomic Execution: DB Transaction containing Ledger Debit + Settlement
-    await db.query('BEGIN');
     try {
-      const orderId = reservation.order.id || reservation.order.publicOrderId;
+      const result = await db.transaction(async (trx) => {
+        const orderId = reservation.order.id || reservation.order.publicOrderId;
 
-      // Duplicate debit check inside transaction
-      const existingDebitRes = await db.query(
-        `SELECT id FROM financial_ledger_entries WHERE source_id = $1 AND source_type = 'NODE_PURCHASE'`,
-        [orderId]
-      );
-
-      let debitTxnId = uuidv4();
-      let publicTxnId = generateLedgerTransactionPublicId();
-
-      if (existingDebitRes.rows.length === 0) {
-        await db.query(
-          `
-          INSERT INTO financial_ledger_entries (
-            id, public_txn_id, user_id, entry_type, source_type, source_id,
-            source_ref, description, amount, currency, status, created_at
-          )
-          VALUES ($1, $2, $3, 'DEBIT', 'NODE_PURCHASE', $4, $5, $6, $7, $8, 'SETTLED', CURRENT_TIMESTAMP)
-          `,
-          [
-            debitTxnId,
-            publicTxnId,
-            userId,
-            orderId,
-            reservation.order.publicNodeId,
-            `Genesis Node ${reservation.order.publicNodeId} activation paid via ${selectedAsset} deposit balance`,
-            requiredAmount,
-            selectedAsset,
-          ]
+        // Duplicate debit check inside transaction
+        const existingDebitRes = await trx.query(
+          `SELECT id FROM financial_ledger_entries WHERE source_id = $1 AND source_type = 'NODE_PURCHASE'`,
+          [orderId]
         );
-      } else {
-        debitTxnId = existingDebitRes.rows[0].id;
-      }
 
-      // Settle node order contract inside same transaction
-      const settlement = await settleNodeOrder(
-        userId,
-        reservation.order.publicOrderId,
-        `DEPOSIT_PAYMENT_${selectedAsset}_${publicTxnId}`,
-        db
-      );
+        let debitTxnId = uuidv4();
+        let publicTxnId = generateLedgerTransactionPublicId();
 
-      await db.query('COMMIT');
+        if (existingDebitRes.rows.length === 0) {
+          await trx.query(
+            `
+            INSERT INTO financial_ledger_entries (
+              id, public_txn_id, user_id, entry_type, source_type, source_id,
+              source_ref, description, amount, currency, status, created_at
+            )
+            VALUES ($1, $2, $3, 'DEBIT', 'NODE_PURCHASE', $4, $5, $6, $7, $8, 'SETTLED', CURRENT_TIMESTAMP)
+            `,
+            [
+              debitTxnId,
+              publicTxnId,
+              userId,
+              orderId,
+              reservation.order.publicNodeId,
+              `Genesis Node ${reservation.order.publicNodeId} activation paid via ${selectedAsset} deposit balance`,
+              requiredAmount,
+              selectedAsset,
+            ]
+          );
+        } else {
+          debitTxnId = existingDebitRes.rows[0].id;
+        }
 
-      const remainingBalance = Math.max(0, Number((availableBalance - requiredAmount).toFixed(4)));
+        // Settle node order contract inside same transaction
+        const settlement = await settleNodeOrder(
+          userId,
+          reservation.order.publicOrderId,
+          `DEPOSIT_PAYMENT_${selectedAsset}_${publicTxnId}`,
+          trx
+        );
 
-      return {
-        success: true,
-        assetUsed: selectedAsset,
-        deductedAmount: requiredAmount,
-        remainingAssetBalance: remainingBalance,
-        order: settlement.order,
-        node: settlement.node,
-        isDuplicate: settlement.isDuplicate,
-      };
-    } catch (err) {
-      await db.query('ROLLBACK');
-      throw err;
+        const remainingBalance = Math.max(0, Number((availableBalance - requiredAmount).toFixed(4)));
+
+        return {
+          success: true,
+          assetUsed: selectedAsset,
+          deductedAmount: requiredAmount,
+          remainingAssetBalance: remainingBalance,
+          order: settlement.order,
+          node: settlement.node,
+          isDuplicate: settlement.isDuplicate,
+        };
+      });
+
+      return result;
+    } catch (txErr) {
+      console.error('[ProcessNodePurchase TX Error]', txErr);
+      throw txErr;
     }
   });
 }

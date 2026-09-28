@@ -144,7 +144,7 @@ export const EconomicControls: React.FC = () => {
 
     if (config.configKey === 'INTERNAL_COIN_PRICE_USDT') {
       const val = config.configValue || {};
-      setCoinPriceInput(String(val.priceUsdt || 0.10));
+      setCoinPriceInput(val.priceUsdt ? String(val.priceUsdt) : '');
       setCoinSwapEnabledInput(val.swapEnabled !== false);
       setEditValueInput(JSON.stringify(config.configValue, null, 2));
     } else if (typeof config.configValue === 'object' && config.configValue !== null) {
@@ -783,8 +783,14 @@ export const EconomicControls: React.FC = () => {
                 <span className="text-[10px] font-mono text-[#00CFFF]">v{internalCoinPrice?.version || 1}</span>
               </div>
               <div className="text-3xl font-extrabold font-mono text-sky-400 mt-1">
-                ${Number(internalCoinPrice?.configValue?.priceUsdt || 0.10).toFixed(4)}{' '}
-                <span className="text-xs text-white">USDT</span>
+                {internalCoinPrice?.configValue?.priceUsdt ? (
+                  <>
+                    ${Number(internalCoinPrice.configValue.priceUsdt).toFixed(4)}{' '}
+                    <span className="text-xs text-white">USDT</span>
+                  </>
+                ) : (
+                  <span className="text-sm font-semibold text-amber-400">Rate Not Configured</span>
+                )}
               </div>
               <p className="text-[11px] text-[#98A2B3] mt-1">
                 Authoritative exchange multiplier used when calculating coin swap payouts.

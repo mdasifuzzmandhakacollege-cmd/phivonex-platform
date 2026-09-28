@@ -238,7 +238,7 @@ export const ROADMAP_PHASES = [
     badge: 'Planned',
     status: 'upcoming',
     items: [
-      'On-chain parameter governance for active node operators',
+      'Protocol parameter governance for active node operators',
       'Layer-2 zero-knowledge rollups for micro-transaction settlement',
       'Global enterprise node federation partnerships',
       'Autonomous network reconciliation & audit oracle engine',

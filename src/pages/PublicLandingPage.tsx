@@ -86,7 +86,7 @@ export const PublicLandingPage: React.FC<PublicLandingPageProps> = ({ onNavigate
     nodeCap: summary.genesisNodeCap || 10000,
     activeNodes: summary.activeNodes,
     networkTransactions: summary.totalNetworkTransactions || 0,
-    conversionRate: typeof summary.conversionRateUsd === 'number' ? summary.conversionRateUsd : 0.10,
+    conversionRate: typeof summary.conversionRateUsd === 'number' && summary.conversionRateUsd > 0 ? summary.conversionRateUsd : null,
     epoch: summary.currentRewardEpoch || 1,
     allocatedPercent: summary.allocationPercent || 0,
     availableNodes: summary.availableNodes || 0
@@ -340,7 +340,7 @@ export const PublicLandingPage: React.FC<PublicLandingPageProps> = ({ onNavigate
             <div className="space-y-1 text-center md:text-left border-l border-[#00CFFF]/10 pl-0 md:pl-8">
               <span className="text-xs text-slate-500 font-mono uppercase tracking-wider">Ecosystem Swaps (Rate)</span>
               <div className="text-2xl sm:text-3xl font-extrabold text-white font-mono tracking-tight tabular-nums">
-                ${stats.conversionRate.toFixed(2)} USDT
+                {stats.conversionRate !== null ? `$${stats.conversionRate.toFixed(2)} USDT` : 'Rate Unavailable'}
               </div>
             </div>
 
@@ -526,7 +526,7 @@ export const PublicLandingPage: React.FC<PublicLandingPageProps> = ({ onNavigate
                 <div className="text-center py-6 bg-[#05070C]/80 border border-[#00CFFF]/5 rounded-xl space-y-2">
                   <span className="text-xs text-slate-500 font-mono">CONVERSION RATIO</span>
                   <div className="text-3xl font-extrabold text-white font-mono tracking-tight tabular-nums">
-                    1.00 PHIVO = ${stats.conversionRate.toFixed(2)} USDT
+                    {stats.conversionRate !== null ? `1.00 PHIVO = $${stats.conversionRate.toFixed(2)} USDT` : 'Rate Not Configured'}
                   </div>
                   <span className="text-[10px] text-slate-500 font-mono uppercase">Current Configured Rate</span>
                 </div>
@@ -674,11 +674,11 @@ export const PublicLandingPage: React.FC<PublicLandingPageProps> = ({ onNavigate
                         <span className="w-1.5 h-1.5 bg-[#00CFFF] rounded-full" />
                         {evt.title}
                       </div>
-                      <p className="text-xs text-slate-400 max-w-2xl">{evt.details}</p>
+                      <p className="text-xs text-slate-400 max-w-2xl">{evt.description}</p>
                     </div>
 
                     <div className="flex items-center gap-4 text-xs font-mono text-slate-500 shrink-0 self-end sm:self-center">
-                      <span>BLOCK #{evt.blockNumber}</span>
+                      {evt.publicId && <span>ID #{evt.publicId}</span>}
                       <span aria-hidden="true">·</span>
                       <span>{formatRelativeTime(evt.timestamp)}</span>
                     </div>

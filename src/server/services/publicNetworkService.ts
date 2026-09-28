@@ -15,9 +15,9 @@ export interface PublicNetworkSummary {
   allocationPercent: number;
   currentRewardEpoch: number;
   totalNetworkTransactions: number;
-  networkStatus: 'OPERATIONAL' | 'HEALTHY' | 'SYNCHRONIZED';
+  networkStatus: 'OPERATIONAL' | 'HEALTHY' | 'SYNCHRONIZED' | 'DEGRADED' | 'UNKNOWN';
   updatedAt: string;
-  conversionRateUsd?: number;
+  conversionRateUsd?: number | null;
 }
 
 export interface PublicNetworkEvent {
@@ -75,21 +75,29 @@ export async function getPublicNetworkSummary(): Promise<PublicNetworkSummary> {
   );
   const totalNetworkTransactions = Number(txnRes.rows[0]?.count || 0);
 
-  // 4. Query live INTERNAL_COIN_PRICE_USDT swap rate configuration
-  let conversionRateUsd = 0.10;
+  // 4. Query live INTERNAL_COIN_PRICE_USDT swap rate configuration (no invented fallback)
+  let conversionRateUsd: number | null = null;
   try {
-    const configRes = await db.query<{ config_value: string }>(
-      `SELECT config_value FROM system_economic_configs WHERE config_key = 'INTERNAL_COIN_PRICE_USDT'`
+    const configRes = await db.query<{ config_value: string; status: string }>(
+      `SELECT config_value, status FROM system_economic_configs WHERE config_key = 'INTERNAL_COIN_PRICE_USDT'`
     );
-    if (configRes.rows.length > 0) {
+    if (configRes.rows.length > 0 && configRes.rows[0].status === 'ACTIVE') {
       const valStr = configRes.rows[0].config_value;
       const val = typeof valStr === 'string' ? JSON.parse(valStr) : valStr;
-      if (val && typeof val.priceUsdt === 'number') {
+      if (val && typeof val.priceUsdt === 'number' && val.priceUsdt > 0) {
         conversionRateUsd = val.priceUsdt;
       }
     }
   } catch (err) {
     console.warn('[Public API] Error loading INTERNAL_COIN_PRICE_USDT config value for summary:', err);
+  }
+
+  // 5. Verify real backend network/database health status
+  let networkStatus: 'OPERATIONAL' | 'HEALTHY' | 'SYNCHRONIZED' | 'DEGRADED' | 'UNKNOWN' = 'OPERATIONAL';
+  try {
+    await db.query('SELECT 1');
+  } catch {
+    networkStatus = 'DEGRADED';
   }
 
   return {
@@ -101,7 +109,7 @@ export async function getPublicNetworkSummary(): Promise<PublicNetworkSummary> {
     allocationPercent,
     currentRewardEpoch,
     totalNetworkTransactions,
-    networkStatus: 'OPERATIONAL',
+    networkStatus,
     updatedAt: new Date().toISOString(),
     conversionRateUsd,
   };
@@ -132,7 +140,7 @@ export async function getPublicNetworkEvents(limit = 20): Promise<PublicNetworkE
         id: `evt-node-${row.public_node_id}`,
         type: 'node.activated',
         title: `${row.public_node_id} Activated`,
-        description: `Genesis validator node ${row.public_node_id} successfully activated on-chain.`,
+        description: `Genesis validator node ${row.public_node_id} successfully activated on protocol ledger.`,
         timestamp: ts,
         publicId: row.public_node_id,
       });

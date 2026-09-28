@@ -9,9 +9,9 @@ export interface PublicNetworkSummaryData {
   allocationPercent: number;
   currentRewardEpoch: number;
   totalNetworkTransactions: number;
-  networkStatus: 'OPERATIONAL' | 'HEALTHY' | 'SYNCHRONIZED';
+  networkStatus: 'OPERATIONAL' | 'HEALTHY' | 'SYNCHRONIZED' | 'DEGRADED' | 'UNKNOWN';
   updatedAt: string;
-  conversionRateUsd?: number;
+  conversionRateUsd?: number | null;
 }
 
 export interface PublicNetworkEventItem {
@@ -32,9 +32,9 @@ const DEFAULT_SUMMARY: PublicNetworkSummaryData = {
   allocationPercent: 0,
   currentRewardEpoch: 1,
   totalNetworkTransactions: 0,
-  networkStatus: 'OPERATIONAL',
+  networkStatus: 'UNKNOWN',
   updatedAt: new Date().toISOString(),
-  conversionRateUsd: 0.10,
+  conversionRateUsd: null,
 };
 
 export function usePublicNetwork() {

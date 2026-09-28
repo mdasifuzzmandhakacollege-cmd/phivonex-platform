@@ -6,7 +6,6 @@ import { generatePublicId, generateReferralCode, normalizeReferralCode } from '.
 import { requireAuth, AuthRequest, isUserAdmin } from '../middleware/authMiddleware';
 import { authLimiter, loginLimiter, registrationLimiter, passwordResetLimiter } from '../middleware/rateLimiter';
 import { logSecurityEvent, parseUserAgentSummary } from '../utils/securityLogger';
-import { verifyCaptcha, getCaptchaConfig } from '../services/captchaService';
 
 const router = Router();
 
@@ -135,21 +134,8 @@ async function syncUserToFirebase(userData: {
  */
 router.post('/register/request-verification', registrationLimiter, async (req: Request, res: Response): Promise<void> => {
   try {
-    const { fullName, email, country, password, referralCode, phone, captchaToken, captchaAnswer, captchaVisualCode } = req.body;
+    const { fullName, email, country, password, referralCode, phone } = req.body;
     const clientIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.ip || '127.0.0.1';
-
-    // Verify Bot Defense CAPTCHA
-    const captchaResult = await verifyCaptcha(captchaToken, 'REGISTER', clientIp, {
-      answer: captchaAnswer,
-      visualCode: captchaVisualCode,
-    });
-    if (!captchaResult.success) {
-      res.status(403).json({
-        error: 'CAPTCHA_REQUIRED',
-        message: 'Security check failed. Please complete the CAPTCHA verification.',
-      });
-      return;
-    }
 
     // 1. Validation
     if (!fullName || typeof fullName !== 'string' || fullName.trim().length < 2) {
@@ -273,16 +259,21 @@ router.post('/register/request-verification', registrationLimiter, async (req: R
     const { sendVerificationCodeEmail } = await import('../services/emailService');
     const sent = await sendVerificationCodeEmail(normalizedEmail, rawCode);
 
-    if (!sent) {
-      console.warn(`[Auth API] Email broadcast completed with provider warnings.`);
+    if (!sent && process.env.NODE_ENV === 'production') {
+      res.status(500).json({
+        error: 'EMAIL_DELIVERY_FAILED',
+        message: 'Unable to send verification email at this time. Please try again later.',
+      });
+      return;
     }
 
+    const isProduction = process.env.NODE_ENV === 'production';
     res.status(200).json({
-      message: process.env.RESEND_API_KEY
+      message: process.env.RESEND_API_KEY || isProduction
         ? 'Verification code sent successfully to your email address.'
         : `Verification code generated: ${rawCode}`,
       email: normalizedEmail,
-      code: !process.env.RESEND_API_KEY ? rawCode : undefined,
+      code: (!process.env.RESEND_API_KEY && !isProduction) ? rawCode : undefined,
     });
   } catch (err) {
     console.error('[Auth API] Error in /register/request-verification:', err);
@@ -754,6 +745,14 @@ router.post('/google', authLimiter, async (req: Request, res: Response): Promise
       userRecord = existing.rows[0];
       userId = userRecord.id;
 
+      if (userRecord.status === 'SUSPENDED' || userRecord.status === 'LOCKED') {
+        res.status(403).json({
+          error: 'ACCOUNT_SUSPENDED',
+          message: 'This account has been suspended or locked. Please contact support.',
+        });
+        return;
+      }
+
       // Update last login
       await db.query(`UPDATE users SET last_login_at = CURRENT_TIMESTAMP WHERE id = $1`, [userId]);
     } else {
@@ -863,21 +862,8 @@ router.post('/google', authLimiter, async (req: Request, res: Response): Promise
  */
 router.post('/login', loginLimiter, async (req: Request, res: Response): Promise<void> => {
   try {
-    const { identifier, password, rememberMe = true, captchaToken, captchaAnswer, captchaVisualCode } = req.body;
+    const { identifier, password, rememberMe = true } = req.body;
     const clientIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.ip || '127.0.0.1';
-
-    // Verify Bot Defense CAPTCHA
-    const captchaResult = await verifyCaptcha(captchaToken, 'LOGIN', clientIp, {
-      answer: captchaAnswer,
-      visualCode: captchaVisualCode,
-    });
-    if (!captchaResult.success) {
-      res.status(403).json({
-        error: 'CAPTCHA_REQUIRED',
-        message: 'Security check failed. Please complete the CAPTCHA verification.',
-      });
-      return;
-    }
 
     if (!identifier || !password) {
       res.status(400).json({

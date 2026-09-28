@@ -1,7 +1,7 @@
 import { getDb } from '../db/db';
 import { v4 as uuidv4 } from 'uuid';
 import { generateWithdrawalPublicId } from '../utils/idGenerator';
-import { getWalletSummary, postLedgerDebit, postLedgerReversal } from './walletLedgerService';
+import { getWalletSummary, postLedgerDebit, postLedgerReversal, syncUserLedger } from './walletLedgerService';
 import { notifyWithdrawalStatus } from './notificationService';
 
 export type WithdrawalStatus =
@@ -133,13 +133,36 @@ export async function logWithdrawalStateTransition(params: {
 const userLocks = new Map<string, Promise<any>>();
 
 function withUserLock<T>(userId: string, fn: () => Promise<T>): Promise<T> {
-  const previousLock = userLocks.get(userId) || Promise.resolve();
-  const res = previousLock.then(
-    () => fn(),
-    () => fn()
+  const currentLock = userLocks.get(userId) || Promise.resolve();
+  let releaseLock: () => void;
+  const newLock = new Promise<void>((resolve) => {
+    releaseLock = resolve;
+  });
+
+  userLocks.set(userId, currentLock.then(() => newLock));
+
+  return currentLock.then(
+    async () => {
+      try {
+        return await fn();
+      } finally {
+        releaseLock!();
+        if (userLocks.get(userId) === newLock) {
+          userLocks.delete(userId);
+        }
+      }
+    },
+    async () => {
+      try {
+        return await fn();
+      } finally {
+        releaseLock!();
+        if (userLocks.get(userId) === newLock) {
+          userLocks.delete(userId);
+        }
+      }
+    }
   );
-  userLocks.set(userId, res.catch(() => {}));
-  return res;
 }
 
 export async function getMinWithdrawalAmount(): Promise<number> {
@@ -194,137 +217,175 @@ export async function createWithdrawalRequest(params: {
       throw new Error('INVALID_DESTINATION_REF: Destination address or reference details are required.');
     }
 
+    const destRef = destinationReference.trim();
+    const destTypeUpper = destinationType.trim().toUpperCase();
+    if (destTypeUpper.includes('USDT') || destTypeUpper.includes('BEP20') || destTypeUpper.includes('BSC') || destTypeUpper.includes('TRC20')) {
+      if (destTypeUpper.includes('TRC20')) {
+        if (!destRef.startsWith('T') || destRef.length < 30) {
+          throw new Error(`INVALID_DESTINATION_ADDRESS: '${destRef}' is not a valid TRC-20 address.`);
+        }
+      } else {
+        if (!destRef.startsWith('0x') || destRef.length !== 42 || !/^0x[a-fA-F0-9]{40}$/.test(destRef)) {
+          throw new Error(`INVALID_DESTINATION_ADDRESS: '${destRef}' is not a valid BSC/BEP-20 (EVM) destination address.`);
+        }
+      }
+    }
+
     const db = await getDb();
 
-    // 1. Check idempotency key if provided
-    const cleanIdempotencyKey = idempotencyKey ? idempotencyKey.trim() : null;
-    if (cleanIdempotencyKey) {
-      const existing = await db.query(
-        `SELECT * FROM withdrawals WHERE user_id = $1 AND idempotency_key = $2`,
-        [userId, cleanIdempotencyKey]
-      );
-      if (existing.rows.length > 0) {
-        return mapRowToWithdrawalRecord(existing.rows[0]);
+    return db.transaction(async (trx) => {
+      // Lock user row for concurrency serialization
+      await trx.query(`SELECT id FROM users WHERE id = $1 FOR UPDATE`, [userId]);
+
+      // 1. Check idempotency key if provided
+      const cleanIdempotencyKey = idempotencyKey ? idempotencyKey.trim() : null;
+      if (cleanIdempotencyKey) {
+        const existing = await trx.query(
+          `SELECT * FROM withdrawals WHERE user_id = $1 AND idempotency_key = $2`,
+          [userId, cleanIdempotencyKey]
+        );
+        if (existing.rows.length > 0) {
+          return mapRowToWithdrawalRecord(existing.rows[0]);
+        }
       }
-    }
 
-    // 2. Duplicate submission protection (prevent same amount & destination within 5 seconds)
-    const recentDuplicate = await db.query(
-      `
-      SELECT * FROM withdrawals
-      WHERE user_id = $1
-        AND amount = $2
-        AND destination_reference = $3
-        AND status = 'PENDING'
-        AND created_at > NOW() - INTERVAL '5 seconds'
-      `,
-      [userId, cleanAmount, destinationReference.trim()]
-    );
-
-    if (recentDuplicate.rows.length > 0) {
-      return mapRowToWithdrawalRecord(recentDuplicate.rows[0]);
-    }
-
-    // 3. Balance Validation & Reservation (Authoritative Server Check)
-    const walletSummary = await getWalletSummary(userId);
-    if (cleanAmount > walletSummary.availableBalance) {
-      const err = new Error(
-        `INSUFFICIENT_BALANCE: Requested withdrawal amount ($${cleanAmount.toFixed(2)}) exceeds available eligible ledger balance ($${walletSummary.availableBalance.toFixed(2)}).`
+      // 2. Duplicate submission protection (prevent same amount & destination within 5 seconds)
+      const recentDuplicate = await trx.query(
+        `
+        SELECT * FROM withdrawals
+        WHERE user_id = $1
+          AND amount = $2
+          AND destination_reference = $3
+          AND status = 'PENDING'
+          AND created_at > NOW() - INTERVAL '5 seconds'
+        `,
+        [userId, cleanAmount, destinationReference.trim()]
       );
-      (err as any).code = 'INSUFFICIENT_BALANCE';
-      (err as any).availableBalance = walletSummary.availableBalance;
-      throw err;
-    }
 
-    const id = uuidv4();
-    const publicWithdrawalId = generateWithdrawalPublicId();
-    const now = new Date();
+      if (recentDuplicate.rows.length > 0) {
+        return mapRowToWithdrawalRecord(recentDuplicate.rows[0]);
+      }
 
-    // 4. Create Withdrawal Record
-    const insertRes = await db.query(
-      `
-      INSERT INTO withdrawals (
-        id, public_withdrawal_id, user_id, amount, currency,
-        destination_type, destination_reference, status,
-        requested_at, idempotency_key, created_at, updated_at
-      )
-      VALUES ($1, $2, $3, $4, 'USD', $5, $6, 'PENDING', $7, $8, $7, $7)
-      RETURNING *
-      `,
-      [
-        id,
-        publicWithdrawalId,
-        userId,
-        cleanAmount,
-        destinationType.trim(),
-        destinationReference.trim(),
-        now,
-        cleanIdempotencyKey,
-      ]
-    );
-
-    const withdrawal = mapRowToWithdrawalRecord(insertRes.rows[0]);
-
-    // Log State Transition: NULL -> PENDING
-    await logWithdrawalStateTransition({
-      withdrawalId: withdrawal.id,
-      publicWithdrawalId: withdrawal.publicWithdrawalId,
-      userId: withdrawal.userId,
-      previousStatus: null,
-      newStatus: 'PENDING',
-      actorType: 'USER',
-      amount: withdrawal.amount,
-      destinationType: withdrawal.destinationType,
-      destinationReference: withdrawal.destinationReference,
-      reason: 'Withdrawal request created by user',
-    });
-
-    // 5. Reserve balance immediately by posting a DEBIT entry in the financial ledger
-    await postLedgerDebit({
-      userId,
-      sourceType: 'WITHDRAWAL',
-      sourceId: withdrawal.id,
-      sourceRef: withdrawal.publicWithdrawalId,
-      amount: cleanAmount,
-      description: `Withdrawal Request - ${withdrawal.destinationType} (${withdrawal.destinationReference.slice(0, 12)}...)`,
-      createdAt: now,
-    });
-
-    // Task #20: Trigger in-app notification for withdrawal submission
-    try {
-      await notifyWithdrawalStatus({
-        userId,
-        amountUsdt: cleanAmount,
-        status: 'PENDING',
-        withdrawalId: withdrawal.id,
-      });
-    } catch (notifErr) {
-      console.warn('[Notification] Error triggering withdrawal pending notification:', notifErr);
-    }
-
-    // Task #23.4: Send WITHDRAWAL_STATUS email with PENDING status
-    try {
-      const userRes = await db.query<{ email: string; full_name: string; public_id: string }>(
-        `SELECT email, full_name, public_id FROM users WHERE id = $1`,
+      // 3. Balance Validation & Reservation (Authoritative Server Check inside transaction)
+      await syncUserLedger(userId, trx);
+      const creditsRes = await trx.query<{ total: string | number }>(
+        `SELECT COALESCE(SUM(amount), 0) AS total FROM financial_ledger_entries WHERE user_id = $1 AND entry_type = 'CREDIT' AND status = 'SETTLED'`,
         [userId]
       );
-      if (userRes.rowCount > 0) {
-        const user = userRes.rows[0];
-        const { queueEventEmail } = await import('./emailService');
-        
-        await queueEventEmail(user.email, 'WITHDRAWAL_STATUS', {
-          displayName: user.full_name,
-          publicId: user.public_id,
-          amount: String(cleanAmount),
-          status: 'PENDING',
-          withdrawalId: withdrawal.id
-        });
-      }
-    } catch (emailErr) {
-      console.warn('[EmailEngine] Failed to send Withdrawal Pending email:', emailErr);
-    }
+      const debitsRes = await trx.query<{ total: string | number }>(
+        `SELECT COALESCE(SUM(amount), 0) AS total FROM financial_ledger_entries WHERE user_id = $1 AND entry_type = 'DEBIT' AND status = 'SETTLED'`,
+        [userId]
+      );
+      const reversalsRes = await trx.query<{ total: string | number }>(
+        `SELECT COALESCE(SUM(amount), 0) AS total FROM financial_ledger_entries WHERE user_id = $1 AND entry_type = 'REVERSAL' AND status = 'SETTLED'`,
+        [userId]
+      );
+      const totalCredits = Number(creditsRes.rows[0]?.total || 0);
+      const totalDebits = Number(debitsRes.rows[0]?.total || 0);
+      const totalReversals = Number(reversalsRes.rows[0]?.total || 0);
+      const availableBalance = Math.max(0, totalCredits - totalDebits + totalReversals);
+      console.log(`[WithdrawalService] User ${userId} available balance: ${availableBalance}, requested: ${cleanAmount}`);
 
-    return withdrawal;
+      if (cleanAmount > availableBalance) {
+        const err = new Error(
+          `INSUFFICIENT_BALANCE: Requested withdrawal amount ($${cleanAmount.toFixed(2)}) exceeds available eligible ledger balance ($${availableBalance.toFixed(2)}).`
+        );
+        (err as any).code = 'INSUFFICIENT_BALANCE';
+        (err as any).availableBalance = availableBalance;
+        throw err;
+      }
+
+      const id = uuidv4();
+      const publicWithdrawalId = generateWithdrawalPublicId();
+      const now = new Date();
+
+      // 4. Create Withdrawal Record
+      const insertRes = await trx.query(
+        `
+        INSERT INTO withdrawals (
+          id, public_withdrawal_id, user_id, amount, currency,
+          destination_type, destination_reference, status,
+          requested_at, idempotency_key, created_at, updated_at
+        )
+        VALUES ($1, $2, $3, $4, 'USD', $5, $6, 'PENDING', $7, $8, $7, $7)
+        RETURNING *
+        `,
+        [
+          id,
+          publicWithdrawalId,
+          userId,
+          cleanAmount,
+          destinationType.trim(),
+          destinationReference.trim(),
+          now,
+          cleanIdempotencyKey,
+        ]
+      );
+
+      const withdrawal = mapRowToWithdrawalRecord(insertRes.rows[0]);
+
+      // Log State Transition: NULL -> PENDING
+      await logWithdrawalStateTransition({
+        withdrawalId: withdrawal.id,
+        publicWithdrawalId: withdrawal.publicWithdrawalId,
+        userId: withdrawal.userId,
+        previousStatus: null,
+        newStatus: 'PENDING',
+        actorType: 'USER',
+        amount: withdrawal.amount,
+        destinationType: withdrawal.destinationType,
+        destinationReference: withdrawal.destinationReference,
+        reason: 'Withdrawal request created by user',
+      });
+
+      // 5. Reserve balance immediately by posting a DEBIT entry in the financial ledger
+      await postLedgerDebit({
+        userId,
+        sourceType: 'WITHDRAWAL',
+        sourceId: withdrawal.id,
+        sourceRef: withdrawal.publicWithdrawalId,
+        amount: cleanAmount,
+        description: `Withdrawal Request - ${withdrawal.destinationType} (${withdrawal.destinationReference.slice(0, 12)}...)`,
+        createdAt: now,
+        dbClient: trx,
+      });
+
+      // Task #20: Trigger in-app notification for withdrawal submission
+      try {
+        await notifyWithdrawalStatus({
+          userId,
+          amountUsdt: cleanAmount,
+          status: 'PENDING',
+          withdrawalId: withdrawal.id,
+        });
+      } catch (notifErr) {
+        console.warn('[Notification] Error triggering withdrawal pending notification:', notifErr);
+      }
+
+      // Task #23.4: Send WITHDRAWAL_STATUS email with PENDING status
+      try {
+        const userRes = await trx.query<{ email: string; full_name: string; public_id: string }>(
+          `SELECT email, full_name, public_id FROM users WHERE id = $1`,
+          [userId]
+        );
+        if (userRes.rowCount > 0) {
+          const user = userRes.rows[0];
+          const { queueEventEmail } = await import('./emailService');
+          
+          await queueEventEmail(user.email, 'WITHDRAWAL_STATUS', {
+            displayName: user.full_name,
+            publicId: user.public_id,
+            amount: String(cleanAmount),
+            status: 'PENDING',
+            withdrawalId: withdrawal.id
+          });
+        }
+      } catch (emailErr) {
+        console.warn('[EmailEngine] Failed to send Withdrawal Pending email:', emailErr);
+      }
+
+      return withdrawal;
+    });
   });
 }
 
@@ -582,6 +643,11 @@ export async function settleWithdrawalAction(params: {
   if (normalizedAction === 'COMPLETE') {
     if (withdrawal.status !== 'APPROVED' && withdrawal.status !== 'PROCESSING' && withdrawal.status !== 'PENDING') {
       throw new Error(`INVALID_STATE: Cannot COMPLETE withdrawal in status ${withdrawal.status}. Must be PENDING, APPROVED, or PROCESSING.`);
+    }
+
+    const txHash = params.txHash?.trim();
+    if (!txHash || !/^0x[a-fA-F0-9]{64}$/.test(txHash)) {
+      throw new Error('INVALID_TX_HASH: A valid 66-character on-chain transaction hash (starting with 0x) is required to mark a withdrawal as COMPLETED.');
     }
 
     const res = await db.query(

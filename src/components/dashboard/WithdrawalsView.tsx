@@ -21,7 +21,6 @@ import {
   Check
 } from 'lucide-react';
 import { UserProfile } from '../../context/AuthContext';
-import { SecurityCaptcha } from '../common/SecurityCaptcha';
 import { useSystemConfig } from '../../context/SystemConfigContext';
 
 interface WithdrawalsViewProps {
@@ -69,7 +68,6 @@ export const WithdrawalsView: React.FC<WithdrawalsViewProps> = ({ user, onNaviga
   const [amountInput, setAmountInput] = useState<string>('');
   const [destinationType, setDestinationType] = useState<string>('USDT_BEP20');
   const [destinationRef, setDestinationRef] = useState<string>('');
-  const [captchaToken, setCaptchaToken] = useState<string>('');
   const [formError, setFormError] = useState<string | null>(null);
   const [formSuccess, setFormSuccess] = useState<string | null>(null);
 
@@ -172,7 +170,6 @@ export const WithdrawalsView: React.FC<WithdrawalsViewProps> = ({ user, onNaviga
           amount: numAmount,
           destinationType,
           destinationReference: trimmedRef,
-          captchaToken: captchaToken || undefined,
           idempotencyKey: `wdr-ui-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`,
         }),
       });
@@ -543,13 +540,7 @@ export const WithdrawalsView: React.FC<WithdrawalsViewProps> = ({ user, onNaviga
               </p>
             </div>
 
-            {/* Real-Time Security Verification Barrier */}
-            <SecurityCaptcha
-              action="withdrawal"
-              label="Payout Authorization Shield"
-              onVerify={(token) => setCaptchaToken(token)}
-              onReset={() => setCaptchaToken('')}
-            />
+
 
             {/* Submit Button */}
             <button

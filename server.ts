@@ -22,8 +22,6 @@ import { swapRouter } from './src/server/routes/swapRoutes';
 import { notificationRouter } from './src/server/routes/notificationRoutes';
 import { emailWebhookRouter } from './src/server/routes/emailWebhookRoutes';
 import { diagnosticRouter } from './src/server/routes/diagnosticRoutes';
-import { captchaRouter } from './src/server/routes/captchaRoutes';
-import { initializeCaptchaConfig } from './src/server/services/captchaService';
 import { getDb } from './src/server/db/db';
 import { startMatchingScheduler } from './src/server/services/binaryMatchingScheduler';
 import {
@@ -102,7 +100,6 @@ async function startServer() {
   app.use('/api/swap', swapRouter);
   app.use('/api/notifications', notificationRouter);
   app.use('/api/admin/economics', economicRouter);
-  app.use('/api/captcha', captchaRouter);
   app.use('/api/webhooks/email', emailWebhookRouter);
   app.use('/api/diagnostics', diagnosticRouter);
   app.use('/api/admin', adminRouter);
@@ -154,7 +151,6 @@ async function startServer() {
   // Initialize Database Schema and background schedulers asynchronously
   getDb().then(() => {
     console.log('[Server] Database and referral migrations initialized.');
-    initializeCaptchaConfig().catch(() => {});
     startMatchingScheduler();
   }).catch((err) => {
     console.error('[Server] Failed to initialize database on startup:', err);

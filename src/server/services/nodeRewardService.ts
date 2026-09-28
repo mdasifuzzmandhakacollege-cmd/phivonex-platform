@@ -296,17 +296,8 @@ export async function closeAndSettleEpoch(
       actualAmount = Number(existing.rows[0].amount);
     }
 
-    // 5. Credit user's Task #13 financial ledger (Ledger source type: NODE_REWARD)
-    // Strictly idempotent via UNIQUE(source_type, source_id, entry_type)
-    await postLedgerCredit({
-      userId: node.owner_user_id,
-      sourceType: 'NODE_REWARD',
-      sourceId: actualRewardId,
-      sourceRef: actualPublicRewardId,
-      amount: actualAmount,
-      description: `Genesis Node Mining Reward - ${publicEpochId} (Node ${node.public_node_id})`,
-      createdAt: now,
-    });
+    // 5. PHIVO rewards credit PHIVO balance only (node_rewards table) without touching USDT/USD ledger.
+    // (Ledger accounting remains strictly separated between PHIVO, USDT, and USD).
 
     // Task #20: Trigger in-app notification for node mining reward (idempotent via sourceId)
     try {
@@ -394,17 +385,6 @@ export async function reverseNodeReward(publicRewardId: string, reason?: string)
     `UPDATE node_rewards SET status = 'REVERSED', reversed_at = $1 WHERE id = $2`,
     [now, reward.id]
   );
-
-  // Post REVERSAL in financial ledger
-  await postLedgerReversal({
-    userId: reward.owner_user_id,
-    sourceType: 'NODE_REWARD',
-    sourceId: reward.id,
-    sourceRef: reward.public_reward_id,
-    amount: Number(reward.amount),
-    description: reason || `Genesis Node Mining Reward Reversal - ${publicRewardId}`,
-    createdAt: now,
-  });
 
   return {
     success: true,

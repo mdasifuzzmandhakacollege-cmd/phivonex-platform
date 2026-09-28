@@ -26,7 +26,7 @@ export const SmartContractSection: React.FC<SmartContractSectionProps> = ({
         
         <div className="max-w-3xl mb-16">
           <div className="text-xs font-mono uppercase tracking-[0.2em] text-[#00C8FF] mb-3">
-            ON-CHAIN DEPLOYMENT
+            BSC SMART CONTRACT DEPLOYMENT
           </div>
           <h2 className="text-3xl sm:text-4xl lg:text-5xl font-extrabold text-white tracking-tight">
             Smart Contract Verification

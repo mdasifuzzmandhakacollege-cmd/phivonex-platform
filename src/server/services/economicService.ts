@@ -1,4 +1,4 @@
-import { getDb } from '../db/db';
+import { getDb, DatabaseClient } from '../db/db';
 import { v4 as uuidv4 } from 'uuid';
 import { GENESIS_NODE_CAP } from '../../config/nodeConfig';
 import { broadcastSystemConfigChange } from './systemConfigBroadcaster';
@@ -93,8 +93,8 @@ export async function getAllEconomicConfigs(): Promise<EconomicConfigRecord[]> {
 /**
  * Fetch single economic parameter by key.
  */
-export async function getEconomicConfigByKey(configKey: string): Promise<EconomicConfigRecord | null> {
-  const db = await getDb();
+export async function getEconomicConfigByKey(configKey: string, dbClient?: DatabaseClient): Promise<EconomicConfigRecord | null> {
+  const db = dbClient || (await getDb());
   const res = await db.query(
     `SELECT * FROM system_economic_configs WHERE config_key = $1`,
     [configKey.trim().toUpperCase()]
@@ -247,7 +247,12 @@ function validateEconomicValue(key: string, value: any) {
 
   if (key === 'NODE_REWARD_RATE_PER_EPOCH') {
     if (value !== null && value !== undefined) {
-      const num = Number(value);
+      let num: number;
+      if (typeof value === 'object' && value !== null) {
+        num = Number(value.rateUsd !== undefined ? value.rateUsd : (value.rewardPerNode !== undefined ? value.rewardPerNode : NaN));
+      } else {
+        num = Number(value);
+      }
       if (isNaN(num) || num <= 0) {
         throw new Error('INVALID_VALUE: Reward rate must be null (unconfigured) or a positive number greater than 0.');
       }
@@ -257,7 +262,8 @@ function validateEconomicValue(key: string, value: any) {
   if (key === 'INTERNAL_COIN_PRICE_USDT') {
     if (typeof value === 'object' && value !== null) {
       const price = Number(value.priceUsdt);
-      if (isNaN(price) || price <= 0) {
+      const isEnabled = value.swapEnabled !== false;
+      if (isEnabled && (isNaN(price) || price <= 0)) {
         throw new Error('INVALID_VALUE: Internal coin price in USDT must be a positive number.');
       }
     } else {
@@ -350,8 +356,8 @@ export async function getEconomicAuditLogs(
 // ENGINE GETTERS (LIVE AUTHORITATIVE HOOKS)
 // ==========================================
 
-export async function getNodeBasePrice(): Promise<number> {
-  const cfg = await getEconomicConfigByKey('NODE_BASE_PRICE_USD');
+export async function getNodeBasePrice(dbClient?: DatabaseClient): Promise<number> {
+  const cfg = await getEconomicConfigByKey('NODE_BASE_PRICE_USD', dbClient);
   if (cfg && typeof cfg.configValue === 'number') {
     return cfg.configValue;
   }
@@ -371,8 +377,8 @@ export async function getBnbPriceUsd(): Promise<number | null> {
   return null;
 }
 
-export async function isNodeSalesEnabled(): Promise<boolean> {
-  const cfg = await getEconomicConfigByKey('NODE_SALES_ENABLED');
+export async function isNodeSalesEnabled(dbClient?: DatabaseClient): Promise<boolean> {
+  const cfg = await getEconomicConfigByKey('NODE_SALES_ENABLED', dbClient);
   if (cfg) {
     return cfg.status === 'ACTIVE' && Boolean(cfg.configValue);
   }
@@ -433,24 +439,30 @@ export async function getNodeRewardRatePerEpoch(): Promise<number | null> {
 
 export async function getInternalCoinPrice(): Promise<{
   coinSymbol: string;
-  priceUsdt: number;
-  effectiveFrom: string;
+  priceUsdt: number | null;
+  effectiveFrom: string | null;
   swapEnabled: boolean;
+  configured: boolean;
 }> {
   const cfg = await getEconomicConfigByKey('INTERNAL_COIN_PRICE_USDT');
-  if (cfg && typeof cfg.configValue === 'object' && cfg.configValue !== null) {
-    return {
-      coinSymbol: 'PHIVO',
-      priceUsdt: Number(cfg.configValue.priceUsdt || 0.10),
-      effectiveFrom: cfg.configValue.effectiveFrom || cfg.effectiveFrom,
-      swapEnabled: cfg.configValue.swapEnabled !== false,
-    };
+  if (cfg && cfg.status === 'ACTIVE' && typeof cfg.configValue === 'object' && cfg.configValue !== null) {
+    const price = Number(cfg.configValue.priceUsdt);
+    if (!isNaN(price) && price > 0) {
+      return {
+        coinSymbol: 'PHIVO',
+        priceUsdt: price,
+        effectiveFrom: cfg.configValue.effectiveFrom || cfg.effectiveFrom,
+        swapEnabled: cfg.configValue.swapEnabled !== false,
+        configured: true,
+      };
+    }
   }
   return {
     coinSymbol: 'PHIVO',
-    priceUsdt: 0.10,
-    effectiveFrom: new Date().toISOString(),
-    swapEnabled: true,
+    priceUsdt: null,
+    effectiveFrom: null,
+    swapEnabled: false,
+    configured: false,
   };
 }
 
@@ -500,10 +512,10 @@ export interface TokenPricePoint {
 export interface TokenPriceTrendData {
   tokenSymbol: string;
   tokenName: string;
-  currentPrice: number;
-  open24h: number;
-  high24h: number;
-  low24h: number;
+  currentPrice: number | null;
+  open24h: number | null;
+  high24h: number | null;
+  low24h: number | null;
   change24h: number;
   change24hPercent: number;
   volume24h: number;
@@ -512,21 +524,62 @@ export interface TokenPriceTrendData {
   timeframe: string;
   updatedAt: string;
   points: TokenPricePoint[];
+  configured: boolean;
 }
 
 /**
- * Returns authentic real-time 24h (or other timeframe) price trend time-series for Recharts visualization.
+ * Returns authentic real-time 24h (or other timeframe) price trend time-series directly derived from DB.
  */
 export async function getTokenPriceTrend(timeframe = '24h'): Promise<TokenPriceTrendData> {
+  const db = await getDb();
   const coinConfig = await getInternalCoinPrice();
-  const currentPrice = coinConfig.priceUsdt > 0 ? coinConfig.priceUsdt : 1.85;
+
+  // 1. Calculate actual circulating PHIVO supply from settled ledger credits
+  const supplyRes = await db.query<{ sum: string | number }>(
+    `SELECT COALESCE(SUM(amount), 0)::float AS sum 
+     FROM financial_ledger_entries 
+     WHERE currency = 'PHIVO' AND entry_type = 'CREDIT' AND status = 'SETTLED'`
+  );
+  const circulatingSupply = Math.max(0, Number(supplyRes.rows[0]?.sum || 0));
+
+  if (!coinConfig.configured || coinConfig.priceUsdt === null || coinConfig.priceUsdt <= 0) {
+    return {
+      tokenSymbol: 'PHIVO',
+      tokenName: 'PHIVONEX Protocol Token',
+      currentPrice: null,
+      open24h: null,
+      high24h: null,
+      low24h: null,
+      change24h: 0,
+      change24hPercent: 0,
+      volume24h: 0,
+      marketCap: 0,
+      circulatingSupply,
+      timeframe,
+      updatedAt: new Date().toISOString(),
+      points: [],
+      configured: false,
+    };
+  }
+
+  const currentPrice = coinConfig.priceUsdt;
+  const marketCap = Math.round(circulatingSupply * currentPrice);
+
+  // 2. Query actual 24h swap volume from database
+  const swapVolRes = await db.query<{ vol: string | number }>(
+    `SELECT COALESCE(SUM(amount), 0)::float AS vol 
+     FROM financial_ledger_entries 
+     WHERE source_type = 'COIN_SWAP' AND entry_type = 'DEBIT' AND currency = 'PHIVO' AND status = 'SETTLED'`
+  );
+  const totalSwapPhivo = Number(swapVolRes.rows[0]?.vol || 0);
+  const volume24h = Number((totalSwapPhivo * currentPrice).toFixed(2));
 
   const now = Date.now();
-  let stepMinutes = 60; // 1 hour steps for 24h
+  let stepMinutes = 60;
   let numSteps = 24;
 
   if (timeframe === '1h') {
-    stepMinutes = 2.5; // 2.5 min steps
+    stepMinutes = 2.5;
     numSteps = 24;
   } else if (timeframe === '6h') {
     stepMinutes = 15;
@@ -537,44 +590,8 @@ export async function getTokenPriceTrend(timeframe = '24h'): Promise<TokenPriceT
   }
 
   const points: TokenPricePoint[] = [];
-  const baseVolatility = 0.032; // 3.2% harmonic wave
-  const openPrice = currentPrice * 0.945; // Upward trending 24h performance (+5.8%)
-
-  let minPrice = Infinity;
-  let maxPrice = -Infinity;
-  let totalVolumeUsd = 0;
-  let prevClose = openPrice;
-
   for (let i = 0; i < numSteps; i++) {
     const pointTime = new Date(now - (numSteps - 1 - i) * stepMinutes * 60 * 1000);
-    const progress = i / (numSteps - 1); // 0 to 1
-
-    // Smooth sinusoidal harmonic wave with gradual upward drift ending at exact current price
-    const wave = Math.sin(progress * Math.PI * 3.4) * (currentPrice * baseVolatility * 0.45);
-    const microNoise = Math.cos(i * 2.1) * (currentPrice * 0.006);
-    const interpolated = openPrice + (currentPrice - openPrice) * Math.pow(progress, 0.88) + wave + microNoise;
-    const finalClose = i === numSteps - 1 ? currentPrice : Number(Math.max(0.01, interpolated).toFixed(4));
-    
-    const candleOpen = Number(prevClose.toFixed(4));
-    const candleClose = Number(finalClose.toFixed(4));
-
-    // Calculate natural realistic wick extensions for high and low
-    const rawHighExtension = Math.abs(Math.sin(i * 2.3 + 0.4)) * 0.011 * currentPrice + 0.003;
-    const rawLowExtension = Math.abs(Math.cos(i * 1.9 + 0.7)) * 0.011 * currentPrice + 0.003;
-
-    const candleHigh = Number(Math.max(candleOpen, candleClose, Math.max(candleOpen, candleClose) + rawHighExtension).toFixed(4));
-    const candleLow = Number(Math.min(candleOpen, candleClose, Math.max(0.01, Math.min(candleOpen, candleClose) - rawLowExtension)).toFixed(4));
-
-    const candleVolume = Math.round(18500 + Math.sin(i * 0.8) * 8200 + Math.abs(Math.cos(i * 1.4)) * 12000);
-    const candleVolumeUsd = Number((candleVolume * candleClose).toFixed(2));
-    const candleChange = Number((candleClose - candleOpen).toFixed(4));
-    const candleChangePercent = candleOpen > 0 ? Number(((candleChange / candleOpen) * 100).toFixed(2)) : 0;
-
-    minPrice = Math.min(minPrice, candleLow);
-    maxPrice = Math.max(maxPrice, candleHigh);
-    totalVolumeUsd += candleVolumeUsd;
-    prevClose = candleClose;
-
     const timeLabel = timeframe === '1h' || timeframe === '6h' || timeframe === '24h'
       ? pointTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
       : pointTime.toLocaleDateString([], { month: 'short', day: 'numeric' });
@@ -582,38 +599,34 @@ export async function getTokenPriceTrend(timeframe = '24h'): Promise<TokenPriceT
     points.push({
       timestamp: pointTime.toISOString(),
       timeLabel,
-      price: candleClose,
-      open: candleOpen,
-      high: candleHigh,
-      low: candleLow,
-      close: candleClose,
-      volume: candleVolume,
-      volumeUsd: candleVolumeUsd,
-      change: candleChange,
-      changePercent: candleChangePercent,
+      price: currentPrice,
+      open: currentPrice,
+      high: currentPrice,
+      low: currentPrice,
+      close: currentPrice,
+      volume: Math.round(totalSwapPhivo / numSteps),
+      volumeUsd: Number(((totalSwapPhivo / numSteps) * currentPrice).toFixed(2)),
+      change: 0,
+      changePercent: 0,
     });
   }
-
-  const change24h = Number((currentPrice - openPrice).toFixed(4));
-  const change24hPercent = Number(((change24h / openPrice) * 100).toFixed(2));
-  const circulatingSupply = 24_500_000; // 24.5M PHIVO tokens in circulation
-  const marketCap = Math.round(circulatingSupply * currentPrice);
 
   return {
     tokenSymbol: 'PHIVO',
     tokenName: 'PHIVONEX Protocol Token',
     currentPrice: Number(currentPrice.toFixed(4)),
-    open24h: Number(openPrice.toFixed(4)),
-    high24h: Number(maxPrice.toFixed(4)),
-    low24h: Number(minPrice.toFixed(4)),
-    change24h,
-    change24hPercent,
-    volume24h: Number(totalVolumeUsd.toFixed(2)),
+    open24h: Number(currentPrice.toFixed(4)),
+    high24h: Number(currentPrice.toFixed(4)),
+    low24h: Number(currentPrice.toFixed(4)),
+    change24h: 0,
+    change24hPercent: 0,
+    volume24h,
     marketCap,
     circulatingSupply,
     timeframe,
     updatedAt: new Date().toISOString(),
     points,
+    configured: true,
   };
 }
 

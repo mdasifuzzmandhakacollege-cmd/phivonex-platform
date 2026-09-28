@@ -33,7 +33,7 @@ export const SecurityTransparencySection: React.FC<SecurityTransparencySectionPr
     },
     {
       title: 'Smart Contract Verification',
-      desc: 'Deterministic on-chain logic enforces the 100M coin cap and 10,000 node ceiling without backdoors.',
+      desc: 'Deterministic smart contract and protocol logic enforce the 100M coin cap and 10,000 node ceiling without backdoors.',
       icon: ShieldCheck,
     },
     {

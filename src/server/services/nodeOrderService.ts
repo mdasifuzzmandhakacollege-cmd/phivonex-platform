@@ -37,7 +37,10 @@ export interface SafeNodeOrder {
  * Releases reserved nodes back to AVAILABLE state.
  */
 export async function cleanupExpiredReservations(dbClient?: DatabaseClient): Promise<number> {
-  const db = dbClient || (await getDb());
+  if (dbClient) {
+    return 0;
+  }
+  const db = await getDb();
   try {
     // Find all expired pending orders
     const expiredOrdersRes = await db.query<{
@@ -96,13 +99,39 @@ export async function cleanupExpiredReservations(dbClient?: DatabaseClient): Pro
 export async function createNodeReservation(
   userId: string,
   idempotencyKey?: string,
+  paymentMethod = 'SIMULATED_INSTANT',
+  dbClient?: DatabaseClient
+): Promise<{
+  order: SafeNodeOrder;
+  isExisting: boolean;
+}> {
+  const db = dbClient || (await getDb());
+
+  if (dbClient) {
+    return executeReservation(dbClient, userId, idempotencyKey, paymentMethod);
+  }
+
+  try {
+    return await db.transaction(async (trx) => {
+      return executeReservation(trx, userId, idempotencyKey, paymentMethod);
+    });
+  } catch (err) {
+    console.error('[CreateNodeReservation Error]', err);
+    throw err;
+  }
+}
+
+async function executeReservation(
+  db: DatabaseClient,
+  userId: string,
+  idempotencyKey?: string,
   paymentMethod = 'SIMULATED_INSTANT'
 ): Promise<{
   order: SafeNodeOrder;
   isExisting: boolean;
 }> {
   // 0. Check Master Economic Switch: Node Sales Enabled
-  const salesEnabled = await isNodeSalesEnabled();
+  const salesEnabled = await isNodeSalesEnabled(db);
   if (!salesEnabled) {
     const error: any = new Error('NODE_SALES_PAUSED: Genesis Node sales and reservations are currently paused by administration.');
     error.code = 'NODE_SALES_PAUSED';
@@ -110,10 +139,13 @@ export async function createNodeReservation(
     throw error;
   }
 
-  const db = await getDb();
+  // Lock user row to serialize concurrent reservations for the same user
+  await db.query(`SELECT id FROM users WHERE id = $1 FOR UPDATE`, [userId]);
 
   // 1. First sweep expired reservations to ensure accurate availability
-  await cleanupExpiredReservations(db);
+  try {
+    await cleanupExpiredReservations(db);
+  } catch {}
 
   // 2. Idempotency Check: If key provided and exists, return existing order
   if (idempotencyKey && idempotencyKey.trim().length > 0) {
@@ -155,6 +187,7 @@ export async function createNodeReservation(
 
       return {
         order: {
+          id: row.id,
           publicOrderId: row.public_order_id,
           publicNodeId: row.public_node_id,
           nodeNumber: row.node_number,
@@ -204,6 +237,7 @@ export async function createNodeReservation(
     WHERE o.user_id = $1 AND o.status = 'PENDING' AND o.expires_at > CURRENT_TIMESTAMP
     ORDER BY o.created_at DESC
     LIMIT 1
+    FOR UPDATE
     `,
     [userId]
   );
@@ -256,6 +290,7 @@ export async function createNodeReservation(
       WHERE status = 'AVAILABLE'
       ORDER BY node_number ASC
       LIMIT 1
+      FOR UPDATE
       `
     );
 
@@ -294,7 +329,7 @@ export async function createNodeReservation(
     const cleanIdempotencyKey = idempotencyKey && idempotencyKey.trim().length > 0 ? idempotencyKey.trim() : null;
 
     const expiresAt = new Date(Date.now() + RESERVATION_EXPIRY_MINUTES * 60 * 1000);
-    const nodePrice = await getNodeBasePrice();
+    const nodePrice = await getNodeBasePrice(db);
 
     const orderInsertRes = await db.query<{
       id: string;
@@ -723,6 +758,7 @@ export async function settleNodeOrder(
 
   return {
     order: {
+      id: finalOrder.id,
       publicOrderId: finalOrder.public_order_id,
       publicNodeId: finalNode.public_node_id,
       nodeNumber: finalOrder.node_number,
@@ -818,8 +854,8 @@ export async function cancelNodeOrder(
 /**
  * Get all orders for the current user.
  */
-export async function getUserOrders(userId: string): Promise<SafeNodeOrder[]> {
-  const db = await getDb();
+export async function getUserOrders(userId: string, dbClient?: DatabaseClient): Promise<SafeNodeOrder[]> {
+  const db = dbClient || (await getDb());
 
   // Sweep expired first
   await cleanupExpiredReservations(db);
@@ -959,97 +995,106 @@ export async function purchaseNodeWithDepositBalance(
 }> {
   const db = await getDb();
 
-  // 1. Get Node Price
-  const nodePrice = await getNodeBasePrice(); // Default $1,000
+  return await db.transaction(async (trx) => {
+    try {
+      // Lock user row to serialize concurrent purchase attempts
+      await trx.query(`SELECT id FROM users WHERE id = $1 FOR UPDATE`, [userId]);
 
-  // 2. Compute User's Total Credited Deposit Balance
-  const depositRes = await db.query<{ total_credited: string | number }>(
-    `
-    SELECT COALESCE(SUM(amount), 0) AS total_credited
-    FROM blockchain_deposits
-    WHERE user_id = $1 AND status = 'CREDITED'
-    `,
-    [userId]
-  );
-  const totalCreditedDeposits = Number(depositRes.rows[0]?.total_credited || 0);
+      // 1. Get Node Price
+      const nodePrice = await getNodeBasePrice(trx); // Default $1,000
 
-  // Compute previous node purchase debits
-  const debitsRes = await db.query<{ total_debits: string | number }>(
-    `
-    SELECT COALESCE(SUM(amount), 0) AS total_debits
-    FROM financial_ledger_entries
-    WHERE user_id = $1 AND entry_type = 'DEBIT' AND source_type = 'NODE_PURCHASE'
-    `,
-    [userId]
-  );
-  const totalNodeDebits = Number(debitsRes.rows[0]?.total_debits || 0);
+      // 2. Compute User's Total Credited Deposit Balance using trx client
+      const depositRes = await trx.query<{ total_credited: string | number }>(
+        `
+        SELECT COALESCE(SUM(amount), 0) AS total_credited
+        FROM blockchain_deposits
+        WHERE user_id = $1 AND status = 'CREDITED'
+        `,
+        [userId]
+      );
+      const totalCreditedDeposits = Number(depositRes.rows[0]?.total_credited || 0);
 
-  const availableDepositBalance = Math.max(0, totalCreditedDeposits - totalNodeDebits);
+      const debitsRes = await trx.query<{ total_debits: string | number }>(
+        `
+        SELECT COALESCE(SUM(amount), 0) AS total_debits
+        FROM financial_ledger_entries
+        WHERE user_id = $1 AND entry_type = 'DEBIT' AND source_type = 'NODE_PURCHASE'
+        `,
+        [userId]
+      );
+      const totalNodeDebits = Number(debitsRes.rows[0]?.total_debits || 0);
 
-  if (availableDepositBalance < nodePrice) {
-    const error: any = new Error(
-      `Your current deposited balance is $${availableDepositBalance.toFixed(2)} USD. You need $${nodePrice.toFixed(2)} USD to activate a Genesis Node. Please deposit funds first.`
-    );
-    error.code = 'INSUFFICIENT_DEPOSIT_BALANCE';
-    error.statusCode = 400;
-    error.currentBalance = availableDepositBalance;
-    error.requiredAmount = nodePrice;
-    error.redirectToDeposit = true;
-    throw error;
-  }
+      const availableDepositBalance = Math.max(0, totalCreditedDeposits - totalNodeDebits);
 
-  // 3. Create or find active reservation
-  let reservation: { order: SafeNodeOrder; isExisting: boolean };
-  try {
-    reservation = await createNodeReservation(userId, `dep_node_${userId}_${Date.now()}`, `DEPOSIT_${preferredAsset}`);
-  } catch (err: any) {
-    // If existing active pending order exists, fetch it
-    const existingOrders = await getUserOrders(userId);
-    const pending = existingOrders.find((o) => o.status === 'PENDING' && o.secondsRemaining > 0);
-    if (pending) {
-      reservation = { order: pending, isExisting: true };
-    } else {
-      throw err;
+      if (availableDepositBalance < nodePrice) {
+        const error: any = new Error(
+          `Your current deposited balance is $${availableDepositBalance.toFixed(2)} USD. You need $${nodePrice.toFixed(2)} USD to activate a Genesis Node. Please deposit funds first.`
+        );
+        error.code = 'INSUFFICIENT_DEPOSIT_BALANCE';
+        error.statusCode = 400;
+        error.currentBalance = availableDepositBalance;
+        error.requiredAmount = nodePrice;
+        error.redirectToDeposit = true;
+        throw error;
+      }
+
+      // 3. Create or find active reservation
+      let reservation: { order: SafeNodeOrder; isExisting: boolean };
+      try {
+        reservation = await createNodeReservation(userId, `dep_node_${userId}_${uuidv4()}`, `DEPOSIT_${preferredAsset}`, trx);
+      } catch (err: any) {
+        const existingOrders = await getUserOrders(userId, trx);
+        const pending = existingOrders.find((o) => o.status === 'PENDING' && o.secondsRemaining > 0);
+        if (pending) {
+          reservation = { order: pending, isExisting: true };
+        } else {
+          throw err;
+        }
+      }
+
+      // 4. Record DEBIT in financial_ledger_entries for node purchase
+      const debitTxnId = uuidv4();
+      const publicTxnId = generateLedgerTransactionPublicId();
+
+      await trx.query(
+        `
+        INSERT INTO financial_ledger_entries (
+          id, public_txn_id, user_id, entry_type, source_type, source_id,
+          source_ref, description, amount, currency, status, created_at
+        )
+        VALUES ($1, $2, $3, 'DEBIT', 'NODE_PURCHASE', $4, $5, $6, $7, $8, 'SETTLED', CURRENT_TIMESTAMP)
+        `,
+        [
+          debitTxnId,
+          publicTxnId,
+          userId,
+          reservation.order.id!,
+          reservation.order.publicNodeId,
+          `Genesis Node ${reservation.order.publicNodeId} purchase paid via ${preferredAsset} deposit balance`,
+          nodePrice,
+          preferredAsset,
+        ]
+      );
+
+      // 5. Settle the reserved order to activate node
+      const settlement = await settleNodeOrder(
+        userId,
+        reservation.order.publicOrderId,
+        `DEPOSIT_BAL_PAYMENT_${preferredAsset}_${publicTxnId}`,
+        trx
+      );
+
+      const newRemainingBalance = Math.max(0, availableDepositBalance - nodePrice);
+
+      return {
+        order: settlement.order,
+        node: settlement.node,
+        depositDeducted: nodePrice,
+        remainingDepositBalance: newRemainingBalance,
+      };
+    } catch (innerErr) {
+      console.error('[purchaseNodeWithDepositBalance Inner Error]', innerErr);
+      throw innerErr;
     }
-  }
-
-  // 4. Record DEBIT in financial_ledger_entries for node purchase
-  const debitTxnId = uuidv4();
-  const publicTxnId = generateLedgerTransactionPublicId();
-
-  await db.query(
-    `
-    INSERT INTO financial_ledger_entries (
-      id, public_txn_id, user_id, entry_type, source_type, source_id,
-      source_ref, description, amount, currency, status, created_at
-    )
-    VALUES ($1, $2, $3, 'DEBIT', 'NODE_PURCHASE', $4, $5, $6, $7, $8, 'SETTLED', CURRENT_TIMESTAMP)
-    `,
-    [
-      debitTxnId,
-      publicTxnId,
-      userId,
-      reservation.order.publicOrderId,
-      reservation.order.publicNodeId,
-      `Genesis Node ${reservation.order.publicNodeId} purchase paid via ${preferredAsset} deposit balance`,
-      nodePrice,
-      preferredAsset,
-    ]
-  );
-
-  // 5. Settle the reserved order to activate node
-  const settlement = await settleNodeOrder(
-    userId,
-    reservation.order.publicOrderId,
-    `DEPOSIT_BAL_PAYMENT_${preferredAsset}_${publicTxnId}`
-  );
-
-  const newRemainingBalance = Math.max(0, availableDepositBalance - nodePrice);
-
-  return {
-    order: settlement.order,
-    node: settlement.node,
-    depositDeducted: nodePrice,
-    remainingDepositBalance: newRemainingBalance,
-  };
+  });
 }

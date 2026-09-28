@@ -1,4 +1,4 @@
-import { getDb } from '../db/db';
+import { getDb, DatabaseClient } from '../db/db';
 import { v4 as uuidv4 } from 'uuid';
 import { generateLedgerTransactionPublicId } from '../utils/idGenerator';
 
@@ -66,11 +66,12 @@ export async function postLedgerCredit(params: {
   description: string;
   currency?: string;
   createdAt?: Date;
+  dbClient?: DatabaseClient;
 }): Promise<LedgerTransaction | null> {
-  const { userId, sourceType, sourceId, sourceRef, amount, description, currency, createdAt } = params;
+  const { userId, sourceType, sourceId, sourceRef, amount, description, currency, createdAt, dbClient } = params;
   if (!amount || amount <= 0) return null;
 
-  const db = await getDb();
+  const db = dbClient || (await getDb());
   const id = uuidv4();
   const publicTxnId = generateLedgerTransactionPublicId();
   const effectiveTime = createdAt || new Date();
@@ -177,11 +178,12 @@ export async function postLedgerReversal(params: {
   description: string;
   currency?: string;
   createdAt?: Date;
+  dbClient?: DatabaseClient;
 }): Promise<LedgerTransaction | null> {
-  const { userId, sourceType, sourceId, sourceRef, amount, description, currency, createdAt } = params;
+  const { userId, sourceType, sourceId, sourceRef, amount, description, currency, createdAt, dbClient } = params;
   if (!amount || amount <= 0) return null;
 
-  const db = await getDb();
+  const db = dbClient || (await getDb());
   const id = uuidv4();
   const publicTxnId = generateLedgerTransactionPublicId();
   const effectiveTime = createdAt || new Date();
@@ -288,11 +290,12 @@ export async function postLedgerDebit(params: {
   description: string;
   currency?: string;
   createdAt?: Date;
+  dbClient?: DatabaseClient;
 }): Promise<LedgerTransaction | null> {
-  const { userId, sourceType, sourceId, sourceRef, amount, description, currency, createdAt } = params;
+  const { userId, sourceType, sourceId, sourceRef, amount, description, currency, createdAt, dbClient } = params;
   if (!amount || amount <= 0) return null;
 
-  const db = await getDb();
+  const db = dbClient || (await getDb());
   const id = uuidv4();
   const publicTxnId = generateLedgerTransactionPublicId();
   const effectiveTime = createdAt || new Date();
@@ -390,8 +393,8 @@ export async function postLedgerDebit(params: {
  * Idempotently reconciles and synchronizes any unposted earnings/reversals
  * for a specific user into the authoritative financial ledger.
  */
-export async function syncUserLedger(userId: string): Promise<void> {
-  const db = await getDb();
+export async function syncUserLedger(userId: string, dbClient?: DatabaseClient): Promise<void> {
+  const db = dbClient || (await getDb());
 
   // 1. Reconcile Referral Commissions
   const commRes = await db.query<{
@@ -420,6 +423,7 @@ export async function syncUserLedger(userId: string): Promise<void> {
       amount: Number(c.amount_usd),
       description: 'Direct Referral Commission - Node Activation',
       createdAt: new Date(c.earned_at),
+      dbClient: db,
     });
 
     // If reversed, post REVERSAL
@@ -432,6 +436,7 @@ export async function syncUserLedger(userId: string): Promise<void> {
         amount: Number(c.amount_usd),
         description: 'Direct Referral Commission Reversal',
         createdAt: c.reversed_at ? new Date(c.reversed_at) : new Date(),
+        dbClient: db,
       });
     }
   }
@@ -465,6 +470,7 @@ export async function syncUserLedger(userId: string): Promise<void> {
       amount: Number(m.total_bonus_usd),
       description: `Daily Binary Matching Settlement (${bDate})`,
       createdAt: new Date(m.settled_at),
+      dbClient: db,
     });
 
     // If reversed, post REVERSAL
@@ -477,6 +483,7 @@ export async function syncUserLedger(userId: string): Promise<void> {
         amount: Number(m.total_bonus_usd),
         description: `Daily Binary Matching Settlement Reversal (${bDate})`,
         createdAt: new Date(),
+        dbClient: db,
       });
     }
   }
@@ -508,6 +515,7 @@ export async function syncUserLedger(userId: string): Promise<void> {
       amount: Number(p.amount_usd),
       description: `Promotion Milestone Bonus - ${p.milestone}`,
       createdAt: new Date(p.qualified_at),
+      dbClient: db,
     });
 
     // If reversed, post REVERSAL
@@ -520,52 +528,7 @@ export async function syncUserLedger(userId: string): Promise<void> {
         amount: Number(p.amount_usd),
         description: `Promotion Milestone Bonus Reversal - ${p.milestone}`,
         createdAt: new Date(),
-      });
-    }
-  }
-
-  // 4. Reconcile Node Mining Rewards (USD-denominated rewards only; PHIVO coin rewards remain in coin balance)
-  const rewardRes = await db.query<{
-    id: string;
-    public_reward_id: string;
-    amount: string | number;
-    currency: string;
-    status: string;
-    accrued_at: Date;
-    reversed_at: Date | null;
-  }>(
-    `
-    SELECT id, public_reward_id, amount, currency, status, accrued_at, reversed_at
-    FROM node_rewards
-    WHERE owner_user_id = $1 AND (currency = 'USD' OR currency IS NULL)
-    `,
-    [userId]
-  );
-
-  for (const r of rewardRes.rows) {
-    // Post CREDIT
-    await postLedgerCredit({
-      userId,
-      sourceType: 'NODE_REWARD',
-      sourceId: r.id,
-      sourceRef: r.public_reward_id,
-      amount: Number(r.amount),
-      currency: 'USD',
-      description: 'Genesis Node Mining Reward Accrual',
-      createdAt: new Date(r.accrued_at),
-    });
-
-    // If reversed, post REVERSAL
-    if (r.status === 'REVERSED') {
-      await postLedgerReversal({
-        userId,
-        sourceType: 'NODE_REWARD',
-        sourceId: r.id,
-        sourceRef: r.public_reward_id,
-        amount: Number(r.amount),
-        currency: 'USD',
-        description: 'Genesis Node Mining Reward Reversal',
-        createdAt: r.reversed_at ? new Date(r.reversed_at) : new Date(),
+        dbClient: db,
       });
     }
   }
@@ -602,6 +565,7 @@ export async function syncUserLedger(userId: string): Promise<void> {
       currency: assetName === 'BNB' ? 'BNB' : 'USDT',
       description: `${assetName} Blockchain Deposit (${d.tx_hash ? d.tx_hash.slice(0, 10) : 'Verified'})`,
       createdAt: new Date(effectiveDate),
+      dbClient: db,
     });
   }
 }

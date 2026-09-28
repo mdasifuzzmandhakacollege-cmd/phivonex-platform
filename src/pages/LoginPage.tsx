@@ -13,7 +13,6 @@ import {
 } from 'lucide-react';
 import { PhivonexLogo } from '../components/brand/PhivonexLogo';
 import { useAuth } from '../context/AuthContext';
-import { SecurityCaptcha } from '../components/common/SecurityCaptcha';
 
 interface LoginPageProps {
   onNavigate: (route: string) => void;
@@ -28,10 +27,6 @@ export const LoginPage: React.FC<LoginPageProps> = ({
   const [password, setPassword] = useState('');
   const [rememberMe, setRememberMe] = useState(true);
   const [showPassword, setShowPassword] = useState(false);
-
-  // Captcha token state
-  const [captchaToken, setCaptchaToken] = useState<string>('');
-  const [forgotCaptchaToken, setForgotCaptchaToken] = useState<string>('');
 
   // States
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -78,7 +73,6 @@ export const LoginPage: React.FC<LoginPageProps> = ({
         identifier: identifier.trim(),
         password,
         rememberMe,
-        captchaToken: captchaToken || undefined,
       });
 
       setLoginSuccessNotice(true);
@@ -103,7 +97,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
     setForgotError(null);
 
     try {
-      const res = await forgotPassword(forgotEmail.trim().toLowerCase(), forgotCaptchaToken || undefined);
+      const res = await forgotPassword(forgotEmail.trim().toLowerCase());
       setForgotSubmitted(true);
       setForgotMessage(res.message || 'If an account exists, reset instructions have been sent.');
     } catch (err: any) {
@@ -276,15 +270,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
                 </label>
               </div>
 
-              {/* Security CAPTCHA Barrier */}
-              <div className="pt-2">
-                <SecurityCaptcha
-                  action="login"
-                  label="Bot Protection Shield"
-                  onVerify={(token) => setCaptchaToken(token)}
-                  onReset={() => setCaptchaToken('')}
-                />
-              </div>
+
 
               {/* 4. Primary Button: Sign In */}
               <div className="pt-3">
@@ -425,14 +411,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
                   />
                 </div>
 
-                <div className="pt-1">
-                  <SecurityCaptcha
-                    action="forgotPassword"
-                    label="Verification Shield"
-                    onVerify={(token) => setForgotCaptchaToken(token)}
-                    onReset={() => setForgotCaptchaToken('')}
-                  />
-                </div>
+
 
                 <div className="flex gap-2 pt-2">
                   <button

@@ -622,10 +622,10 @@ export const TokenPriceTrendChart: React.FC<TokenPriceTrendChartProps> = ({
           <span>
             Ecosystem Base Rate:{' '}
             <strong className="text-white">
-              ${(data?.currentPrice ?? 1.85).toFixed(2)} USD
+              {data?.currentPrice !== null && data?.currentPrice !== undefined ? `$${data.currentPrice.toFixed(2)} USDT` : 'Rate Unavailable'}
             </strong>
           </span>
-          <span className="text-[#32D583]">100% On-Chain Verifiable</span>
+          <span className="text-[#32D583]">Authoritative Protocol Ledger</span>
         </div>
       </div>
     </div>

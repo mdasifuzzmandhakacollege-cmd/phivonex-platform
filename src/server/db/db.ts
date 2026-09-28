@@ -345,6 +345,18 @@ async function initSchema(client: DatabaseClient) {
         CONSTRAINT chk_node_order_amount CHECK (amount_usd > 0)
       );
 
+      CREATE TABLE IF NOT EXISTS node_owners (
+        id UUID PRIMARY KEY,
+        node_id UUID NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        acquired_via VARCHAR(64) NOT NULL DEFAULT 'PURCHASE',
+        acquired_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        is_current_owner BOOLEAN NOT NULL DEFAULT TRUE,
+        CONSTRAINT unique_node_user_owner UNIQUE (node_id, user_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_node_owners_node ON node_owners (node_id);
+      CREATE INDEX IF NOT EXISTS idx_node_owners_user ON node_owners (user_id);
+
       CREATE TABLE IF NOT EXISTS referral_commissions (
         id UUID PRIMARY KEY,
         public_commission_id VARCHAR(50) UNIQUE NOT NULL,
@@ -663,6 +675,7 @@ async function initSchema(client: DatabaseClient) {
 
       CREATE UNIQUE INDEX IF NOT EXISTS idx_node_orders_public_id ON node_orders (public_order_id);
       CREATE UNIQUE INDEX IF NOT EXISTS idx_node_orders_idempotency ON node_orders (idempotency_key) WHERE idempotency_key IS NOT NULL AND idempotency_key != '';
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_active_user_order ON node_orders (user_id) WHERE status = 'PENDING';
       CREATE INDEX IF NOT EXISTS idx_node_orders_user ON node_orders (user_id);
       CREATE INDEX IF NOT EXISTS idx_node_orders_status ON node_orders (status);
       CREATE INDEX IF NOT EXISTS idx_node_orders_node_id ON node_orders (node_id);

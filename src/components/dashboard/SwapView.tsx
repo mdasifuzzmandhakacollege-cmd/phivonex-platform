@@ -22,7 +22,6 @@ import {
 import { UserProfile } from '../../context/AuthContext';
 import { PHIVONEX_TOKEN_CONFIG } from '../../server/config/tokenConfig';
 import { PhivoCoinIcon, UsdtIcon } from '../brand/CryptoIcons';
-import { SecurityCaptcha } from '../common/SecurityCaptcha';
 import { useSystemConfig } from '../../context/SystemConfigContext';
 import { TokenPriceTrendChart } from './TokenPriceTrendChart';
 
@@ -78,7 +77,6 @@ export const SwapView: React.FC<SwapViewProps> = ({ user, onNavigateTab }) => {
   const [loading, setLoading] = useState<boolean>(true);
   const [swapAmountInput, setSwapAmountInput] = useState<string>('');
   const [submitting, setSubmitting] = useState<boolean>(false);
-  const [captchaToken, setCaptchaToken] = useState<string>('');
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
   // Confirmation Modal State
@@ -180,8 +178,8 @@ export const SwapView: React.FC<SwapViewProps> = ({ user, onNavigateTab }) => {
 
       const endpoint = isCoinToUsdt ? '/api/swap/coin-to-usdt' : '/api/swap/usdt-to-coin';
       const body = isCoinToUsdt
-        ? { coinAmount: parsedInput, captchaToken: captchaToken || undefined, idempotencyKey: `swap-c2u-${user.id.slice(0, 8)}-${Date.now()}` }
-        : { usdtAmount: parsedInput, captchaToken: captchaToken || undefined, idempotencyKey: `swap-u2c-${user.id.slice(0, 8)}-${Date.now()}` };
+        ? { coinAmount: parsedInput, idempotencyKey: `swap-c2u-${user.id.slice(0, 8)}-${Date.now()}` }
+        : { usdtAmount: parsedInput, idempotencyKey: `swap-u2c-${user.id.slice(0, 8)}-${Date.now()}` };
 
       const res = await fetch(endpoint, {
         method: 'POST',
@@ -704,12 +702,7 @@ export const SwapView: React.FC<SwapViewProps> = ({ user, onNavigateTab }) => {
               Upon confirmation, your {isCoinToUsdt ? 'PHIVO coin' : 'USDT ledger'} balance will be debited and the resulting {isCoinToUsdt ? 'USDT funds' : 'PHIVO coins'} will be credited immediately to your account.
             </p>
 
-            <SecurityCaptcha
-              action="swap"
-              label="Conversion Security Shield"
-              onVerify={(token) => setCaptchaToken(token)}
-              onReset={() => setCaptchaToken('')}
-            />
+
 
             <div className="flex items-center gap-3 pt-2">
               <button

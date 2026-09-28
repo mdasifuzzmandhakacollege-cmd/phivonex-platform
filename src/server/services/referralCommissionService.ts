@@ -187,6 +187,7 @@ export async function processNodeActivationCommission(
       amount: Number(row.amount_usd),
       description: `Direct Referral Commission - Node ${nodePublicId} Activation`,
       createdAt: new Date(row.earned_at),
+      dbClient: db,
     });
   } catch (ledgErr) {
     console.warn('[WalletLedger] Error posting referral commission to ledger:', ledgErr);
