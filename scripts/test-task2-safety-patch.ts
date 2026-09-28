@@ -10,7 +10,7 @@
 process.env.APP_ENV = 'development';
 process.env.NODE_ENV = 'test';
 
-import { getDb } from '../src/server/db/db';
+import { getDb, DatabaseClient } from '../src/server/db/db';
 import { v4 as uuidv4 } from 'uuid';
 import { BSC_CONFIG } from '../src/config/bscConfig';
 import { generateDepositPublicId, generateLedgerTransactionPublicId } from '../src/server/utils/idGenerator';
@@ -91,12 +91,11 @@ async function runSafetyPatchTests() {
 
   const attemptAtomicCredit = async (targetUserId: string) => {
     const clientDb = await getDb();
-    await clientDb.query('BEGIN');
-    try {
+    return await clientDb.transaction(async (trx: DatabaseClient) => {
       const depositId = uuidv4();
       const pubId = generateDepositPublicId();
       const now = new Date();
-      const ins = await clientDb.query(
+      const ins = await trx.query(
         `
         INSERT INTO blockchain_deposits (
           id, public_deposit_id, user_id, chain_id, asset,
@@ -111,19 +110,17 @@ async function runSafetyPatchTests() {
       );
 
       if (ins.rows.length === 0) {
-        await clientDb.query('ROLLBACK');
         return { success: false, reason: 'DUPLICATE_CONFLICT' };
       }
 
       const insertedUserId = ins.rows[0].user_id;
       if (insertedUserId !== targetUserId) {
-        await clientDb.query('ROLLBACK');
         return { success: false, reason: 'USER_MISMATCH' };
       }
 
       const ledgerId = uuidv4();
       const ledgerPubId = generateLedgerTransactionPublicId();
-      const ledgerIns = await clientDb.query(
+      const ledgerIns = await trx.query(
         `
         INSERT INTO financial_ledger_entries (
           id, public_txn_id, user_id, entry_type, source_type, source_id,
@@ -137,32 +134,40 @@ async function runSafetyPatchTests() {
       );
 
       if (ledgerIns.rows.length === 0 || ledgerIns.rows[0].user_id !== insertedUserId) {
-        await clientDb.query('ROLLBACK');
-        return { success: false, reason: 'LEDGER_CONFLICT' };
+        throw new Error('LEDGER_CONFLICT');
       }
 
-      await clientDb.query('COMMIT');
       return { success: true, depositId };
-    } catch (err: any) {
-      await clientDb.query('ROLLBACK').catch(() => {});
-      return { success: false, error: err.message };
-    }
+    }).catch((err: any) => {
+      return { success: false, reason: err.message || 'TRANSACTION_FAILED' };
+    });
   };
 
-  // Run sequential submissions for the exact same txHash/logIndex (simulating concurrency / duplicate submission)
-  const res1 = await attemptAtomicCredit(user1Id);
-  const res2 = await attemptAtomicCredit(user2Id);
+  // Run real concurrency test using Promise.all([...]) simultaneously (do NOT run sequentially)
+  const [res1, res2] = await Promise.all([
+    attemptAtomicCredit(user1Id),
+    attemptAtomicCredit(user2Id),
+  ]);
 
-  console.log('  -> Submission results:', { res1, res2 });
+  console.log('  -> Concurrent submission results:', { res1, res2 });
 
-  assert(res1.success === true, 'First user submission succeeds and receives credit');
-  assert(res2.success === false && res2.reason === 'DUPLICATE_CONFLICT', 'Second user submission with same txHash/logIndex is rejected as duplicate');
+  const successCount = [res1, res2].filter((r) => r.success).length;
+  const duplicateCount = [res1, res2].filter((r) => !r.success && (r.reason === 'DUPLICATE_CONFLICT' || r.reason === 'LEDGER_CONFLICT')).length;
+
+  assert(successCount === 1, 'Exactly 1 user receives credit under concurrent Promise.all() submission');
+  assert(duplicateCount === 1, 'The other concurrent submission is rejected');
+
+  const depositCheck = await db.query(
+    `SELECT COUNT(*) as cnt FROM blockchain_deposits WHERE chain_id = $1 AND LOWER(tx_hash) = $2 AND log_index = $3`,
+    [BSC_CONFIG.CHAIN_ID, sharedTxHash, sharedLogIndex]
+  );
+  assert(Number(depositCheck.rows[0].cnt) === 1, 'Exactly 1 blockchain_deposits row exists in database');
 
   const ledgerCheck = await db.query(
     `SELECT COUNT(*) as cnt FROM financial_ledger_entries WHERE description = $1`,
     [`Atomic safety test ${sharedTxHash}`]
   );
-  assert(Number(ledgerCheck.rows[0].cnt) === 1, 'Exactly 1 ledger entry exists in database for this shared txHash');
+  assert(Number(ledgerCheck.rows[0].cnt) === 1, 'Exactly 1 financial_ledger_entries credit exists in database');
 
   console.log('\n===============================================================');
   console.log(`📊 TASK 2 SAFETY PATCH TEST SUMMARY: ${passed} PASSED, ${failed} FAILED`);

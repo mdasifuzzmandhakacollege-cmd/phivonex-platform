@@ -6,12 +6,19 @@ import { getUserDeposits, processBlockchainDepositEvent } from '../services/bscD
 import { rescanUserDepositStatus } from '../services/bscListenerService';
 import { BSC_CONFIG } from '../../config/bscConfig';
 import { bscRpcManager } from '../providers/bscRpcProvider';
-import { getDb } from '../db/db';
+import { getDb, DatabaseClient } from '../db/db';
 import { ethers } from 'ethers';
 import { v4 as uuidv4 } from 'uuid';
 import { generateDepositPublicId, generateLedgerTransactionPublicId } from '../utils/idGenerator';
 import { postLedgerCredit } from '../services/walletLedgerService';
 import { notifyUsdtDepositConfirmed } from '../services/notificationService';
+
+class DepositTransactionError extends Error {
+  constructor(public code: string, public statusCode: number, message: string) {
+    super(message);
+    this.name = 'DepositTransactionError';
+  }
+}
 
 export const depositRouter = Router();
 
@@ -408,96 +415,94 @@ depositRouter.post('/submit-txhash', requireAuth, depositLimiter, async (req: Au
       return;
     }
 
-    // 5. Atomic PostgreSQL Transaction using single-connection transaction API
+    // 5. Atomic PostgreSQL Transaction using db.transaction() API with real rollback on business failure
     const now = new Date();
-    const creditResult = await db.transaction(async (trx) => {
-      const depositId = uuidv4();
-      const publicDepositId = generateDepositPublicId();
+    let actualDepositId = '';
+    let actualPublicDepositId = '';
 
-      const insertRes = await trx.query(
-        `
-        INSERT INTO blockchain_deposits (
-          id, public_deposit_id, user_id, chain_id, asset,
-          tx_hash, log_index, from_address, to_address, amount, block_number,
-          confirmations, status, detected_at, confirmed_at, credited_at, created_at, updated_at
-        )
-        VALUES ($1, $2, $3, $4, 'USDT', $5, $6, $7, $8, $9, $10, $11, 'CREDITED', $12, $12, $12, $12, $12)
-        ON CONFLICT (chain_id, tx_hash, log_index, to_address) DO NOTHING
-        RETURNING id, public_deposit_id, user_id
-        `,
-        [
-          depositId,
-          publicDepositId,
-          userId,
-          BSC_CONFIG.CHAIN_ID,
-          cleanTxHash,
-          realLogIndex,
-          fromAddress,
-          toAddress,
-          detectedAmount,
-          blockNumber,
-          confirmations,
-          now,
-        ]
-      );
+    try {
+      await db.transaction(async (trx: DatabaseClient) => {
+        const depositId = uuidv4();
+        const publicDepositId = generateDepositPublicId();
 
-      if (insertRes.rows.length === 0) {
-        return { success: false, error: 'TX_ALREADY_USED', message: 'This transaction hash and log index have already been submitted and credited.' };
-      }
+        const insertRes = await trx.query(
+          `
+          INSERT INTO blockchain_deposits (
+            id, public_deposit_id, user_id, chain_id, asset,
+            tx_hash, log_index, from_address, to_address, amount, block_number,
+            confirmations, status, detected_at, confirmed_at, credited_at, created_at, updated_at
+          )
+          VALUES ($1, $2, $3, $4, 'USDT', $5, $6, $7, $8, $9, $10, $11, 'CREDITED', $12, $12, $12, $12, $12)
+          ON CONFLICT (chain_id, tx_hash, log_index, to_address) DO NOTHING
+          RETURNING id, public_deposit_id, user_id
+          `,
+          [
+            depositId,
+            publicDepositId,
+            userId,
+            BSC_CONFIG.CHAIN_ID,
+            cleanTxHash,
+            realLogIndex,
+            fromAddress,
+            toAddress,
+            detectedAmount,
+            blockNumber,
+            confirmations,
+            now,
+          ]
+        );
 
-      const actualDepositId = insertRes.rows[0].id;
-      const actualPublicDepositId = insertRes.rows[0].public_deposit_id;
-      const actualUserId = insertRes.rows[0].user_id;
+        if (insertRes.rows.length === 0) {
+          throw new DepositTransactionError('TX_ALREADY_USED', 409, 'This transaction hash and log index have already been submitted and credited.');
+        }
 
-      if (actualUserId !== userId) {
-        return { success: false, error: 'DUPLICATE_TX_USER_MISMATCH', message: 'Transaction already linked to another user account.' };
-      }
+        actualDepositId = insertRes.rows[0].id;
+        actualPublicDepositId = insertRes.rows[0].public_deposit_id;
+        const actualUserId = insertRes.rows[0].user_id;
 
-      const ledgerId = uuidv4();
-      const publicTxnId = generateLedgerTransactionPublicId();
-      const ledgerRes = await trx.query(
-        `
-        INSERT INTO financial_ledger_entries (
-          id, public_txn_id, user_id, entry_type, source_type, source_id,
-          source_ref, description, amount, currency, status, created_at
-        )
-        VALUES ($1, $2, $3, 'CREDIT', 'BLOCKCHAIN_DEPOSIT', $4, $5, $6, $7, 'USDT', 'SETTLED', $8)
-        ON CONFLICT (source_type, source_id, entry_type) DO NOTHING
-        RETURNING id, user_id
-        `,
-        [
-          ledgerId,
-          publicTxnId,
-          actualUserId,
-          actualDepositId,
-          actualPublicDepositId,
-          `On-chain USDT BEP-20 deposit verified via TxHash ${cleanTxHash.slice(0, 10)}...`,
-          detectedAmount,
-          now,
-        ]
-      );
+        if (actualUserId !== userId) {
+          throw new DepositTransactionError('DUPLICATE_TX_USER_MISMATCH', 409, 'Transaction already linked to another user account.');
+        }
 
-      if (ledgerRes.rows.length === 0 || ledgerRes.rows[0].user_id !== actualUserId) {
-        return { success: false, error: 'LEDGER_CREDIT_FAILED', message: 'Ledger credit failed or already exists. Rolled back deposit.' };
-      }
+        const ledgerId = uuidv4();
+        const publicTxnId = generateLedgerTransactionPublicId();
+        const ledgerRes = await trx.query(
+          `
+          INSERT INTO financial_ledger_entries (
+            id, public_txn_id, user_id, entry_type, source_type, source_id,
+            source_ref, description, amount, currency, status, created_at
+          )
+          VALUES ($1, $2, $3, 'CREDIT', 'BLOCKCHAIN_DEPOSIT', $4, $5, $6, $7, 'USDT', 'SETTLED', $8)
+          ON CONFLICT (source_type, source_id, entry_type) DO NOTHING
+          RETURNING id, user_id
+          `,
+          [
+            ledgerId,
+            publicTxnId,
+            actualUserId,
+            actualDepositId,
+            actualPublicDepositId,
+            `On-chain USDT BEP-20 deposit verified via TxHash ${cleanTxHash.slice(0, 10)}...`,
+            detectedAmount,
+            now,
+          ]
+        );
 
-      return {
-        success: true,
-        actualDepositId,
-        actualPublicDepositId,
-      };
-    });
-
-    if (!creditResult.success) {
-      res.status(409).json({
-        success: false,
-        error: creditResult.error,
-        message: creditResult.message,
+        if (ledgerRes.rows.length === 0 || ledgerRes.rows[0].user_id !== actualUserId) {
+          throw new DepositTransactionError('LEDGER_CREDIT_FAILED', 409, 'Ledger credit failed or already exists. Rolled back deposit.');
+        }
       });
-      return;
+    } catch (txErr: any) {
+      if (txErr instanceof DepositTransactionError || txErr.statusCode) {
+        res.status(txErr.statusCode || 409).json({
+          success: false,
+          error: txErr.code || 'TRANSACTION_ERROR',
+          message: txErr.message || 'Transaction failed',
+        });
+        return;
+      }
+      throw txErr;
     }
-
-    const { actualDepositId, actualPublicDepositId } = creditResult;
 
     // 6. Sync to Firestore for cloud persistence (non-blocking)
     try {
