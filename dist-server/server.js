@@ -203,7 +203,16 @@ async function getDb() {
       let client = null;
       if (databaseUrl && !databaseUrl.includes("placeholder") && !databaseUrl.includes("YOUR_") && (databaseUrl.startsWith("postgres://") || databaseUrl.startsWith("postgresql://"))) {
         try {
-          console.log("[DB] Connecting to PostgreSQL via DATABASE_URL...");
+          let safeHost = "localhost";
+          let safeDbName = "unknown";
+          try {
+            const parsedUrl = new URL(databaseUrl);
+            safeHost = parsedUrl.hostname || "unix-socket";
+            safeDbName = parsedUrl.pathname ? parsedUrl.pathname.replace(/^\//, "") : "default";
+          } catch {
+            safeHost = "custom-connection";
+          }
+          console.log(`[DB Identity] Engine: PostgreSQL (Cloud SQL) | Host: ${safeHost} | Database: ${safeDbName}`);
           const isUnixSocket = databaseUrl.includes("host=/") || databaseUrl.includes("host=%2F") || Boolean(process.env.SQL_HOST?.startsWith("/"));
           const pool = new Pool({
             connectionString: databaseUrl,
@@ -273,6 +282,7 @@ async function getDb() {
           fs.mkdirSync(dataDir, { recursive: true });
         }
         console.log("[DB] Initializing embedded PostgreSQL (PGlite) engine in:", dataDir);
+        console.log(`[DB Identity] Engine: Embedded PGlite | Path: ${dataDir}`);
         let pglite;
         try {
           pglite = new PGlite(dataDir);
