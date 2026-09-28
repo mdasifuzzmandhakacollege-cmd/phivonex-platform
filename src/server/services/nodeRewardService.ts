@@ -267,7 +267,7 @@ export async function closeAndSettleEpoch(
       INSERT INTO node_rewards (
         id, public_reward_id, epoch_id, node_id, owner_user_id, amount, currency, status, accrued_at, created_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6, 'USD', 'ACCRUED', $7, CURRENT_TIMESTAMP)
+      VALUES ($1, $2, $3, $4, $5, $6, 'PHIVO', 'ACCRUED', $7, CURRENT_TIMESTAMP)
       ON CONFLICT (node_id, epoch_id) DO NOTHING
       RETURNING *
       `,
@@ -303,6 +303,7 @@ export async function closeAndSettleEpoch(
       sourceId: actualRewardId,
       sourceRef: actualPublicRewardId,
       amount: actualAmount,
+      currency: 'PHIVO',
       description: `Genesis Node Mining Reward (Epoch #${epochNumber}, Node ${node.public_node_id})`,
       createdAt: now,
     }).catch((ledgerErr) => {

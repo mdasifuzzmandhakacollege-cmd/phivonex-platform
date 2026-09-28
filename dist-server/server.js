@@ -3162,6 +3162,7 @@ async function syncUserLedger(userId, dbClient) {
       sourceId: nr.id,
       sourceRef: nr.public_reward_id,
       amount: Number(nr.amount),
+      currency: "PHIVO",
       description: "Genesis Node Mining Reward",
       createdAt: new Date(nr.accrued_at),
       dbClient: db
@@ -3173,6 +3174,7 @@ async function syncUserLedger(userId, dbClient) {
         sourceId: nr.id,
         sourceRef: nr.public_reward_id,
         amount: Number(nr.amount),
+        currency: "PHIVO",
         description: "Genesis Node Mining Reward Reversal",
         createdAt: nr.reversed_at ? new Date(nr.reversed_at) : /* @__PURE__ */ new Date(),
         dbClient: db
@@ -3214,7 +3216,7 @@ async function getWalletSummary(userId) {
       COALESCE(SUM(amount), 0) AS total_amount,
       COUNT(*) AS count
     FROM financial_ledger_entries
-    WHERE user_id = $1 AND status = 'SETTLED'
+    WHERE user_id = $1 AND status = 'SETTLED' AND (currency = 'USDT' OR currency = 'USD') AND source_type != 'NODE_REWARD'
     GROUP BY entry_type, source_type
     `,
     [userId]
@@ -7845,6 +7847,20 @@ function broadcastPublicEvent(event) {
 async function broadcastSystemConfigChange(key, value, category = "SYSTEM") {
   const timestamp = (/* @__PURE__ */ new Date()).toISOString();
   const normalizedKey = key.toUpperCase();
+  if (process.env.NODE_ENV === "test" || process.env.APP_ENV === "test") {
+    try {
+      publicNetworkEventEmitter.emit("networkEvent", {
+        type: "system_config",
+        key: normalizedKey,
+        value,
+        category,
+        updatedAt: timestamp
+      });
+    } catch (sseErr) {
+      console.warn("[SystemConfigBroadcaster] SSE broadcast warning:", sseErr);
+    }
+    return;
+  }
   try {
     await adminFirestore.collection("system_settings").doc("configs").set(
       {
@@ -9693,7 +9709,7 @@ async function closeAndSettleEpoch(epochId, options) {
       INSERT INTO node_rewards (
         id, public_reward_id, epoch_id, node_id, owner_user_id, amount, currency, status, accrued_at, created_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6, 'USD', 'ACCRUED', $7, CURRENT_TIMESTAMP)
+      VALUES ($1, $2, $3, $4, $5, $6, 'PHIVO', 'ACCRUED', $7, CURRENT_TIMESTAMP)
       ON CONFLICT (node_id, epoch_id) DO NOTHING
       RETURNING *
       `,
@@ -9724,6 +9740,7 @@ async function closeAndSettleEpoch(epochId, options) {
       sourceId: actualRewardId,
       sourceRef: actualPublicRewardId,
       amount: actualAmount,
+      currency: "PHIVO",
       description: `Genesis Node Mining Reward (Epoch #${epochNumber}, Node ${node.public_node_id})`,
       createdAt: now
     }).catch((ledgerErr) => {

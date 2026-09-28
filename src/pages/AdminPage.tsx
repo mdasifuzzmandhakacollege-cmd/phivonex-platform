@@ -38,6 +38,7 @@ import {
   Zap,
   Power,
   Gift,
+  Trophy,
 } from 'lucide-react';
 import { PhivonexLogo } from '../components/brand/PhivonexLogo';
 import { WithdrawalManagement } from '../components/admin/WithdrawalManagement';
@@ -48,6 +49,7 @@ import { TreasuryMovementChart } from '../components/admin/TreasuryMovementChart
 import { CloudSqlDiagnosticCard } from '../components/admin/CloudSqlDiagnosticCard';
 import { OffersManagement } from '../components/admin/OffersManagement';
 import { WithdrawalStateLogsView } from '../components/admin/WithdrawalStateLogsView';
+import { LeadershipRankControl } from '../components/admin/LeadershipRankControl';
 import { AuditLogger, logAction, exportAuditLogsToCsv } from '../services/auditLogger';
 
 interface AdminPageProps {
@@ -61,6 +63,7 @@ export type AdminTab =
   | 'reconciliation'
   | 'economics'
   | 'offers'
+  | 'ranks'
   | 'users'
   | 'nodes'
   | 'orders'
@@ -92,6 +95,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onNavigate, currentPath = 
     if (clean.includes('/treasury')) return 'treasury';
     if (clean.includes('/reconciliation')) return 'reconciliation';
     if (clean.includes('/economics')) return 'economics';
+    if (clean.includes('/ranks') || clean.includes('/leadership')) return 'ranks';
     if (clean.includes('/offers') || clean.includes('/promotions')) return 'offers';
     if (clean.includes('/users')) return 'users';
     if (clean.includes('/nodes')) return 'nodes';
@@ -588,6 +592,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onNavigate, currentPath = 
     { id: 'reconciliation' as AdminTab, label: 'Financial Reconciliation', icon: ShieldCheck },
     { id: 'economics' as AdminTab, label: 'Economic Controls', icon: Sliders },
     { id: 'offers' as AdminTab, label: 'Promotions & Offers', icon: Gift },
+    { id: 'ranks' as AdminTab, label: 'Leadership Ranks', icon: Trophy },
     { id: 'users' as AdminTab, label: 'Users', icon: Users },
     { id: 'nodes' as AdminTab, label: 'Nodes Inventory', icon: Server },
     { id: 'orders' as AdminTab, label: 'Node Orders', icon: ShoppingBag },
@@ -1293,6 +1298,9 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onNavigate, currentPath = 
               }}
             />
           )}
+
+          {/* TAB: SEQUENTIAL PROMOTION & LEADERSHIP RANKS */}
+          {activeTab === 'ranks' && <LeadershipRankControl />}
 
           {/* TAB 3: USERS (WITH SENSITIVE AUDITED ACTIONS) */}
           {activeTab === 'users' && (

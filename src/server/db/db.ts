@@ -22,6 +22,10 @@ declare global {
   var __phivonexDb: DatabaseClient | undefined;
   // eslint-disable-next-line no-var
   var __phivonexDbPromise: Promise<DatabaseClient> | undefined;
+  // eslint-disable-next-line no-var
+  var __phivonexPool: Pool | undefined;
+  // eslint-disable-next-line no-var
+  var __phivonexPglite: PGlite | undefined;
 }
 
 export function getEffectiveDatabaseUrl(): string | undefined {
@@ -82,6 +86,7 @@ export async function getDb(): Promise<DatabaseClient> {
             ssl: isUnixSocket ? false : { rejectUnauthorized: false },
             connectionTimeoutMillis: 5000,
           });
+          globalThis.__phivonexPool = pool;
 
           // Test connection
           await pool.query('SELECT 1');
@@ -145,7 +150,8 @@ export async function getDb(): Promise<DatabaseClient> {
         if (isProduction) {
           throw new Error('[CRITICAL_DATABASE_ERROR] Production requires a valid PostgreSQL connection. PGlite is strictly prohibited in production.');
         }
-        const dataDir = process.env.PGLITE_DATA_DIR || (process.env.NODE_ENV === 'production' ? '/tmp/pglite_db' : path.resolve(process.cwd(), '.data/pglite_db'));
+        // In production, isProduction check above already threw. PGlite is only used in development and tests.
+        const dataDir = process.env.PGLITE_DATA_DIR || path.resolve(process.cwd(), '.data/pglite_db');
         if (!fs.existsSync(dataDir)) {
           fs.mkdirSync(dataDir, { recursive: true });
         }
@@ -156,6 +162,7 @@ export async function getDb(): Promise<DatabaseClient> {
         try {
           pglite = new PGlite(dataDir);
           await pglite.waitReady;
+          globalThis.__phivonexPglite = pglite;
         } catch (pgInitErr: any) {
           console.warn(`[DB] PGlite failed to initialize from (${dataDir}). Recovering clean state:`, pgInitErr?.message || pgInitErr);
           try {
@@ -230,6 +237,23 @@ export async function getDb(): Promise<DatabaseClient> {
   })();
 
   return globalThis.__phivonexDbPromise;
+}
+
+export async function closeDb(): Promise<void> {
+  if (globalThis.__phivonexPool) {
+    try {
+      await globalThis.__phivonexPool.end();
+    } catch {}
+    globalThis.__phivonexPool = undefined;
+  }
+  if (globalThis.__phivonexPglite) {
+    try {
+      await globalThis.__phivonexPglite.close();
+    } catch {}
+    globalThis.__phivonexPglite = undefined;
+  }
+  globalThis.__phivonexDb = undefined;
+  globalThis.__phivonexDbPromise = undefined;
 }
 
 async function initSchema(client: DatabaseClient) {
@@ -1309,6 +1333,14 @@ async function initSchema(client: DatabaseClient) {
       `);
     } catch (task234Err) {
       console.warn('[DB Migration] Task #23.4 Email & Automation schema migration warning:', task234Err);
+    }
+
+    // Sequential Binary Promotion + Leadership Rank Engine
+    try {
+      const { ensurePromotionTables } = await import('../services/leadershipRankService');
+      await ensurePromotionTables(client);
+    } catch (promoErr) {
+      console.warn('[DB Migration] Sequential Promotion schema migration warning:', promoErr);
     }
 
     // 3. Backfill existing users with missing public_id, user_referrals, and binary_placements

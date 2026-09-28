@@ -152,6 +152,41 @@ withdrawalRouter.get('/me', requireAuth, async (req: AuthRequest, res: Response)
 });
 
 /**
+ * GET /api/withdrawals/config
+ * Returns real-time public withdrawal configurations (minimum amount, mode, etc.).
+ * Note: Must be registered before parameterized /:publicId route.
+ */
+withdrawalRouter.get('/config', async (_req, res: Response) => {
+  try {
+    const minAmount = await getMinWithdrawalAmount();
+    const db = await getDb();
+    const configRes = await db.query(
+      `SELECT config_value FROM system_economic_configs WHERE config_key = 'AUTO_WITHDRAWAL_ENABLED' LIMIT 1`
+    ).catch(() => ({ rows: [] }));
+
+    let autoEnabled = false;
+    if (configRes.rows.length > 0) {
+      const rawVal = configRes.rows[0].config_value;
+      try {
+        autoEnabled = typeof rawVal === 'string' ? JSON.parse(rawVal) === true : Boolean(rawVal);
+      } catch {
+        autoEnabled = String(rawVal).toLowerCase() === 'true';
+      }
+    }
+
+    return res.status(200).json({
+      success: true,
+      minWithdrawalAmount: minAmount,
+      autoWithdrawalEnabled: autoEnabled,
+      mode: autoEnabled ? 'FULL_AUTOMATIC' : 'MANUAL_APPROVAL',
+    });
+  } catch (err: any) {
+    console.error('[Withdrawal API] Error fetching config:', err);
+    return res.status(500).json({ error: 'SERVER_ERROR', message: 'Failed to retrieve withdrawal configuration' });
+  }
+});
+
+/**
  * GET /api/withdrawals/:publicId
  * Get a specific withdrawal record owned by the user.
  */
@@ -327,40 +362,6 @@ withdrawalRouter.get('/admin/state-timeline/:publicId', requireAdmin, async (req
   } catch (err: any) {
     console.error('[Withdrawal API] Error fetching state timeline:', err);
     return res.status(500).json({ error: 'SERVER_ERROR', message: 'Failed to fetch withdrawal state timeline' });
-  }
-});
-
-/**
- * GET /api/withdrawals/config
- * Returns real-time public withdrawal configurations (minimum amount, mode, etc.).
- */
-withdrawalRouter.get('/config', async (_req: AuthRequest, res: Response) => {
-  try {
-    const minAmount = await getMinWithdrawalAmount();
-    const db = await getDb();
-    const configRes = await db.query(
-      `SELECT config_value FROM system_economic_configs WHERE config_key = 'AUTO_WITHDRAWAL_ENABLED' LIMIT 1`
-    ).catch(() => ({ rows: [] }));
-
-    let autoEnabled = false;
-    if (configRes.rows.length > 0) {
-      const rawVal = configRes.rows[0].config_value;
-      try {
-        autoEnabled = typeof rawVal === 'string' ? JSON.parse(rawVal) === true : Boolean(rawVal);
-      } catch {
-        autoEnabled = String(rawVal).toLowerCase() === 'true';
-      }
-    }
-
-    return res.status(200).json({
-      success: true,
-      minWithdrawalAmount: minAmount,
-      autoWithdrawalEnabled: autoEnabled,
-      mode: autoEnabled ? 'FULL_AUTOMATIC' : 'MANUAL_APPROVAL',
-    });
-  } catch (err: any) {
-    console.error('[Withdrawal API] Error fetching config:', err);
-    return res.status(500).json({ error: 'SERVER_ERROR', message: 'Failed to retrieve withdrawal configuration' });
   }
 });
 

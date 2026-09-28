@@ -1,5 +1,15 @@
-import { getDb } from '../src/server/db/db';
+process.env.APP_ENV = 'development';
+process.env.NODE_ENV = 'test';
+
+import path from 'path';
+import fs from 'fs';
 import { v4 as uuidv4 } from 'uuid';
+
+// Set isolated temporary database directory BEFORE importing db
+const testDataDir = path.resolve(process.cwd(), `.data/test_task12_${uuidv4()}`);
+process.env.PGLITE_DATA_DIR = testDataDir;
+
+import { getDb, closeDb } from '../src/server/db/db';
 import {
   evaluateUserPromotions,
   reversePromotionBonus,
@@ -11,9 +21,11 @@ async function runTask12PromotionTests() {
   console.log('🧪 RUNNING TASK #12: PROMOTION BONUS ENGINE TESTS');
   console.log('==================================================\n');
 
-  const db = await getDb();
   let passed = 0;
   let failed = 0;
+
+  try {
+    const db = await getDb();
 
   function assert(condition: boolean, testName: string, detail?: string) {
     if (condition) {
@@ -282,18 +294,32 @@ async function runTask12PromotionTests() {
     );
   }
 
-  console.log('\n==================================================');
-  console.log(`TASK #12 TEST RESULTS: ${passed} PASSED | ${failed} FAILED`);
-  console.log('==================================================\n');
+    console.log('\n==================================================');
+    console.log(`TASK #12 TEST RESULTS: ${passed} PASSED | ${failed} FAILED`);
+    console.log('==================================================\n');
 
-  if (failed > 0) {
-    process.exit(1);
-  } else {
-    process.exit(0);
+    if (failed > 0) {
+      throw new Error(`Task #12 tests failed: ${failed} failed`);
+    }
+  } finally {
+    try {
+      await closeDb();
+      if (fs.existsSync(testDataDir)) {
+        fs.rmSync(testDataDir, { recursive: true, force: true });
+        console.log(`🧹 Cleaned up isolated test data dir: ${testDataDir}`);
+      }
+    } catch (cleanupErr) {
+      console.warn('Notice: test directory cleanup error:', cleanupErr);
+    }
   }
 }
 
-runTask12PromotionTests().catch((err) => {
-  console.error('Fatal error in Task #12 promotion tests:', err);
-  process.exit(1);
-});
+runTask12PromotionTests()
+  .then(() => {
+    console.log('✅ Task #12 promotion tests finished successfully.');
+    process.exit(0);
+  })
+  .catch((err) => {
+    console.error('Fatal error in Task #12 promotion tests:', err);
+    process.exit(1);
+  });

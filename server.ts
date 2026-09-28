@@ -17,7 +17,7 @@ import { publicNetworkRouter } from './src/server/routes/publicNetworkRoutes';
 import { withdrawalRouter } from './src/server/routes/withdrawalRoutes';
 import { adminRouter } from './src/server/routes/adminRoutes';
 import { depositRouter } from './src/server/routes/depositRoutes';
-import { economicRouter } from './src/server/routes/economicRoutes';
+import { economicRouter, publicEconomicRouter } from './src/server/routes/economicRoutes';
 import { swapRouter } from './src/server/routes/swapRoutes';
 import { notificationRouter } from './src/server/routes/notificationRoutes';
 import { emailWebhookRouter } from './src/server/routes/emailWebhookRoutes';
@@ -100,6 +100,7 @@ async function startServer() {
   app.use('/api/swap', swapRouter);
   app.use('/api/notifications', notificationRouter);
   app.use('/api/admin/economics', economicRouter);
+  app.use('/api/economic', publicEconomicRouter);
   app.use('/api/webhooks/email', emailWebhookRouter);
   app.use('/api/diagnostics', diagnosticRouter);
   app.use('/api/admin', adminRouter);

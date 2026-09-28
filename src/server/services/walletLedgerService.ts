@@ -558,6 +558,7 @@ export async function syncUserLedger(userId: string, dbClient?: DatabaseClient):
       sourceId: nr.id,
       sourceRef: nr.public_reward_id,
       amount: Number(nr.amount),
+      currency: 'PHIVO',
       description: 'Genesis Node Mining Reward',
       createdAt: new Date(nr.accrued_at),
       dbClient: db,
@@ -571,6 +572,7 @@ export async function syncUserLedger(userId: string, dbClient?: DatabaseClient):
         sourceId: nr.id,
         sourceRef: nr.public_reward_id,
         amount: Number(nr.amount),
+        currency: 'PHIVO',
         description: 'Genesis Node Mining Reward Reversal',
         createdAt: nr.reversed_at ? new Date(nr.reversed_at) : new Date(),
         dbClient: db,
@@ -629,7 +631,7 @@ export async function getWalletSummary(userId: string): Promise<WalletSummaryRes
 
   const db = await getDb();
 
-  // Aggregate by entry_type and source_type
+  // Aggregate by entry_type and source_type for USD/USDT cash ledger
   const aggRes = await db.query<{
     entry_type: LedgerEntryType;
     source_type: LedgerSourceType;
@@ -643,7 +645,7 @@ export async function getWalletSummary(userId: string): Promise<WalletSummaryRes
       COALESCE(SUM(amount), 0) AS total_amount,
       COUNT(*) AS count
     FROM financial_ledger_entries
-    WHERE user_id = $1 AND status = 'SETTLED'
+    WHERE user_id = $1 AND status = 'SETTLED' AND (currency = 'USDT' OR currency = 'USD') AND source_type != 'NODE_REWARD'
     GROUP BY entry_type, source_type
     `,
     [userId]

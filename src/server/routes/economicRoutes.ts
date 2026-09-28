@@ -1,4 +1,4 @@
-import { Router, Response } from 'express';
+import { Router, Request, Response } from 'express';
 import { requireAdmin, AuthRequest } from '../middleware/authMiddleware';
 import { adminFinancialLimiter } from '../middleware/rateLimiter';
 import {
@@ -6,8 +6,37 @@ import {
   getEconomicConfigByKey,
   updateEconomicConfig,
   getEconomicAuditLogs,
+  getInternalCoinPrice,
 } from '../services/economicService';
 import { logAdminAction } from '../services/adminService';
+
+export const publicEconomicRouter = Router();
+
+/**
+ * GET /api/economic/token-price
+ * Authoritative public endpoint returning real-time PHIVO token price from active economic configuration.
+ */
+publicEconomicRouter.get('/token-price', async (_req: Request, res: Response) => {
+  try {
+    const coinConfig = await getInternalCoinPrice();
+    res.setHeader('Cache-Control', 'public, max-age=5');
+    return res.status(200).json({
+      success: true,
+      priceUsd: coinConfig.priceUsdt ?? 0.10,
+      coinSymbol: coinConfig.coinSymbol || 'PHIVO',
+      source: 'INTERNAL_ECONOMIC_ORACLE',
+      updatedAt: coinConfig.effectiveFrom || new Date().toISOString(),
+      swapEnabled: coinConfig.swapEnabled,
+      configured: coinConfig.configured,
+    });
+  } catch (err: any) {
+    console.error('[Economic API] Error fetching token price:', err);
+    return res.status(500).json({
+      error: 'SERVER_ERROR',
+      message: 'Failed to retrieve token price',
+    });
+  }
+});
 
 export const economicRouter = Router();
 

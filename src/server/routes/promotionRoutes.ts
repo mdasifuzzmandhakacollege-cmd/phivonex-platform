@@ -2,6 +2,14 @@ import { Router, Response } from 'express';
 import { requireAuth, requireAdmin, AuthRequest } from '../middleware/authMiddleware';
 import { evaluateUserPromotions } from '../services/promotionBonusService';
 import {
+  getPromotionRules,
+  updatePromotionRule,
+  getUserPromotionState,
+  evaluateUserRankPromotion,
+  getUserPromotionAuditLogs,
+  adminManualRankCorrection,
+} from '../services/leadershipRankService';
+import {
   getPromotionalOffers,
   createPromotionalOffer,
   updatePromotionalOffer,
@@ -20,6 +28,133 @@ import {
 import { broadcastSystemConfigChange } from '../services/systemConfigBroadcaster';
 
 export const promotionRouter = Router();
+
+/**
+ * GET /api/promotions/ranks/me
+ * Returns authenticated user's current rank, stage progress, completed events, and ladder.
+ */
+promotionRouter.get('/ranks/me', requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const userId = req.user!.id;
+    const state = await getUserPromotionState(userId);
+    return res.status(200).json({ success: true, state });
+  } catch (err: any) {
+    console.error('[Promotion API] Error in GET /api/promotions/ranks/me:', err);
+    return res.status(500).json({ error: 'SERVER_ERROR', message: 'Failed to retrieve user rank state' });
+  }
+});
+
+/**
+ * POST /api/promotions/ranks/evaluate
+ * Server-authoritative sequential evaluation for authenticated user.
+ */
+promotionRouter.post('/ranks/evaluate', requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const userId = req.user!.id;
+    const result = await evaluateUserRankPromotion(userId);
+    return res.status(200).json({ success: true, result });
+  } catch (err: any) {
+    console.error('[Promotion API] Error in POST /api/promotions/ranks/evaluate:', err);
+    return res.status(500).json({ error: 'SERVER_ERROR', message: err.message || 'Evaluation failed' });
+  }
+});
+
+/**
+ * GET /api/promotions/ranks/rules
+ * Returns all promotion rules and ladder definition.
+ */
+promotionRouter.get('/ranks/rules', requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const rules = await getPromotionRules();
+    return res.status(200).json({ success: true, rules });
+  } catch (err: any) {
+    console.error('[Promotion API] Error in GET /api/promotions/ranks/rules:', err);
+    return res.status(500).json({ error: 'SERVER_ERROR', message: 'Failed to retrieve promotion rules' });
+  }
+});
+
+/**
+ * PUT /api/promotions/ranks/rules/:id
+ * Admin updates promotion rule requirements (versioned, audited, prospective).
+ */
+promotionRouter.put('/ranks/rules/:id', requireAuth, requireAdmin, async (req: AuthRequest, res: Response) => {
+  try {
+    const admin = req.user!;
+    const { id } = req.params;
+    const { requiredLeft, requiredRight, requiredLeaderRank, legBalanceRule, rewardUsd, status, reason } = req.body || {};
+
+    if (!reason || String(reason).trim().length < 5) {
+      return res.status(400).json({ error: 'INVALID_INPUT', message: 'Reason is required (min 5 characters).' });
+    }
+
+    const updated = await updatePromotionRule(admin.id, admin.public_id, id, {
+      requiredLeft: typeof requiredLeft === 'number' ? requiredLeft : undefined,
+      requiredRight: typeof requiredRight === 'number' ? requiredRight : undefined,
+      requiredLeaderRank: requiredLeaderRank !== undefined ? requiredLeaderRank : undefined,
+      legBalanceRule: legBalanceRule !== undefined ? legBalanceRule : undefined,
+      rewardUsd: typeof rewardUsd === 'number' ? rewardUsd : undefined,
+      status: status !== undefined ? status : undefined,
+      reason: String(reason).trim(),
+    });
+
+    return res.status(200).json({ success: true, rule: updated });
+  } catch (err: any) {
+    console.error('[Admin Promotion API] Error updating rank rule:', err);
+    return res.status(err.statusCode || 500).json({ error: err.code || 'SERVER_ERROR', message: err.message });
+  }
+});
+
+/**
+ * GET /api/promotions/ranks/user/:userId
+ * Admin inspects a specific user's promotion state, audit log, and downline progress.
+ */
+promotionRouter.get('/ranks/user/:userId', requireAuth, requireAdmin, async (req: AuthRequest, res: Response) => {
+  try {
+    const { userId } = req.params;
+    const state = await getUserPromotionState(userId);
+    const auditLogs = await getUserPromotionAuditLogs(userId);
+    return res.status(200).json({ success: true, state, auditLogs });
+  } catch (err: any) {
+    console.error('[Admin Promotion API] Error inspecting user rank state:', err);
+    return res.status(500).json({ error: 'SERVER_ERROR', message: 'Failed to inspect user rank state' });
+  }
+});
+
+/**
+ * POST /api/promotions/ranks/evaluate/:userId
+ * Admin evaluates a specific user's next rank.
+ */
+promotionRouter.post('/ranks/evaluate/:userId', requireAuth, requireAdmin, async (req: AuthRequest, res: Response) => {
+  try {
+    const { userId } = req.params;
+    const result = await evaluateUserRankPromotion(userId);
+    return res.status(200).json({ success: true, result });
+  } catch (err: any) {
+    console.error('[Admin Promotion API] Error evaluating user rank:', err);
+    return res.status(500).json({ error: 'SERVER_ERROR', message: err.message || 'Evaluation failed' });
+  }
+});
+
+/**
+ * POST /api/promotions/ranks/admin/correct
+ * Admin manual rank correction with mandatory reason and immutable audit log.
+ */
+promotionRouter.post('/ranks/admin/correct', requireAuth, requireAdmin, async (req: AuthRequest, res: Response) => {
+  try {
+    const admin = req.user!;
+    const { userId, targetRank, reason } = req.body || {};
+
+    if (!userId || !targetRank || !reason || String(reason).trim().length < 5) {
+      return res.status(400).json({ error: 'INVALID_INPUT', message: 'userId, targetRank, and reason (min 5 chars) are required.' });
+    }
+
+    const state = await adminManualRankCorrection(admin.id, admin.public_id, userId, targetRank, String(reason).trim());
+    return res.status(200).json({ success: true, state });
+  } catch (err: any) {
+    console.error('[Admin Promotion API] Error in rank correction:', err);
+    return res.status(err.statusCode || 500).json({ error: err.code || 'SERVER_ERROR', message: err.message });
+  }
+});
 
 /**
  * GET /api/promotions/me

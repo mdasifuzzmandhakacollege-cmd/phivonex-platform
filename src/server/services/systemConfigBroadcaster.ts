@@ -18,6 +18,22 @@ export async function broadcastSystemConfigChange(key: string, value: any, categ
   const timestamp = new Date().toISOString();
   const normalizedKey = key.toUpperCase();
 
+  // In test environment, skip external network Firestore calls to avoid timeouts
+  if (process.env.NODE_ENV === 'test' || process.env.APP_ENV === 'test') {
+    try {
+      publicNetworkEventEmitter.emit('networkEvent', {
+        type: 'system_config',
+        key: normalizedKey,
+        value,
+        category,
+        updatedAt: timestamp,
+      });
+    } catch (sseErr) {
+      console.warn('[SystemConfigBroadcaster] SSE broadcast warning:', sseErr);
+    }
+    return;
+  }
+
   // 1. Dual Firestore real-time sync
   try {
     // Primary 'configs' document
