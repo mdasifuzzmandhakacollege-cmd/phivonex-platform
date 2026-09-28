@@ -408,14 +408,13 @@ depositRouter.post('/submit-txhash', requireAuth, depositLimiter, async (req: Au
       return;
     }
 
-    // 5. Atomic PostgreSQL Transaction: BEGIN / COMMIT / ROLLBACK for Deposit INSERT and Ledger CREDIT
-    await db.query('BEGIN');
-    try {
+    // 5. Atomic PostgreSQL Transaction using single-connection transaction API
+    const now = new Date();
+    const creditResult = await db.transaction(async (trx) => {
       const depositId = uuidv4();
       const publicDepositId = generateDepositPublicId();
-      const now = new Date();
 
-      const insertRes = await db.query(
+      const insertRes = await trx.query(
         `
         INSERT INTO blockchain_deposits (
           id, public_deposit_id, user_id, chain_id, asset,
@@ -443,13 +442,7 @@ depositRouter.post('/submit-txhash', requireAuth, depositLimiter, async (req: Au
       );
 
       if (insertRes.rows.length === 0) {
-        await db.query('ROLLBACK');
-        res.status(409).json({
-          success: false,
-          error: 'TX_ALREADY_USED',
-          message: 'This transaction hash and log index have already been submitted and credited.',
-        });
-        return;
+        return { success: false, error: 'TX_ALREADY_USED', message: 'This transaction hash and log index have already been submitted and credited.' };
       }
 
       const actualDepositId = insertRes.rows[0].id;
@@ -457,18 +450,12 @@ depositRouter.post('/submit-txhash', requireAuth, depositLimiter, async (req: Au
       const actualUserId = insertRes.rows[0].user_id;
 
       if (actualUserId !== userId) {
-        await db.query('ROLLBACK');
-        res.status(409).json({
-          success: false,
-          error: 'DUPLICATE_TX_USER_MISMATCH',
-          message: 'Transaction already linked to another user account.',
-        });
-        return;
+        return { success: false, error: 'DUPLICATE_TX_USER_MISMATCH', message: 'Transaction already linked to another user account.' };
       }
 
       const ledgerId = uuidv4();
       const publicTxnId = generateLedgerTransactionPublicId();
-      const ledgerRes = await db.query(
+      const ledgerRes = await trx.query(
         `
         INSERT INTO financial_ledger_entries (
           id, public_txn_id, user_id, entry_type, source_type, source_id,
@@ -491,62 +478,68 @@ depositRouter.post('/submit-txhash', requireAuth, depositLimiter, async (req: Au
       );
 
       if (ledgerRes.rows.length === 0 || ledgerRes.rows[0].user_id !== actualUserId) {
-        await db.query('ROLLBACK');
-        res.status(409).json({
-          success: false,
-          error: 'LEDGER_CREDIT_FAILED',
-          message: 'Ledger credit failed or already exists. Rolled back deposit.',
-        });
-        return;
+        return { success: false, error: 'LEDGER_CREDIT_FAILED', message: 'Ledger credit failed or already exists. Rolled back deposit.' };
       }
 
-      await db.query('COMMIT');
-
-      // 6. Sync to Firestore for cloud persistence (non-blocking)
-      try {
-        const { adminFirestore } = await import('../../lib/firebase-admin');
-        await adminFirestore.collection('blockchain_deposits').doc(actualDepositId).set({
-          id: actualDepositId,
-          publicDepositId: actualPublicDepositId,
-          userId,
-          txHash: cleanTxHash,
-          amount: detectedAmount,
-          asset: 'USDT',
-          status: 'CREDITED',
-          createdAt: now.toISOString(),
-        }, { merge: true });
-      } catch (fsErr) {
-        console.warn('[Deposit API] Firestore deposit backup notice:', fsErr);
-      }
-
-      // 7. Notify user (non-blocking)
-      try {
-        await notifyUsdtDepositConfirmed({
-          userId,
-          amountUsdt: detectedAmount,
-          depositId: actualDepositId,
-          txHash: cleanTxHash,
-        });
-      } catch {
-        // Non-critical notification failure
-      }
-
-      res.status(200).json({
+      return {
         success: true,
-        message: `Deposit verified successfully! Credited ${detectedAmount} USDT to your account.`,
-        data: {
-          publicDepositId: actualPublicDepositId,
-          amount: detectedAmount,
-          asset: 'USDT',
-          txHash: cleanTxHash,
-          confirmations,
-          logIndex: realLogIndex,
-        },
+        actualDepositId,
+        actualPublicDepositId,
+      };
+    });
+
+    if (!creditResult.success) {
+      res.status(409).json({
+        success: false,
+        error: creditResult.error,
+        message: creditResult.message,
       });
-    } catch (txErr: any) {
-      await db.query('ROLLBACK').catch(() => {});
-      throw txErr;
+      return;
     }
+
+    const { actualDepositId, actualPublicDepositId } = creditResult;
+
+    // 6. Sync to Firestore for cloud persistence (non-blocking)
+    try {
+      const { adminFirestore } = await import('../../lib/firebase-admin');
+      await adminFirestore.collection('blockchain_deposits').doc(actualDepositId).set({
+        id: actualDepositId,
+        publicDepositId: actualPublicDepositId,
+        userId,
+        txHash: cleanTxHash,
+        amount: detectedAmount,
+        asset: 'USDT',
+        status: 'CREDITED',
+        createdAt: now.toISOString(),
+      }, { merge: true });
+    } catch (fsErr) {
+      console.warn('[Deposit API] Firestore deposit backup notice:', fsErr);
+    }
+
+    // 7. Notify user (non-blocking)
+    try {
+      await notifyUsdtDepositConfirmed({
+        userId,
+        amountUsdt: detectedAmount,
+        depositId: actualDepositId,
+        txHash: cleanTxHash,
+      });
+    } catch {
+      // Non-critical notification failure
+    }
+
+    res.status(200).json({
+      success: true,
+      message: `Deposit verified successfully! Credited ${detectedAmount} USDT to your account.`,
+      data: {
+        publicDepositId: actualPublicDepositId,
+        amount: detectedAmount,
+        asset: 'USDT',
+        txHash: cleanTxHash,
+        confirmations,
+        logIndex: realLogIndex,
+      },
+    });
   } catch (err: any) {
     console.error('[Deposit API] Error processing submitted TxHash:', err);
     res.status(500).json({

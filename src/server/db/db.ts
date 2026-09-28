@@ -14,6 +14,7 @@ export interface QueryResult<T = any> {
 export interface DatabaseClient {
   query<T = any>(sql: string, params?: any[]): Promise<QueryResult<T>>;
   exec(sql: string): Promise<void>;
+  transaction<T>(callback: (client: DatabaseClient) => Promise<T>): Promise<T>;
 }
 
 declare global {
@@ -87,6 +88,36 @@ export async function getDb(): Promise<DatabaseClient> {
             async exec(sql: string): Promise<void> {
               await pool.query(sql);
             },
+            async transaction<T>(callback: (client: DatabaseClient) => Promise<T>): Promise<T> {
+              const pgClient = await pool.connect();
+              const trxClient: DatabaseClient = {
+                async query<R = any>(sql: string, params?: any[]): Promise<QueryResult<R>> {
+                  const res = await pgClient.query(sql, params);
+                  return {
+                    rows: res.rows as R[],
+                    rowCount: res.rowCount ?? res.rows.length,
+                  };
+                },
+                async exec(sql: string): Promise<void> {
+                  await pgClient.query(sql);
+                },
+                async transaction<R>(cb: (c: DatabaseClient) => Promise<R>): Promise<R> {
+                  return cb(trxClient);
+                },
+              };
+
+              try {
+                await pgClient.query('BEGIN');
+                const result = await callback(trxClient);
+                await pgClient.query('COMMIT');
+                return result;
+              } catch (err) {
+                await pgClient.query('ROLLBACK').catch(() => {});
+                throw err;
+              } finally {
+                pgClient.release();
+              }
+            },
           };
           console.log('[DB] Successfully connected to PostgreSQL database.');
         } catch (poolErr: any) {
@@ -141,6 +172,35 @@ export async function getDb(): Promise<DatabaseClient> {
           },
           async exec(sql: string): Promise<void> {
             await pglite.exec(sql);
+          },
+          async transaction<T>(callback: (client: DatabaseClient) => Promise<T>): Promise<T> {
+            const trxClient: DatabaseClient = {
+              async query<R = any>(sql: string, params?: any[]): Promise<QueryResult<R>> {
+                const res = await pglite.query<R>(sql, params);
+                return {
+                  rows: res.rows as R[],
+                  rowCount: res.rows.length,
+                };
+              },
+              async exec(sql: string): Promise<void> {
+                await pglite.exec(sql);
+              },
+              async transaction<R>(cb: (c: DatabaseClient) => Promise<R>): Promise<R> {
+                return cb(trxClient);
+              },
+            };
+
+            try {
+              await pglite.query('BEGIN');
+              const result = await callback(trxClient);
+              await pglite.query('COMMIT');
+              return result;
+            } catch (err) {
+              await pglite.query('ROLLBACK').catch(() => {});
+              throw err;
+            } finally {
+              // no release needed for PGlite
+            }
           },
         };
       }
