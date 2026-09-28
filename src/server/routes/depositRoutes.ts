@@ -17,34 +17,23 @@ export const depositRouter = Router();
 
 /**
  * GET /api/deposits/address
- * Returns the authenticated user's unique deposit address for BNB or USDT on BNB Smart Chain.
+ * Returns the single official PHIVONEX BSC/USDT deposit address.
  */
 depositRouter.get('/address', requireAuth, depositLimiter, async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const userId = req.user!.id;
-    const requestedAsset = ((req.query.asset as string) || 'BNB').toUpperCase();
-    const targetAsset = requestedAsset === 'USDT' ? 'USDT' : 'BNB';
-
-    const addressRecord = await getOrCreateUserDepositAddress(userId, targetAsset);
-
-    const isUsdt = targetAsset === 'USDT';
-    const networkDisplayName = isUsdt ? 'BNB Smart Chain (BEP-20)' : BSC_CONFIG.NETWORK_NAME;
-    const assetWarning = isUsdt
-      ? `Send USDT (BEP-20) on BNB Smart Chain (Chain ID: ${BSC_CONFIG.CHAIN_ID}) only. Do not send USDT via ERC-20, TRC-20, or other networks.`
-      : `Send native BNB on ${BSC_CONFIG.NETWORK_NAME} (Chain ID: ${BSC_CONFIG.CHAIN_ID}) only. Do not send other assets to this address.`;
+    const officialAddress = BSC_CONFIG.TREASURY_WALLET_ADDRESS;
 
     res.status(200).json({
       success: true,
       data: {
-        address: addressRecord.address,
-        chainId: addressRecord.chainId,
-        asset: targetAsset,
-        networkName: networkDisplayName,
+        address: officialAddress,
+        chainId: BSC_CONFIG.CHAIN_ID,
+        asset: 'USDT',
+        networkName: BSC_CONFIG.NETWORK_NAME,
         requiredConfirmations: BSC_CONFIG.REQUIRED_CONFIRMATIONS,
-        explorerUrl: `${BSC_CONFIG.EXPLORER_ADDRESS_URL}${addressRecord.address}`,
-        derivationReference: addressRecord.derivationReference,
-        warning: assetWarning,
-        note: `BNB and USDT deposit balances are tracked separately in your financial ledger. Both BNB and USDT balances can be used directly to purchase & activate Genesis Nodes.`,
+        explorerUrl: `https://bscscan.com/address/${officialAddress}`,
+        warning: `Send USDT (BEP-20) on BNB Smart Chain (Chain ID: ${BSC_CONFIG.CHAIN_ID}) to this official platform deposit address only. After sending, submit your transaction hash (TxHash) below for instant automated crediting.`,
+        note: `All deposits are independently verified on-chain via BSC RPC. Do not send funds from exchange smart contracts that do not emit standard Transfer events.`,
       },
     });
   } catch (err: any) {
@@ -52,7 +41,7 @@ depositRouter.get('/address', requireAuth, depositLimiter, async (req: AuthReque
     res.status(500).json({
       success: false,
       error: 'FAILED_TO_GET_ADDRESS',
-      message: err?.message || 'Could not retrieve user deposit address',
+      message: err?.message || 'Could not retrieve official deposit address',
     });
   }
 });
