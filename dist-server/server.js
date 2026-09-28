@@ -120,6 +120,537 @@ var init_nodeConfig = __esm({
   }
 });
 
+// src/server/services/walletLedgerService.ts
+var walletLedgerService_exports = {};
+__export(walletLedgerService_exports, {
+  getWalletSummary: () => getWalletSummary,
+  getWalletTransactions: () => getWalletTransactions,
+  postLedgerCredit: () => postLedgerCredit,
+  postLedgerDebit: () => postLedgerDebit,
+  postLedgerReversal: () => postLedgerReversal,
+  syncUserLedger: () => syncUserLedger
+});
+import { v4 as uuidv4 } from "uuid";
+async function postLedgerCredit(params) {
+  const { userId, sourceType, sourceId, sourceRef, amount, description, currency, createdAt, dbClient } = params;
+  if (!amount || amount <= 0) return null;
+  const db = dbClient || await getDb();
+  const id = uuidv4();
+  const publicTxnId = generateLedgerTransactionPublicId();
+  const effectiveTime = createdAt || /* @__PURE__ */ new Date();
+  const resolvedCurrency = currency || (sourceType === "COIN_SWAP" || sourceType === "WITHDRAWAL" || sourceType === "BLOCKCHAIN_DEPOSIT" ? "USDT" : "USD");
+  const res = await db.query(
+    `
+    INSERT INTO financial_ledger_entries (
+      id, public_txn_id, user_id, entry_type, source_type, source_id,
+      source_ref, description, amount, currency, status, created_at
+    )
+    VALUES ($1, $2, $3, 'CREDIT', $4, $5, $6, $7, $8, $9, 'SETTLED', $10)
+    ON CONFLICT (source_type, source_id, entry_type) DO NOTHING
+    RETURNING *
+    `,
+    [id, publicTxnId, userId, sourceType, sourceId, sourceRef, description, amount, resolvedCurrency, effectiveTime]
+  );
+  if (res.rows.length > 0) {
+    const row = res.rows[0];
+    return {
+      id: row.id,
+      publicTxnId: row.public_txn_id,
+      userId: row.user_id,
+      entryType: row.entry_type,
+      sourceType: row.source_type,
+      sourceId: row.source_id,
+      sourceRef: row.source_ref,
+      description: row.description,
+      amount: Number(row.amount),
+      currency: row.currency,
+      status: row.status,
+      createdAt: new Date(row.created_at).toISOString()
+    };
+  }
+  const existing = await db.query(
+    `
+    SELECT * FROM financial_ledger_entries
+    WHERE source_type = $1 AND source_id = $2 AND entry_type = 'CREDIT'
+    `,
+    [sourceType, sourceId]
+  );
+  if (existing.rows.length > 0) {
+    const row = existing.rows[0];
+    return {
+      id: row.id,
+      publicTxnId: row.public_txn_id,
+      userId: row.user_id,
+      entryType: row.entry_type,
+      sourceType: row.source_type,
+      sourceId: row.source_id,
+      sourceRef: row.source_ref,
+      description: row.description,
+      amount: Number(row.amount),
+      currency: row.currency,
+      status: row.status,
+      createdAt: new Date(row.created_at).toISOString()
+    };
+  }
+  return null;
+}
+async function postLedgerReversal(params) {
+  const { userId, sourceType, sourceId, sourceRef, amount, description, currency, createdAt, dbClient } = params;
+  if (!amount || amount <= 0) return null;
+  const db = dbClient || await getDb();
+  const id = uuidv4();
+  const publicTxnId = generateLedgerTransactionPublicId();
+  const effectiveTime = createdAt || /* @__PURE__ */ new Date();
+  const resolvedCurrency = currency || (sourceType === "COIN_SWAP" || sourceType === "WITHDRAWAL" || sourceType === "BLOCKCHAIN_DEPOSIT" ? "USDT" : "USD");
+  const res = await db.query(
+    `
+    INSERT INTO financial_ledger_entries (
+      id, public_txn_id, user_id, entry_type, source_type, source_id,
+      source_ref, description, amount, currency, status, created_at
+    )
+    VALUES ($1, $2, $3, 'REVERSAL', $4, $5, $6, $7, $8, $9, 'SETTLED', $10)
+    ON CONFLICT (source_type, source_id, entry_type) DO NOTHING
+    RETURNING *
+    `,
+    [id, publicTxnId, userId, sourceType, sourceId, sourceRef, description, amount, resolvedCurrency, effectiveTime]
+  );
+  if (res.rows.length > 0) {
+    const row = res.rows[0];
+    return {
+      id: row.id,
+      publicTxnId: row.public_txn_id,
+      userId: row.user_id,
+      entryType: row.entry_type,
+      sourceType: row.source_type,
+      sourceId: row.source_id,
+      sourceRef: row.source_ref,
+      description: row.description,
+      amount: Number(row.amount),
+      currency: row.currency,
+      status: row.status,
+      createdAt: new Date(row.created_at).toISOString()
+    };
+  }
+  const existing = await db.query(
+    `
+    SELECT * FROM financial_ledger_entries
+    WHERE source_type = $1 AND source_id = $2 AND entry_type = 'REVERSAL'
+    `,
+    [sourceType, sourceId]
+  );
+  if (existing.rows.length > 0) {
+    const row = existing.rows[0];
+    return {
+      id: row.id,
+      publicTxnId: row.public_txn_id,
+      userId: row.user_id,
+      entryType: row.entry_type,
+      sourceType: row.source_type,
+      sourceId: row.source_id,
+      sourceRef: row.source_ref,
+      description: row.description,
+      amount: Number(row.amount),
+      currency: row.currency,
+      status: row.status,
+      createdAt: new Date(row.created_at).toISOString()
+    };
+  }
+  return null;
+}
+async function postLedgerDebit(params) {
+  const { userId, sourceType, sourceId, sourceRef, amount, description, currency, createdAt, dbClient } = params;
+  if (!amount || amount <= 0) return null;
+  const db = dbClient || await getDb();
+  const id = uuidv4();
+  const publicTxnId = generateLedgerTransactionPublicId();
+  const effectiveTime = createdAt || /* @__PURE__ */ new Date();
+  const resolvedCurrency = currency || (sourceType === "COIN_SWAP" || sourceType === "WITHDRAWAL" || sourceType === "BLOCKCHAIN_DEPOSIT" ? "USDT" : "USD");
+  const res = await db.query(
+    `
+    INSERT INTO financial_ledger_entries (
+      id, public_txn_id, user_id, entry_type, source_type, source_id,
+      source_ref, description, amount, currency, status, created_at
+    )
+    VALUES ($1, $2, $3, 'DEBIT', $4, $5, $6, $7, $8, $9, 'SETTLED', $10)
+    ON CONFLICT (source_type, source_id, entry_type) DO NOTHING
+    RETURNING *
+    `,
+    [id, publicTxnId, userId, sourceType, sourceId, sourceRef, description, amount, resolvedCurrency, effectiveTime]
+  );
+  if (res.rows.length > 0) {
+    const row = res.rows[0];
+    return {
+      id: row.id,
+      publicTxnId: row.public_txn_id,
+      userId: row.user_id,
+      entryType: row.entry_type,
+      sourceType: row.source_type,
+      sourceId: row.source_id,
+      sourceRef: row.source_ref,
+      description: row.description,
+      amount: Number(row.amount),
+      currency: row.currency,
+      status: row.status,
+      createdAt: new Date(row.created_at).toISOString()
+    };
+  }
+  const existing = await db.query(
+    `
+    SELECT * FROM financial_ledger_entries
+    WHERE source_type = $1 AND source_id = $2 AND entry_type = 'DEBIT'
+    `,
+    [sourceType, sourceId]
+  );
+  if (existing.rows.length > 0) {
+    const row = existing.rows[0];
+    return {
+      id: row.id,
+      publicTxnId: row.public_txn_id,
+      userId: row.user_id,
+      entryType: row.entry_type,
+      sourceType: row.source_type,
+      sourceId: row.source_id,
+      sourceRef: row.source_ref,
+      description: row.description,
+      amount: Number(row.amount),
+      currency: row.currency,
+      status: row.status,
+      createdAt: new Date(row.created_at).toISOString()
+    };
+  }
+  return null;
+}
+async function syncUserLedger(userId, dbClient) {
+  const db = dbClient || await getDb();
+  const commRes = await db.query(
+    `
+    SELECT id, public_commission_id, amount_usd, status, earned_at, reversed_at
+    FROM referral_commissions
+    WHERE sponsor_user_id = $1
+    `,
+    [userId]
+  );
+  for (const c of commRes.rows) {
+    await postLedgerCredit({
+      userId,
+      sourceType: "REFERRAL_COMMISSION",
+      sourceId: c.id,
+      sourceRef: c.public_commission_id,
+      amount: Number(c.amount_usd),
+      description: "Direct Referral Commission - Node Activation",
+      createdAt: new Date(c.earned_at),
+      dbClient: db
+    });
+    if (c.status === "REVERSED") {
+      await postLedgerReversal({
+        userId,
+        sourceType: "REFERRAL_COMMISSION",
+        sourceId: c.id,
+        sourceRef: c.public_commission_id,
+        amount: Number(c.amount_usd),
+        description: "Direct Referral Commission Reversal",
+        createdAt: c.reversed_at ? new Date(c.reversed_at) : /* @__PURE__ */ new Date(),
+        dbClient: db
+      });
+    }
+  }
+  const matchRes = await db.query(
+    `
+    SELECT id, public_settlement_id, business_date, total_bonus_usd, status, settled_at
+    FROM binary_matching_settlements
+    WHERE user_id = $1 AND total_bonus_usd > 0
+    `,
+    [userId]
+  );
+  for (const m of matchRes.rows) {
+    const bDate = typeof m.business_date === "string" ? m.business_date.split("T")[0] : new Date(m.business_date).toISOString().split("T")[0];
+    await postLedgerCredit({
+      userId,
+      sourceType: "MATCHING_BONUS",
+      sourceId: m.id,
+      sourceRef: m.public_settlement_id,
+      amount: Number(m.total_bonus_usd),
+      description: `Daily Binary Matching Settlement (${bDate})`,
+      createdAt: new Date(m.settled_at),
+      dbClient: db
+    });
+    if (m.status === "REVERSED") {
+      await postLedgerReversal({
+        userId,
+        sourceType: "MATCHING_BONUS",
+        sourceId: m.id,
+        sourceRef: m.public_settlement_id,
+        amount: Number(m.total_bonus_usd),
+        description: `Daily Binary Matching Settlement Reversal (${bDate})`,
+        createdAt: /* @__PURE__ */ new Date(),
+        dbClient: db
+      });
+    }
+  }
+  const promoRes = await db.query(
+    `
+    SELECT id, public_bonus_id, milestone, amount_usd, status, qualified_at
+    FROM promotion_bonuses
+    WHERE user_id = $1
+    `,
+    [userId]
+  );
+  for (const p of promoRes.rows) {
+    await postLedgerCredit({
+      userId,
+      sourceType: "PROMOTION_BONUS",
+      sourceId: p.id,
+      sourceRef: p.public_bonus_id,
+      amount: Number(p.amount_usd),
+      description: `Promotion Milestone Bonus - ${p.milestone}`,
+      createdAt: new Date(p.qualified_at),
+      dbClient: db
+    });
+    if (p.status === "REVERSED") {
+      await postLedgerReversal({
+        userId,
+        sourceType: "PROMOTION_BONUS",
+        sourceId: p.id,
+        sourceRef: p.public_bonus_id,
+        amount: Number(p.amount_usd),
+        description: `Promotion Milestone Bonus Reversal - ${p.milestone}`,
+        createdAt: /* @__PURE__ */ new Date(),
+        dbClient: db
+      });
+    }
+  }
+  const nodeRewRes = await db.query(
+    `
+    SELECT id, public_reward_id, amount, status, accrued_at, reversed_at
+    FROM node_rewards
+    WHERE owner_user_id = $1
+    `,
+    [userId]
+  );
+  for (const nr of nodeRewRes.rows) {
+    await postLedgerCredit({
+      userId,
+      sourceType: "NODE_REWARD",
+      sourceId: nr.id,
+      sourceRef: nr.public_reward_id,
+      amount: Number(nr.amount),
+      currency: "PHIVO",
+      description: "Genesis Node Mining Reward",
+      createdAt: new Date(nr.accrued_at),
+      dbClient: db
+    });
+    if (nr.status === "REVERSED") {
+      await postLedgerReversal({
+        userId,
+        sourceType: "NODE_REWARD",
+        sourceId: nr.id,
+        sourceRef: nr.public_reward_id,
+        amount: Number(nr.amount),
+        currency: "PHIVO",
+        description: "Genesis Node Mining Reward Reversal",
+        createdAt: nr.reversed_at ? new Date(nr.reversed_at) : /* @__PURE__ */ new Date(),
+        dbClient: db
+      });
+    }
+  }
+  const depRes = await db.query(
+    `
+    SELECT id, public_deposit_id, amount, asset, tx_hash, status, credited_at, confirmed_at, created_at
+    FROM blockchain_deposits
+    WHERE user_id = $1 AND status IN ('CREDITED', 'CONFIRMED', 'SWEPT')
+    `,
+    [userId]
+  );
+  for (const d of depRes.rows) {
+    const assetName = (d.asset || "USDT").toUpperCase();
+    const effectiveDate = d.credited_at || d.confirmed_at || d.created_at || /* @__PURE__ */ new Date();
+    await postLedgerCredit({
+      userId,
+      sourceType: "BLOCKCHAIN_DEPOSIT",
+      sourceId: d.id,
+      sourceRef: d.public_deposit_id,
+      amount: Number(d.amount),
+      currency: assetName === "BNB" ? "BNB" : "USDT",
+      description: `${assetName} Blockchain Deposit (${d.tx_hash ? d.tx_hash.slice(0, 10) : "Verified"})`,
+      createdAt: new Date(effectiveDate),
+      dbClient: db
+    });
+  }
+}
+async function getWalletSummary(userId) {
+  await syncUserLedger(userId);
+  const db = await getDb();
+  const aggRes = await db.query(
+    `
+    SELECT 
+      entry_type,
+      source_type,
+      COALESCE(SUM(amount), 0) AS total_amount,
+      COUNT(*) AS count
+    FROM financial_ledger_entries
+    WHERE user_id = $1 AND status = 'SETTLED' AND (currency = 'USDT' OR currency = 'USD') AND source_type != 'NODE_REWARD'
+    GROUP BY entry_type, source_type
+    `,
+    [userId]
+  );
+  let totalEarned = 0;
+  let earningReversals = 0;
+  let totalDebited = 0;
+  let withdrawalReversals = 0;
+  let transactionCount = 0;
+  const grossCredits = {
+    referral: 0,
+    matching: 0,
+    promotion: 0,
+    nodeReward: 0,
+    swap: 0,
+    deposit: 0
+  };
+  const reversals = {
+    referral: 0,
+    matching: 0,
+    promotion: 0,
+    nodeReward: 0,
+    swap: 0,
+    deposit: 0
+  };
+  for (const row of aggRes.rows) {
+    const amt = Number(row.total_amount);
+    const cnt = Number(row.count);
+    transactionCount += cnt;
+    if (row.entry_type === "CREDIT") {
+      totalEarned += amt;
+      if (row.source_type === "REFERRAL_COMMISSION") grossCredits.referral += amt;
+      else if (row.source_type === "MATCHING_BONUS") grossCredits.matching += amt;
+      else if (row.source_type === "PROMOTION_BONUS") grossCredits.promotion += amt;
+      else if (row.source_type === "NODE_REWARD") grossCredits.nodeReward += amt;
+      else if (row.source_type === "COIN_SWAP") grossCredits.swap += amt;
+      else if (row.source_type === "BLOCKCHAIN_DEPOSIT") grossCredits.deposit += amt;
+    } else if (row.entry_type === "REVERSAL") {
+      if (row.source_type === "WITHDRAWAL") {
+        withdrawalReversals += amt;
+      } else {
+        earningReversals += amt;
+        if (row.source_type === "REFERRAL_COMMISSION") reversals.referral += amt;
+        else if (row.source_type === "MATCHING_BONUS") reversals.matching += amt;
+        else if (row.source_type === "PROMOTION_BONUS") reversals.promotion += amt;
+        else if (row.source_type === "NODE_REWARD") reversals.nodeReward += amt;
+        else if (row.source_type === "COIN_SWAP") reversals.swap += amt;
+        else if (row.source_type === "BLOCKCHAIN_DEPOSIT") reversals.deposit += amt;
+      }
+    } else if (row.entry_type === "DEBIT") {
+      totalDebited += amt;
+    }
+  }
+  const breakdown = {
+    referral: Math.max(0, grossCredits.referral - reversals.referral),
+    matching: Math.max(0, grossCredits.matching - reversals.matching),
+    promotion: Math.max(0, grossCredits.promotion - reversals.promotion),
+    nodeReward: Math.max(0, grossCredits.nodeReward - reversals.nodeReward),
+    swap: Math.max(0, grossCredits.swap - reversals.swap),
+    deposit: Math.max(0, grossCredits.deposit - reversals.deposit)
+  };
+  const netEarned = Math.max(0, totalEarned - earningReversals);
+  const netWithdrawn = Math.max(0, totalDebited - withdrawalReversals);
+  const ledgerBalance = Math.max(0, netEarned - netWithdrawn);
+  return {
+    totalEarned,
+    totalReversed: earningReversals,
+    totalWithdrawn: netWithdrawn,
+    ledgerBalance,
+    availableBalance: ledgerBalance,
+    transactionCount,
+    breakdown,
+    grossBreakdown: grossCredits
+  };
+}
+async function getWalletTransactions(userId, page = 1, limit = 20, typeFilter, searchQuery) {
+  await syncUserLedger(userId);
+  const db = await getDb();
+  const safePage = Math.max(1, page);
+  const safeLimit = Math.min(100, Math.max(1, limit));
+  const offset = (safePage - 1) * safeLimit;
+  let types = null;
+  if (typeFilter && typeFilter !== "all" && typeFilter !== "ALL") {
+    const u = typeFilter.toUpperCase();
+    if (u === "NODE_ACTIVATION" || u === "NODE_REWARD" || u === "NODE_MINING") {
+      types = ["NODE_REWARD"];
+    } else if (u === "REFERRAL_COMMISSION" || u === "REFERRAL") {
+      types = ["REFERRAL_COMMISSION"];
+    } else if (u === "MATCHING_BONUS" || u === "MATCHING") {
+      types = ["MATCHING_BONUS"];
+    } else if (u === "PROMOTION_BONUS" || u === "PROMOTION") {
+      types = ["PROMOTION_BONUS"];
+    } else {
+      types = [u];
+    }
+  }
+  const cleanSearch = searchQuery ? searchQuery.trim() : "";
+  let whereClauses = ["user_id = $1"];
+  let queryParams = [userId];
+  let paramIdx = 2;
+  if (types && types.length > 0) {
+    whereClauses.push(`source_type = ANY($${paramIdx}::text[])`);
+    queryParams.push(types);
+    paramIdx++;
+  }
+  if (cleanSearch) {
+    whereClauses.push(`(public_txn_id ILIKE $${paramIdx} OR description ILIKE $${paramIdx} OR source_ref ILIKE $${paramIdx} OR id ILIKE $${paramIdx})`);
+    queryParams.push(`%${cleanSearch}%`);
+    paramIdx++;
+  }
+  const whereSql = whereClauses.join(" AND ");
+  const countRes = await db.query(
+    `SELECT COUNT(*)::int AS count FROM financial_ledger_entries WHERE ${whereSql}`,
+    queryParams
+  );
+  const totalCount = Number(countRes.rows[0]?.count || 0);
+  const limitParamIdx = paramIdx;
+  const offsetParamIdx = paramIdx + 1;
+  const txQueryParams = [...queryParams, safeLimit, offset];
+  const txRes = await db.query(
+    `
+    SELECT *
+    FROM financial_ledger_entries
+    WHERE ${whereSql}
+    ORDER BY created_at DESC
+    LIMIT $${limitParamIdx} OFFSET $${offsetParamIdx}
+    `,
+    txQueryParams
+  );
+  const txRows = txRes.rows;
+  const totalPages = Math.ceil(totalCount / safeLimit) || 1;
+  const transactions = txRows.map((row) => ({
+    id: row.id,
+    publicTxnId: row.public_txn_id,
+    userId: row.user_id,
+    entryType: row.entry_type,
+    sourceType: row.source_type,
+    sourceId: row.source_id,
+    sourceRef: row.source_ref,
+    description: row.description,
+    amount: Number(row.amount),
+    currency: row.currency,
+    status: row.status,
+    createdAt: new Date(row.created_at).toISOString()
+  }));
+  return {
+    transactions,
+    pagination: {
+      page: safePage,
+      limit: safeLimit,
+      totalCount,
+      totalPages
+    }
+  };
+}
+var init_walletLedgerService = __esm({
+  "src/server/services/walletLedgerService.ts"() {
+    init_db();
+    init_idGenerator();
+  }
+});
+
 // firebase-applet-config.json
 var firebase_applet_config_default;
 var init_firebase_applet_config = __esm({
@@ -172,12 +703,1422 @@ var init_firebase_admin = __esm({
   }
 });
 
+// src/server/services/webPushServerService.ts
+var webPushServerService_exports = {};
+__export(webPushServerService_exports, {
+  broadcastPushNotification: () => broadcastPushNotification,
+  getUserPushTokens: () => getUserPushTokens,
+  removeUserPushToken: () => removeUserPushToken,
+  saveUserPushToken: () => saveUserPushToken,
+  sendPushNotificationToUser: () => sendPushNotificationToUser
+});
+import { v4 as uuidv42 } from "uuid";
+async function saveUserPushToken(params) {
+  const { userId, token, platform = "WEB", userAgent = "" } = params;
+  if (!userId || !token) return false;
+  const db = await getDb();
+  const id = uuidv42();
+  const now = /* @__PURE__ */ new Date();
+  try {
+    await db.query(
+      `
+      INSERT INTO user_push_tokens (
+        id, user_id, token, platform, user_agent, is_active, created_at, updated_at
+      )
+      VALUES ($1, $2, $3, $4, $5, TRUE, $6, $6)
+      ON CONFLICT (user_id, token) 
+      DO UPDATE SET is_active = TRUE, updated_at = $6
+      `,
+      [id, userId, token.trim(), platform, userAgent, now]
+    );
+    console.log(`[WebPush] Successfully saved push token for user ${userId}`);
+    return true;
+  } catch (err) {
+    console.error("[WebPush] Error saving user push token:", err);
+    return false;
+  }
+}
+async function removeUserPushToken(userId, token) {
+  const db = await getDb();
+  try {
+    await db.query(
+      `UPDATE user_push_tokens SET is_active = FALSE, updated_at = CURRENT_TIMESTAMP WHERE user_id = $1 AND token = $2`,
+      [userId, token.trim()]
+    );
+    return true;
+  } catch (err) {
+    console.error("[WebPush] Error removing push token:", err);
+    return false;
+  }
+}
+async function getUserPushTokens(userId) {
+  const db = await getDb();
+  try {
+    const res = await db.query(
+      `SELECT token FROM user_push_tokens WHERE user_id = $1 AND is_active = TRUE`,
+      [userId]
+    );
+    return res.rows.map((r) => r.token);
+  } catch (err) {
+    console.error("[WebPush] Error fetching push tokens for user:", err);
+    return [];
+  }
+}
+async function sendPushNotificationToUser(userId, payload) {
+  const tokens = await getUserPushTokens(userId);
+  if (tokens.length === 0) {
+    return { sent: 0, failed: 0 };
+  }
+  const { title, body, icon = "/brand/phivonex-app-icon-192.png", url = "/app", data = {} } = payload;
+  let sent = 0;
+  let failed = 0;
+  const db = await getDb();
+  for (const token of tokens) {
+    try {
+      if (adminMessaging) {
+        await adminMessaging.send({
+          token,
+          notification: {
+            title,
+            body
+          },
+          data: {
+            url,
+            ...data
+          },
+          webpush: {
+            notification: {
+              title,
+              body,
+              icon,
+              badge: "/brand/phivonex-favicon.svg",
+              vibrate: [200, 100, 200]
+            },
+            fcmOptions: {
+              link: url
+            }
+          }
+        });
+        sent++;
+      } else {
+        sent++;
+      }
+    } catch (err) {
+      failed++;
+      console.warn(`[WebPush] Failed to send push message to token: ${err?.message}`);
+      const errorCode = err?.code || err?.errorInfo?.code;
+      if (errorCode === "messaging/invalid-registration-token" || errorCode === "messaging/registration-token-not-registered") {
+        try {
+          await db.query(
+            `UPDATE user_push_tokens SET is_active = FALSE, updated_at = CURRENT_TIMESTAMP WHERE token = $1`,
+            [token]
+          );
+        } catch {
+        }
+      }
+    }
+  }
+  return { sent, failed };
+}
+async function broadcastPushNotification(payload) {
+  const db = await getDb();
+  const res = await db.query(
+    `SELECT token, user_id FROM user_push_tokens WHERE is_active = TRUE`
+  );
+  const tokens = res.rows.map((r) => r.token);
+  if (tokens.length === 0) {
+    return { totalTokens: 0, sent: 0, failed: 0 };
+  }
+  const { title, body, icon = "/brand/phivonex-app-icon-192.png", url = "/app", data = {} } = payload;
+  let sent = 0;
+  let failed = 0;
+  for (const token of tokens) {
+    try {
+      if (adminMessaging) {
+        await adminMessaging.send({
+          token,
+          notification: { title, body },
+          data: { url, ...data },
+          webpush: {
+            notification: {
+              title,
+              body,
+              icon,
+              badge: "/brand/phivonex-favicon.svg"
+            },
+            fcmOptions: { link: url }
+          }
+        });
+        sent++;
+      } else {
+        sent++;
+      }
+    } catch {
+      failed++;
+    }
+  }
+  return { totalTokens: tokens.length, sent, failed };
+}
+var init_webPushServerService = __esm({
+  "src/server/services/webPushServerService.ts"() {
+    init_db();
+    init_firebase_admin();
+  }
+});
+
+// src/server/services/notificationService.ts
+import { v4 as uuidv43 } from "uuid";
+async function createNotification(params) {
+  const { userId, type, title, message, sourceType, sourceId } = params;
+  if (!userId || !type || !title || !message) {
+    return null;
+  }
+  const db = await getDb();
+  const id = uuidv43();
+  const publicId = generateNotificationPublicId();
+  try {
+    let query;
+    let queryParams;
+    if (sourceType && sourceId) {
+      query = `
+        INSERT INTO notifications (
+          id, public_notification_id, user_id, type, title, message, source_type, source_id, created_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, CURRENT_TIMESTAMP)
+        ON CONFLICT (user_id, source_type, source_id, type) WHERE source_type IS NOT NULL AND source_id IS NOT NULL DO NOTHING
+        RETURNING public_notification_id, type, title, message, read_at, created_at
+      `;
+      queryParams = [id, publicId, userId, type, title, message, sourceType, sourceId];
+    } else {
+      query = `
+        INSERT INTO notifications (
+          id, public_notification_id, user_id, type, title, message, created_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)
+        RETURNING public_notification_id, type, title, message, read_at, created_at
+      `;
+      queryParams = [id, publicId, userId, type, title, message];
+    }
+    const res = await db.query(query, queryParams);
+    if (res.rows.length === 0) {
+      return null;
+    }
+    const row = res.rows[0];
+    try {
+      const { sendPushNotificationToUser: sendPushNotificationToUser2 } = await Promise.resolve().then(() => (init_webPushServerService(), webPushServerService_exports));
+      sendPushNotificationToUser2(userId, {
+        title: row.title,
+        body: row.message,
+        data: {
+          notificationId: row.public_notification_id,
+          type: row.type,
+          url: "/app/notifications"
+        }
+      }).catch((pushErr) => {
+        console.warn("[NotificationService] Web Push delivery warning:", pushErr?.message);
+      });
+    } catch {
+    }
+    return {
+      id: row.public_notification_id,
+      type: row.type,
+      title: row.title,
+      message: row.message,
+      readAt: row.read_at ? new Date(row.read_at).toISOString() : null,
+      createdAt: new Date(row.created_at).toISOString()
+    };
+  } catch (err) {
+    console.error("[NotificationService] Error creating notification:", err);
+    return null;
+  }
+}
+async function getUserNotifications(userId, options) {
+  const db = await getDb();
+  const limit = Math.max(1, Math.min(100, options?.limit || 20));
+  const offset = Math.max(0, options?.offset || 0);
+  const filterClauses = ["user_id = $1"];
+  const queryParams = [userId];
+  if (options?.unreadOnly) {
+    filterClauses.push("read_at IS NULL");
+  }
+  if (options?.type) {
+    queryParams.push(options.type);
+    filterClauses.push(`type = $${queryParams.length}`);
+  }
+  const whereSql = filterClauses.join(" AND ");
+  const countRes = await db.query(
+    `SELECT COUNT(*) as count FROM notifications WHERE ${whereSql}`,
+    queryParams
+  );
+  const total = parseInt(countRes.rows[0]?.count || "0", 10);
+  const unreadRes = await db.query(
+    `SELECT COUNT(*) as count FROM notifications WHERE user_id = $1 AND read_at IS NULL`,
+    [userId]
+  );
+  const unreadCount = parseInt(unreadRes.rows[0]?.count || "0", 10);
+  const listParams = [...queryParams, limit, offset];
+  const listRes = await db.query(
+    `
+    SELECT public_notification_id, type, title, message, read_at, created_at
+    FROM notifications
+    WHERE ${whereSql}
+    ORDER BY created_at DESC
+    LIMIT $${queryParams.length + 1} OFFSET $${queryParams.length + 2}
+    `,
+    listParams
+  );
+  const notifications = listRes.rows.map((row) => ({
+    id: row.public_notification_id,
+    type: row.type,
+    title: row.title,
+    message: row.message,
+    readAt: row.read_at ? new Date(row.read_at).toISOString() : null,
+    createdAt: new Date(row.created_at).toISOString()
+  }));
+  return {
+    notifications,
+    total,
+    unreadCount
+  };
+}
+async function getUnreadNotificationCount(userId) {
+  const db = await getDb();
+  const res = await db.query(
+    `SELECT COUNT(*) as count FROM notifications WHERE user_id = $1 AND read_at IS NULL`,
+    [userId]
+  );
+  return parseInt(res.rows[0]?.count || "0", 10);
+}
+async function markNotificationAsRead(userId, publicNotificationId) {
+  if (!userId || !publicNotificationId) return false;
+  const db = await getDb();
+  const res = await db.query(
+    `
+    UPDATE notifications
+    SET read_at = CURRENT_TIMESTAMP
+    WHERE public_notification_id = $1 AND user_id = $2 AND read_at IS NULL
+    RETURNING id
+    `,
+    [publicNotificationId, userId]
+  );
+  return res.rows.length > 0;
+}
+async function markAllNotificationsAsRead(userId) {
+  if (!userId) return 0;
+  const db = await getDb();
+  const res = await db.query(
+    `
+    UPDATE notifications
+    SET read_at = CURRENT_TIMESTAMP
+    WHERE user_id = $1 AND read_at IS NULL
+    RETURNING id
+    `,
+    [userId]
+  );
+  return res.rows.length;
+}
+async function deleteNotification(userId, publicNotificationId) {
+  if (!userId || !publicNotificationId) return false;
+  const db = await getDb();
+  const res = await db.query(
+    `
+    DELETE FROM notifications
+    WHERE public_notification_id = $1 AND user_id = $2
+    RETURNING id
+    `,
+    [publicNotificationId, userId]
+  );
+  return res.rows.length > 0;
+}
+async function deleteAllNotifications(userId, options) {
+  if (!userId) return 0;
+  const db = await getDb();
+  const query = options?.readOnly ? `DELETE FROM notifications WHERE user_id = $1 AND read_at IS NOT NULL RETURNING id` : `DELETE FROM notifications WHERE user_id = $1 RETURNING id`;
+  const res = await db.query(query, [userId]);
+  return res.rows.length;
+}
+async function notifyNodeActivated(params) {
+  return createNotification({
+    userId: params.userId,
+    type: "NODE_ACTIVATED",
+    title: "Genesis Node Activated",
+    message: `Your Genesis Node #${params.nodeNumber} is now ACTIVE and operational in the PHIVONEX ecosystem.`,
+    sourceType: "NODE_ORDER",
+    sourceId: params.sourceId
+  });
+}
+async function notifyReferralEarned(params) {
+  const buyerRef = params.buyerPublicId ? ` from operator ${params.buyerPublicId}` : "";
+  return createNotification({
+    userId: params.userId,
+    type: "REFERRAL_EARNED",
+    title: "Referral Commission Earned",
+    message: `You earned +$${params.amountUsd.toFixed(2)} USDT direct referral commission${buyerRef}.`,
+    sourceType: "REFERRAL_COMMISSION",
+    sourceId: params.commissionId
+  });
+}
+async function notifyMatchingEarned(params) {
+  return createNotification({
+    userId: params.userId,
+    type: "MATCHING_EARNED",
+    title: "Binary Matching Bonus Earned",
+    message: `You earned +$${params.bonusUsd.toFixed(2)} USDT from the binary matching cycle settlement.`,
+    sourceType: "MATCHING_BONUS",
+    sourceId: params.settlementId
+  });
+}
+async function notifyPromotionEarned(params) {
+  return createNotification({
+    userId: params.userId,
+    type: "PROMOTION_EARNED",
+    title: "Promotion Reward Earned",
+    message: `Congratulations! You unlocked the ${params.milestoneTitle} milestone and received +$${params.bonusUsd.toFixed(2)} USDT.`,
+    sourceType: "PROMOTION_BONUS",
+    sourceId: params.bonusId
+  });
+}
+async function notifyPhivoReward(params) {
+  return createNotification({
+    userId: params.userId,
+    type: "PHIVO_REWARD",
+    title: "PHIVO Mining Reward Accrued",
+    message: `You received a mining reward of +${params.amountPhivo.toFixed(4)} PHIVO from your Genesis Nodes.`,
+    sourceType: "NODE_REWARD",
+    sourceId: params.rewardId
+  });
+}
+async function notifyPhivoSwapCompleted(params) {
+  return createNotification({
+    userId: params.userId,
+    type: "PHIVO_SWAP_COMPLETED",
+    title: "PHIVO \u2192 USDT Swap Completed",
+    message: `Successfully swapped ${params.coinAmount.toFixed(4)} PHIVO into $${params.usdtAmount.toFixed(2)} USDT at $${params.rateUsdt.toFixed(4)} per PHIVO.`,
+    sourceType: "COIN_SWAP",
+    sourceId: params.swapId
+  });
+}
+async function notifyUsdtDepositConfirmed(params) {
+  const hashNote = params.txHash ? ` (Tx: ${params.txHash.slice(0, 10)}...)` : "";
+  return createNotification({
+    userId: params.userId,
+    type: "USDT_DEPOSIT_CONFIRMED",
+    title: "USDT Deposit Confirmed",
+    message: `Your on-chain deposit of $${params.amountUsdt.toFixed(2)} USDT has been confirmed on BNB Smart Chain${hashNote}.`,
+    sourceType: "BLOCKCHAIN_DEPOSIT",
+    sourceId: params.depositId
+  });
+}
+async function notifyWithdrawalStatus(params) {
+  let title = "Withdrawal Status Updated";
+  let message = `Your withdrawal request of $${params.amountUsdt.toFixed(2)} USDT status is now ${params.status}.`;
+  if (params.status === "PENDING") {
+    title = "Withdrawal Request Submitted";
+    message = `Your withdrawal request of $${params.amountUsdt.toFixed(2)} USDT has been submitted for processing.`;
+  } else if (params.status === "APPROVED") {
+    title = "Withdrawal Request Approved";
+    message = `Your withdrawal of $${params.amountUsdt.toFixed(2)} USDT has been approved and queued for blockchain disbursement.`;
+  } else if (params.status === "COMPLETED") {
+    title = "Withdrawal Disbursed";
+    message = `Your withdrawal of $${params.amountUsdt.toFixed(2)} USDT has been successfully completed on-chain.`;
+  } else if (params.status === "REJECTED") {
+    title = "Withdrawal Rejected";
+    message = `Your withdrawal of $${params.amountUsdt.toFixed(2)} USDT was rejected${params.reason ? `: ${params.reason}` : "."} Funds have been refunded to your ledger.`;
+  }
+  return createNotification({
+    userId: params.userId,
+    type: "WITHDRAWAL_STATUS",
+    title,
+    message,
+    sourceType: "WITHDRAWAL",
+    sourceId: `${params.withdrawalId}_${params.status}`
+  });
+}
+var init_notificationService = __esm({
+  "src/server/services/notificationService.ts"() {
+    init_db();
+    init_idGenerator();
+  }
+});
+
+// src/server/services/leadershipRankService.ts
+var leadershipRankService_exports = {};
+__export(leadershipRankService_exports, {
+  adminManualRankCorrection: () => adminManualRankCorrection,
+  ensurePromotionTables: () => ensurePromotionTables,
+  evaluateUserRankPromotion: () => evaluateUserRankPromotion,
+  generatePublicPromotionId: () => generatePublicPromotionId,
+  getDownlineLeaderCounts: () => getDownlineLeaderCounts,
+  getPromotionRules: () => getPromotionRules,
+  getUserPromotionAuditLogs: () => getUserPromotionAuditLogs,
+  getUserPromotionState: () => getUserPromotionState,
+  updatePromotionRule: () => updatePromotionRule
+});
+import { v4 as uuidv44 } from "uuid";
+function generatePublicPromotionId() {
+  const rand = Math.floor(1e5 + Math.random() * 9e5);
+  return `PRM-RANK-${rand}`;
+}
+async function ensurePromotionTables(dbClient) {
+  const db = dbClient || await getDb();
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS promotion_rules (
+      id UUID PRIMARY KEY,
+      rank_key VARCHAR(50) UNIQUE NOT NULL,
+      rank_name VARCHAR(100) NOT NULL,
+      rank_order INTEGER UNIQUE NOT NULL,
+      qualification_type VARCHAR(30) NOT NULL,
+      required_left INTEGER NOT NULL DEFAULT 0,
+      required_right INTEGER NOT NULL DEFAULT 0,
+      required_leader_rank VARCHAR(50) NULL,
+      leg_balance_rule VARCHAR(30) NOT NULL DEFAULT 'FLEXIBLE',
+      reward_usd NUMERIC(12, 2) NOT NULL DEFAULT 0,
+      flush_rule VARCHAR(50) NOT NULL DEFAULT 'CONSUME_STAGE_REQUIREMENT',
+      status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE',
+      version INTEGER NOT NULL DEFAULT 1,
+      effective_date TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS user_promotion_states (
+      id UUID PRIMARY KEY,
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE UNIQUE,
+      current_rank VARCHAR(50) NOT NULL DEFAULT 'STANDARD',
+      current_rank_order INTEGER NOT NULL DEFAULT 0,
+      next_rank VARCHAR(50) NULL DEFAULT 'NODE_BUILDER',
+      next_rank_order INTEGER NULL DEFAULT 1,
+      cumulative_consumed_left INTEGER NOT NULL DEFAULT 0,
+      cumulative_consumed_right INTEGER NOT NULL DEFAULT 0,
+      current_stage_left_progress INTEGER NOT NULL DEFAULT 0,
+      current_stage_right_progress INTEGER NOT NULL DEFAULT 0,
+      current_stage_left_required INTEGER NOT NULL DEFAULT 20,
+      current_stage_right_required INTEGER NOT NULL DEFAULT 20,
+      current_stage_leaders_left INTEGER NOT NULL DEFAULT 0,
+      current_stage_leaders_right INTEGER NOT NULL DEFAULT 0,
+      last_evaluated_at TIMESTAMP WITH TIME ZONE NULL,
+      last_promoted_at TIMESTAMP WITH TIME ZONE NULL,
+      promotion_version INTEGER NOT NULL DEFAULT 1,
+      updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    ALTER TABLE user_promotion_states ALTER COLUMN next_rank_order DROP NOT NULL;
+
+    CREATE TABLE IF NOT EXISTS user_promotion_events (
+      id UUID PRIMARY KEY,
+      public_promotion_id VARCHAR(50) UNIQUE NOT NULL,
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      rank_key VARCHAR(50) NOT NULL,
+      rank_name VARCHAR(100) NOT NULL,
+      rank_order INTEGER NOT NULL,
+      previous_rank VARCHAR(50) NOT NULL,
+      qualification_type VARCHAR(30) NOT NULL,
+      required_left INTEGER NOT NULL,
+      required_right INTEGER NOT NULL,
+      actual_left INTEGER NOT NULL,
+      actual_right INTEGER NOT NULL,
+      consumed_left INTEGER NOT NULL DEFAULT 0,
+      consumed_right INTEGER NOT NULL DEFAULT 0,
+      rule_version INTEGER NOT NULL DEFAULT 1,
+      reward_usd NUMERIC(12, 2) NOT NULL DEFAULT 0,
+      qualifying_leader_ids_json TEXT NULL,
+      source_matching_references TEXT NULL,
+      status VARCHAR(20) NOT NULL DEFAULT 'COMPLETED',
+      completed_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      CONSTRAINT uq_upe_user_rank UNIQUE (user_id, rank_key)
+    );
+
+    CREATE TABLE IF NOT EXISTS promotion_audit_logs (
+      id UUID PRIMARY KEY,
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      action VARCHAR(50) NOT NULL,
+      from_rank VARCHAR(50) NULL,
+      to_rank VARCHAR(50) NULL,
+      details_json TEXT NOT NULL,
+      actor_type VARCHAR(20) NOT NULL DEFAULT 'SYSTEM',
+      actor_id VARCHAR(100) NULL,
+      reason TEXT NULL,
+      created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_upe_user_id ON user_promotion_events(user_id);
+    CREATE INDEX IF NOT EXISTS idx_upe_rank_key ON user_promotion_events(rank_key);
+    CREATE INDEX IF NOT EXISTS idx_ups_user_id ON user_promotion_states(user_id);
+    CREATE INDEX IF NOT EXISTS idx_pal_user_id ON promotion_audit_logs(user_id);
+  `);
+  await db.query(`
+    INSERT INTO promotion_rules (
+      id, rank_key, rank_name, rank_order, qualification_type,
+      required_left, required_right, required_leader_rank, leg_balance_rule,
+      reward_usd, flush_rule, status, version
+    )
+    VALUES
+      ('a0000000-0000-0000-0000-000000000000', 'STANDARD', 'Standard Member', 0, 'NONE', 0, 0, NULL, 'FLEXIBLE', 0, 'NONE', 'ACTIVE', 1),
+      ('a0000000-0000-0000-0000-000000000001', 'NODE_BUILDER', 'Node Builder', 1, 'MATCHING', 20, 20, NULL, 'STRICT', 5000.00, 'CONSUME_STAGE_REQUIREMENT', 'ACTIVE', 1),
+      ('a0000000-0000-0000-0000-000000000002', 'NODE_MASTER', 'Node Master', 2, 'MATCHING', 50, 50, NULL, 'STRICT', 10000.00, 'CONSUME_STAGE_REQUIREMENT', 'ACTIVE', 1),
+      ('a0000000-0000-0000-0000-000000000003', 'NODE_CAPTAIN', 'Node Captain', 3, 'MATCHING', 100, 100, NULL, 'STRICT', 50000.00, 'CONSUME_STAGE_REQUIREMENT', 'ACTIVE', 1),
+      ('a0000000-0000-0000-0000-000000000004', 'NODE_COMMANDER', 'Node Commander', 4, 'LEADERSHIP', 2, 3, 'NODE_CAPTAIN', 'FLEXIBLE', 0, 'NONE', 'ACTIVE', 1),
+      ('a0000000-0000-0000-0000-000000000005', 'NODE_AMBASSADOR', 'Node Ambassador', 5, 'LEADERSHIP', 3, 4, 'NODE_COMMANDER', 'FLEXIBLE', 0, 'NONE', 'ACTIVE', 1),
+      ('a0000000-0000-0000-0000-000000000006', 'NODE_TITAN', 'Node Titan', 6, 'LEADERSHIP', 4, 5, 'NODE_AMBASSADOR', 'FLEXIBLE', 0, 'NONE', 'ACTIVE', 1)
+    ON CONFLICT (rank_key) DO NOTHING;
+  `);
+}
+async function getPromotionRules(dbClient) {
+  const db = dbClient || await getDb();
+  await ensurePromotionTables(db);
+  const res = await db.query(`
+    SELECT 
+      pr.id, pr.rank_key, pr.rank_name, pr.rank_order, pr.qualification_type,
+      pr.required_left, pr.required_right, pr.required_leader_rank, pr.leg_balance_rule,
+      pr.reward_usd, pr.flush_rule, pr.status, pr.version, pr.effective_date,
+      pr.created_at, pr.updated_at,
+      COUNT(upe.id)::int AS achievers_count
+    FROM promotion_rules pr
+    LEFT JOIN user_promotion_events upe ON pr.rank_key = upe.rank_key AND upe.status = 'COMPLETED'
+    GROUP BY pr.id
+    ORDER BY pr.rank_order ASC
+  `);
+  return res.rows.map((r) => ({
+    id: r.id,
+    rankKey: r.rank_key,
+    rankName: r.rank_name,
+    rankOrder: Number(r.rank_order),
+    qualificationType: r.qualification_type,
+    requiredLeft: Number(r.required_left),
+    requiredRight: Number(r.required_right),
+    requiredLeaderRank: r.required_leader_rank,
+    legBalanceRule: r.leg_balance_rule || "FLEXIBLE",
+    rewardUsd: Number(r.reward_usd),
+    flushRule: r.flush_rule,
+    status: r.status,
+    version: Number(r.version),
+    effectiveDate: r.effective_date instanceof Date ? r.effective_date.toISOString() : String(r.effective_date),
+    achieversCount: Number(r.achievers_count || 0),
+    createdAt: r.created_at instanceof Date ? r.created_at.toISOString() : String(r.created_at),
+    updatedAt: r.updated_at instanceof Date ? r.updated_at.toISOString() : String(r.updated_at)
+  }));
+}
+async function updatePromotionRule(adminId, adminPublicId, ruleId, updates, dbClient) {
+  const db = dbClient || await getDb();
+  await ensurePromotionTables(db);
+  if (!updates.reason || updates.reason.trim().length < 5) {
+    const err = new Error("Admin reason is mandatory (minimum 5 characters) for prospective rule updates.");
+    err.code = "REASON_REQUIRED";
+    err.statusCode = 400;
+    throw err;
+  }
+  const currentRes = await db.query(`SELECT * FROM promotion_rules WHERE id = $1`, [ruleId]);
+  if (currentRes.rows.length === 0) {
+    const err = new Error("Promotion rule not found.");
+    err.code = "RULE_NOT_FOUND";
+    err.statusCode = 404;
+    throw err;
+  }
+  const current = currentRes.rows[0];
+  const newVersion = Number(current.version) + 1;
+  const newRequiredLeft = updates.requiredLeft !== void 0 ? updates.requiredLeft : current.required_left;
+  const newRequiredRight = updates.requiredRight !== void 0 ? updates.requiredRight : current.required_right;
+  const newRequiredLeaderRank = updates.requiredLeaderRank !== void 0 ? updates.requiredLeaderRank : current.required_leader_rank;
+  const newLegBalanceRule = updates.legBalanceRule !== void 0 ? updates.legBalanceRule : current.leg_balance_rule;
+  const newRewardUsd = updates.rewardUsd !== void 0 ? updates.rewardUsd : current.reward_usd;
+  const newStatus = updates.status !== void 0 ? updates.status : current.status;
+  await db.query(
+    `
+    UPDATE promotion_rules
+    SET 
+      required_left = $1,
+      required_right = $2,
+      required_leader_rank = $3,
+      leg_balance_rule = $4,
+      reward_usd = $5,
+      status = $6,
+      version = $7,
+      effective_date = CURRENT_TIMESTAMP,
+      updated_at = CURRENT_TIMESTAMP
+    WHERE id = $8
+    `,
+    [
+      newRequiredLeft,
+      newRequiredRight,
+      newRequiredLeaderRank,
+      newLegBalanceRule,
+      newRewardUsd,
+      newStatus,
+      newVersion,
+      ruleId
+    ]
+  );
+  await db.query(
+    `
+    INSERT INTO promotion_audit_logs (
+      id, user_id, action, from_rank, to_rank, details_json, actor_type, actor_id, reason, created_at
+    )
+    VALUES ($1, $2, 'ADMIN_RULE_UPDATED', $3, $3, $4, 'ADMIN', $5, $6, CURRENT_TIMESTAMP)
+    `,
+    [
+      uuidv44(),
+      adminId,
+      current.rank_key,
+      JSON.stringify({
+        ruleId,
+        rankKey: current.rank_key,
+        oldVersion: current.version,
+        newVersion,
+        oldSettings: {
+          requiredLeft: current.required_left,
+          requiredRight: current.required_right,
+          requiredLeaderRank: current.required_leader_rank,
+          rewardUsd: current.reward_usd,
+          status: current.status
+        },
+        newSettings: {
+          requiredLeft: newRequiredLeft,
+          requiredRight: newRequiredRight,
+          requiredLeaderRank: newRequiredLeaderRank,
+          rewardUsd: newRewardUsd,
+          status: newStatus
+        }
+      }),
+      adminPublicId,
+      updates.reason
+    ]
+  );
+  const rules = await getPromotionRules(db);
+  return rules.find((r) => r.id === ruleId);
+}
+async function getDownlineLeaderCounts(userId, targetLeaderRank, dbClient) {
+  const db = dbClient || await getDb();
+  await ensurePromotionTables(db);
+  const leftRes = await db.query(
+    `
+    WITH RECURSIVE left_tree AS (
+      SELECT user_id, 1 as depth
+      FROM binary_placements
+      WHERE parent_user_id = $1 AND side = 'LEFT' AND status = 'PLACED'
+      UNION ALL
+      SELECT bp.user_id, lt.depth + 1
+      FROM binary_placements bp
+      JOIN left_tree lt ON bp.parent_user_id = lt.user_id
+      WHERE bp.status = 'PLACED' AND lt.depth < 1000
+    )
+    SELECT DISTINCT upe.user_id, u.public_id, u.full_name
+    FROM left_tree lt
+    JOIN user_promotion_events upe ON lt.user_id = upe.user_id
+    JOIN users u ON upe.user_id = u.id
+    WHERE upe.rank_key = $2 AND upe.status = 'COMPLETED' AND u.status = 'ACTIVE'
+    ORDER BY u.public_id ASC
+    `,
+    [userId, targetLeaderRank]
+  );
+  const rightRes = await db.query(
+    `
+    WITH RECURSIVE right_tree AS (
+      SELECT user_id, 1 as depth
+      FROM binary_placements
+      WHERE parent_user_id = $1 AND side = 'RIGHT' AND status = 'PLACED'
+      UNION ALL
+      SELECT bp.user_id, rt.depth + 1
+      FROM binary_placements bp
+      JOIN right_tree rt ON bp.parent_user_id = rt.user_id
+      WHERE bp.status = 'PLACED' AND rt.depth < 1000
+    )
+    SELECT DISTINCT upe.user_id, u.public_id, u.full_name
+    FROM right_tree rt
+    JOIN user_promotion_events upe ON rt.user_id = upe.user_id
+    JOIN users u ON upe.user_id = u.id
+    WHERE upe.rank_key = $2 AND upe.status = 'COMPLETED' AND u.status = 'ACTIVE'
+    ORDER BY u.public_id ASC
+    `,
+    [userId, targetLeaderRank]
+  );
+  const leftLeaderDetails = leftRes.rows.map((r) => ({
+    userId: r.user_id,
+    publicId: r.public_id,
+    fullName: r.full_name
+  }));
+  const rightLeaderDetails = rightRes.rows.map((r) => ({
+    userId: r.user_id,
+    publicId: r.public_id,
+    fullName: r.full_name
+  }));
+  return {
+    leftLeaders: leftLeaderDetails.length,
+    rightLeaders: rightLeaderDetails.length,
+    leftLeaderDetails,
+    rightLeaderDetails
+  };
+}
+async function getUserPromotionState(userId, dbClient) {
+  const db = dbClient || await getDb();
+  await ensurePromotionTables(db);
+  await db.query(
+    `
+    INSERT INTO user_promotion_states (
+      id, user_id, current_rank, current_rank_order, next_rank, next_rank_order,
+      cumulative_consumed_left, cumulative_consumed_right,
+      current_stage_left_progress, current_stage_right_progress,
+      current_stage_left_required, current_stage_right_required,
+      created_at, updated_at
+    )
+    VALUES ($1, $2, 'STANDARD', 0, 'NODE_BUILDER', 1, 0, 0, 0, 0, 20, 20, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+    ON CONFLICT (user_id) DO NOTHING
+    `,
+    [uuidv44(), userId]
+  );
+  const stateRes = await db.query(
+    `SELECT * FROM user_promotion_states WHERE user_id = $1`,
+    [userId]
+  );
+  const state = stateRes.rows[0];
+  const ladder = await getPromotionRules(db);
+  const ruleMap = /* @__PURE__ */ new Map();
+  for (const r of ladder) {
+    ruleMap.set(r.rankKey, r);
+  }
+  const eventsRes = await db.query(
+    `
+    SELECT * FROM user_promotion_events
+    WHERE user_id = $1 AND status = 'COMPLETED'
+    ORDER BY rank_order ASC, completed_at ASC
+    `,
+    [userId]
+  );
+  const completedEvents = eventsRes.rows.map((r) => ({
+    id: r.id,
+    publicPromotionId: r.public_promotion_id,
+    userId: r.user_id,
+    rankKey: r.rank_key,
+    rankName: r.rank_name,
+    rankOrder: Number(r.rank_order),
+    previousRank: r.previous_rank,
+    qualificationType: r.qualification_type,
+    requiredLeft: Number(r.required_left),
+    requiredRight: Number(r.required_right),
+    actualLeft: Number(r.actual_left),
+    actualRight: Number(r.actual_right),
+    consumedLeft: Number(r.consumed_left),
+    consumedRight: Number(r.consumed_right),
+    ruleVersion: Number(r.rule_version),
+    rewardUsd: Number(r.reward_usd),
+    qualifyingLeaderIds: r.qualifying_leader_ids_json ? JSON.parse(r.qualifying_leader_ids_json) : null,
+    status: "COMPLETED",
+    completedAt: r.completed_at instanceof Date ? r.completed_at.toISOString() : String(r.completed_at),
+    createdAt: r.created_at instanceof Date ? r.created_at.toISOString() : String(r.created_at)
+  }));
+  const currentRule = ruleMap.get(state.current_rank) || {
+    rankKey: "STANDARD",
+    rankName: "Standard Member",
+    rankOrder: 0
+  };
+  const nextRule = state.next_rank ? ruleMap.get(state.next_rank) : null;
+  const volumeRes = await db.query(
+    `
+    SELECT 
+      COALESCE(SUM(CASE WHEN side = 'LEFT' THEN volume_units ELSE 0 END), 0)::int AS left_units,
+      COALESCE(SUM(CASE WHEN side = 'RIGHT' THEN volume_units ELSE 0 END), 0)::int AS right_units
+    FROM binary_volume_events
+    WHERE beneficiary_user_id = $1 AND status = 'ACTIVE'
+    `,
+    [userId]
+  );
+  const totalActiveLeft = Number(volumeRes.rows[0]?.left_units || 0);
+  const totalActiveRight = Number(volumeRes.rows[0]?.right_units || 0);
+  const consumedLeft = Number(state.cumulative_consumed_left || 0);
+  const consumedRight = Number(state.cumulative_consumed_right || 0);
+  const stageProgress = {};
+  if (nextRule && nextRule.qualificationType === "MATCHING") {
+    const stageAvailableLeft = Math.max(0, totalActiveLeft - consumedLeft);
+    const stageAvailableRight = Math.max(0, totalActiveRight - consumedRight);
+    const reqL = nextRule.requiredLeft;
+    const reqR = nextRule.requiredRight;
+    const leftProg = Math.min(reqL, stageAvailableLeft);
+    const rightProg = Math.min(reqR, stageAvailableRight);
+    const pct = Math.min(
+      100,
+      Math.floor(Math.min(stageAvailableLeft, stageAvailableRight) / Math.max(reqL, reqR) * 100)
+    );
+    stageProgress.matching = {
+      leftProgress: leftProg,
+      rightProgress: rightProg,
+      requiredLeft: reqL,
+      requiredRight: reqR,
+      progressPct: pct,
+      cumulativeConsumedLeft: consumedLeft,
+      cumulativeConsumedRight: consumedRight,
+      totalActiveVolumeLeft: totalActiveLeft,
+      totalActiveVolumeRight: totalActiveRight
+    };
+  } else if (nextRule && nextRule.qualificationType === "LEADERSHIP" && nextRule.requiredLeaderRank) {
+    const leaderData = await getDownlineLeaderCounts(userId, nextRule.requiredLeaderRank, db);
+    const reqL = nextRule.requiredLeft;
+    const reqR = nextRule.requiredRight;
+    const reqLeaderRule = nextRule.requiredLeaderRank ? ruleMap.get(nextRule.requiredLeaderRank) : null;
+    let pct = 0;
+    if (nextRule.legBalanceRule === "FLEXIBLE") {
+      const match1 = Math.min(leaderData.leftLeaders / reqL, leaderData.rightLeaders / reqR);
+      const match2 = Math.min(leaderData.leftLeaders / reqR, leaderData.rightLeaders / reqL);
+      pct = Math.min(100, Math.floor(Math.max(match1, match2) * 100));
+    } else {
+      pct = Math.min(
+        100,
+        Math.floor(Math.min(leaderData.leftLeaders / reqL, leaderData.rightLeaders / reqR) * 100)
+      );
+    }
+    stageProgress.leadership = {
+      leftLeaders: leaderData.leftLeaders,
+      rightLeaders: leaderData.rightLeaders,
+      requiredLeft: reqL,
+      requiredRight: reqR,
+      requiredLeaderRank: nextRule.requiredLeaderRank,
+      requiredLeaderRankName: reqLeaderRule?.rankName || nextRule.requiredLeaderRank,
+      legBalanceRule: nextRule.legBalanceRule,
+      progressPct: isNaN(pct) ? 0 : pct,
+      leftLeaderDetails: leaderData.leftLeaderDetails,
+      rightLeaderDetails: leaderData.rightLeaderDetails
+    };
+  }
+  return {
+    userId,
+    currentRank: state.current_rank,
+    currentRankName: currentRule.rankName,
+    currentRankOrder: Number(state.current_rank_order),
+    nextRank: state.next_rank,
+    nextRankName: nextRule?.rankName || null,
+    nextRankOrder: state.next_rank_order ? Number(state.next_rank_order) : null,
+    qualificationType: nextRule?.qualificationType || null,
+    stageProgress,
+    completedEvents,
+    ladder,
+    lastPromotedAt: state.last_promoted_at ? new Date(state.last_promoted_at).toISOString() : null,
+    lastEvaluatedAt: state.last_evaluated_at ? new Date(state.last_evaluated_at).toISOString() : null
+  };
+}
+async function evaluateUserRankPromotion(userId, dbClient) {
+  const currentLock = userEvaluationLocks.get(userId) || Promise.resolve();
+  let releaseLock = () => {
+  };
+  const nextLock = new Promise((resolve) => {
+    releaseLock = resolve;
+  });
+  userEvaluationLocks.set(userId, currentLock.then(() => nextLock, () => nextLock));
+  await currentLock;
+  try {
+    return await evaluateUserRankPromotionInternal(userId, dbClient);
+  } finally {
+    releaseLock();
+    if (userEvaluationLocks.get(userId) === nextLock) {
+      userEvaluationLocks.delete(userId);
+    }
+  }
+}
+async function evaluateUserRankPromotionInternal(userId, dbClient) {
+  const db = dbClient || await getDb();
+  await ensurePromotionTables(db);
+  await db.query("BEGIN");
+  try {
+    await db.query(
+      `
+      INSERT INTO user_promotion_states (
+        id, user_id, current_rank, current_rank_order, next_rank, next_rank_order,
+        cumulative_consumed_left, cumulative_consumed_right,
+        current_stage_left_progress, current_stage_right_progress,
+        current_stage_left_required, current_stage_right_required,
+        created_at, updated_at
+      )
+      VALUES ($1, $2, 'STANDARD', 0, 'NODE_BUILDER', 1, 0, 0, 0, 0, 20, 20, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      ON CONFLICT (user_id) DO NOTHING
+      `,
+      [uuidv44(), userId]
+    );
+    const lockedRes = await db.query(
+      `SELECT * FROM user_promotion_states WHERE user_id = $1 FOR UPDATE`,
+      [userId]
+    );
+    const state = lockedRes.rows[0];
+    const currentRank = state.current_rank;
+    const nextRank = state.next_rank;
+    const currentOrder = Number(state.current_rank_order);
+    const nextOrder = state.next_rank_order !== null ? Number(state.next_rank_order) : null;
+    if (!nextRank || nextOrder === null || currentOrder >= 6) {
+      await db.query("COMMIT");
+      const currentState = await getUserPromotionState(userId, db);
+      return {
+        promoted: false,
+        evaluatedRank: null,
+        previousRank: currentRank,
+        currentRank,
+        reason: "TOP_RANK_ALREADY_ACHIEVED",
+        event: null,
+        state: currentState
+      };
+    }
+    const ruleRes = await db.query(
+      `SELECT * FROM promotion_rules WHERE rank_key = $1 AND status = 'ACTIVE'`,
+      [nextRank]
+    );
+    if (ruleRes.rows.length === 0) {
+      await db.query("COMMIT");
+      const currentState = await getUserPromotionState(userId, db);
+      return {
+        promoted: false,
+        evaluatedRank: nextRank,
+        previousRank: currentRank,
+        currentRank,
+        reason: `TARGET_RULE_INACTIVE_OR_NOT_FOUND (${nextRank})`,
+        event: null,
+        state: currentState
+      };
+    }
+    const targetRule = ruleRes.rows[0];
+    const targetOrder = Number(targetRule.rank_order);
+    if (targetOrder !== currentOrder + 1) {
+      await db.query("ROLLBACK");
+      throw new Error(`Integrity violation: Attempted to evaluate non-sequential rank ${nextRank} (order ${targetOrder}) for user at rank ${currentRank} (order ${currentOrder}).`);
+    }
+    if (currentOrder > 0) {
+      const lowerCountRes = await db.query(
+        `SELECT COUNT(*)::int AS count FROM user_promotion_events WHERE user_id = $1 AND status = 'COMPLETED' AND rank_order <= $2`,
+        [userId, currentOrder]
+      );
+      if (Number(lowerCountRes.rows[0].count) !== currentOrder) {
+        await db.query("ROLLBACK");
+        throw new Error(`Sequential integrity violation: User has missing completed previous promotion events.`);
+      }
+    }
+    let isQualified = false;
+    let consumedLeft = 0;
+    let consumedRight = 0;
+    let actualLeft = 0;
+    let actualRight = 0;
+    let qualifyingLeadersData = null;
+    if (targetRule.qualification_type === "MATCHING") {
+      const volumeRes = await db.query(
+        `
+        SELECT 
+          COALESCE(SUM(CASE WHEN side = 'LEFT' THEN volume_units ELSE 0 END), 0)::int AS left_units,
+          COALESCE(SUM(CASE WHEN side = 'RIGHT' THEN volume_units ELSE 0 END), 0)::int AS right_units
+        FROM binary_volume_events
+        WHERE beneficiary_user_id = $1 AND status = 'ACTIVE'
+        `,
+        [userId]
+      );
+      const totalActiveLeft = Number(volumeRes.rows[0]?.left_units || 0);
+      const totalActiveRight = Number(volumeRes.rows[0]?.right_units || 0);
+      const cumConsumedLeft = Number(state.cumulative_consumed_left || 0);
+      const cumConsumedRight = Number(state.cumulative_consumed_right || 0);
+      actualLeft = Math.max(0, totalActiveLeft - cumConsumedLeft);
+      actualRight = Math.max(0, totalActiveRight - cumConsumedRight);
+      const reqLeft = Number(targetRule.required_left);
+      const reqRight = Number(targetRule.required_right);
+      isQualified = actualLeft >= reqLeft && actualRight >= reqRight;
+      if (isQualified) {
+        consumedLeft = reqLeft;
+        consumedRight = reqRight;
+      }
+    } else if (targetRule.qualification_type === "LEADERSHIP") {
+      const requiredLeaderRank = targetRule.required_leader_rank;
+      if (!requiredLeaderRank) {
+        await db.query("ROLLBACK");
+        throw new Error(`Rule configuration defect: Leadership rank ${nextRank} requires leader rank definition.`);
+      }
+      const leaderData = await getDownlineLeaderCounts(userId, requiredLeaderRank, db);
+      actualLeft = leaderData.leftLeaders;
+      actualRight = leaderData.rightLeaders;
+      qualifyingLeadersData = {
+        leftLeaders: leaderData.leftLeaderDetails.map((l) => l.userId),
+        rightLeaders: leaderData.rightLeaderDetails.map((l) => l.userId)
+      };
+      const reqLeft = Number(targetRule.required_left);
+      const reqRight = Number(targetRule.required_right);
+      if (targetRule.leg_balance_rule === "FLEXIBLE") {
+        isQualified = actualLeft >= reqLeft && actualRight >= reqRight || actualLeft >= reqRight && actualRight >= reqLeft;
+      } else {
+        isQualified = actualLeft >= reqLeft && actualRight >= reqRight;
+      }
+    }
+    if (!isQualified) {
+      await db.query(
+        `
+        UPDATE user_promotion_states
+        SET 
+          current_stage_left_progress = $1,
+          current_stage_right_progress = $2,
+          last_evaluated_at = CURRENT_TIMESTAMP,
+          updated_at = CURRENT_TIMESTAMP
+        WHERE user_id = $3
+        `,
+        [actualLeft, actualRight, userId]
+      );
+      await db.query(
+        `
+        INSERT INTO promotion_audit_logs (
+          id, user_id, action, from_rank, to_rank, details_json, actor_type, reason, created_at
+        )
+        VALUES ($1, $2, 'EVALUATION_INCOMPLETE', $3, $4, $5, 'SYSTEM', 'Requirements not yet met', CURRENT_TIMESTAMP)
+        `,
+        [
+          uuidv44(),
+          userId,
+          currentRank,
+          nextRank,
+          JSON.stringify({
+            actualLeft,
+            actualRight,
+            requiredLeft: targetRule.required_left,
+            requiredRight: targetRule.required_right,
+            qualificationType: targetRule.qualification_type
+          })
+        ]
+      );
+      await db.query("COMMIT");
+      const currentState = await getUserPromotionState(userId, db);
+      return {
+        promoted: false,
+        evaluatedRank: nextRank,
+        previousRank: currentRank,
+        currentRank,
+        reason: "QUALIFICATION_INCOMPLETE",
+        event: null,
+        state: currentState
+      };
+    }
+    const eventId = uuidv44();
+    const publicPromotionId = generatePublicPromotionId();
+    const rewardUsd = Number(targetRule.reward_usd || 0);
+    const ruleVersion = Number(targetRule.version || 1);
+    const insertEventRes = await db.query(
+      `
+      INSERT INTO user_promotion_events (
+        id, public_promotion_id, user_id, rank_key, rank_name, rank_order,
+        previous_rank, qualification_type, required_left, required_right,
+        actual_left, actual_right, consumed_left, consumed_right,
+        rule_version, reward_usd, qualifying_leader_ids_json, source_matching_references,
+        status, completed_at, created_at
+      )
+      VALUES (
+        $1, $2, $3, $4, $5, $6,
+        $7, $8, $9, $10,
+        $11, $12, $13, $14,
+        $15, $16, $17, $18,
+        'COMPLETED', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+      )
+      ON CONFLICT (user_id, rank_key) DO NOTHING
+      RETURNING *
+      `,
+      [
+        eventId,
+        publicPromotionId,
+        userId,
+        targetRule.rank_key,
+        targetRule.rank_name,
+        targetOrder,
+        currentRank,
+        targetRule.qualification_type,
+        targetRule.required_left,
+        targetRule.required_right,
+        actualLeft,
+        actualRight,
+        consumedLeft,
+        consumedRight,
+        ruleVersion,
+        rewardUsd,
+        qualifyingLeadersData ? JSON.stringify(qualifyingLeadersData) : null,
+        JSON.stringify({
+          evaluatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+          qualificationType: targetRule.qualification_type,
+          consumedLeft,
+          consumedRight
+        })
+      ]
+    );
+    if (insertEventRes.rows.length === 0) {
+      await db.query("ROLLBACK");
+      const currentState = await getUserPromotionState(userId, db);
+      return {
+        promoted: false,
+        evaluatedRank: nextRank,
+        previousRank: currentRank,
+        currentRank: currentState.currentRank,
+        reason: "ALREADY_PROMOTED_CONCURRENTLY",
+        event: null,
+        state: currentState
+      };
+    }
+    const createdEventRow = insertEventRes.rows[0];
+    const nextLadderRes = await db.query(
+      `SELECT * FROM promotion_rules WHERE rank_order = $1 AND status = 'ACTIVE'`,
+      [targetOrder + 1]
+    );
+    const newNextRule = nextLadderRes.rows.length > 0 ? nextLadderRes.rows[0] : null;
+    const newNextRank = newNextRule ? newNextRule.rank_key : null;
+    const newNextOrder = newNextRule ? Number(newNextRule.rank_order) : null;
+    const newReqLeft = newNextRule ? Number(newNextRule.required_left) : 0;
+    const newReqRight = newNextRule ? Number(newNextRule.required_right) : 0;
+    const newCumConsumedLeft = Number(state.cumulative_consumed_left || 0) + consumedLeft;
+    const newCumConsumedRight = Number(state.cumulative_consumed_right || 0) + consumedRight;
+    await db.query(
+      `
+      UPDATE user_promotion_states
+      SET 
+        current_rank = $1,
+        current_rank_order = $2,
+        next_rank = $3,
+        next_rank_order = $4,
+        cumulative_consumed_left = $5,
+        cumulative_consumed_right = $6,
+        current_stage_left_required = $7,
+        current_stage_right_required = $8,
+        current_stage_left_progress = 0,
+        current_stage_right_progress = 0,
+        last_promoted_at = CURRENT_TIMESTAMP,
+        last_evaluated_at = CURRENT_TIMESTAMP,
+        promotion_version = $9,
+        updated_at = CURRENT_TIMESTAMP
+      WHERE user_id = $10
+      `,
+      [
+        targetRule.rank_key,
+        targetOrder,
+        newNextRank,
+        newNextOrder,
+        newCumConsumedLeft,
+        newCumConsumedRight,
+        newReqLeft,
+        newReqRight,
+        ruleVersion,
+        userId
+      ]
+    );
+    await db.query(
+      `
+      INSERT INTO promotion_audit_logs (
+        id, user_id, action, from_rank, to_rank, details_json, actor_type, reason, created_at
+      )
+      VALUES ($1, $2, 'RANK_COMPLETED', $3, $4, $5, 'SYSTEM', 'Promotion requirements verified and completed', CURRENT_TIMESTAMP)
+      `,
+      [
+        uuidv44(),
+        userId,
+        currentRank,
+        targetRule.rank_key,
+        JSON.stringify({
+          eventId,
+          publicPromotionId,
+          rankKey: targetRule.rank_key,
+          rankName: targetRule.rank_name,
+          rankOrder: targetOrder,
+          consumedLeft,
+          consumedRight,
+          cumulativeConsumedLeft: newCumConsumedLeft,
+          cumulativeConsumedRight: newCumConsumedRight,
+          nextRank: newNextRank,
+          rewardUsd,
+          ruleVersion
+        })
+      ]
+    );
+    if (rewardUsd > 0) {
+      let milestoneKey = null;
+      if (targetRule.rank_key === "NODE_BUILDER") milestoneKey = "20/20";
+      else if (targetRule.rank_key === "NODE_MASTER") milestoneKey = "50/50";
+      else if (targetRule.rank_key === "NODE_CAPTAIN") milestoneKey = "100/100";
+      if (milestoneKey) {
+        try {
+          const bonusId = uuidv44();
+          const publicBonusId = generatePromotionBonusPublicId();
+          await db.query(
+            `
+            INSERT INTO promotion_bonuses (
+              id, public_bonus_id, user_id, milestone,
+              left_units, right_units, amount_usd, status,
+              qualified_at, created_at
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, 'EARNED', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            ON CONFLICT (user_id, milestone) DO NOTHING
+            `,
+            [bonusId, publicBonusId, userId, milestoneKey, consumedLeft, consumedRight, rewardUsd]
+          );
+          await postLedgerCredit({
+            userId,
+            sourceType: "PROMOTION_BONUS",
+            sourceId: bonusId,
+            sourceRef: publicBonusId,
+            amount: rewardUsd,
+            description: `Promotion Milestone Bonus - ${milestoneKey} (${targetRule.rank_name})`,
+            createdAt: /* @__PURE__ */ new Date(),
+            dbClient: db
+          }).catch((err) => {
+            console.warn("[LeadershipRankService] Ledger credit posting notice:", err);
+          });
+        } catch (bonusErr) {
+          console.warn("[LeadershipRankService] Error recording milestone bonus:", bonusErr);
+        }
+      }
+    }
+    try {
+      await notifyPromotionEarned({
+        userId,
+        bonusUsd: rewardUsd,
+        milestoneTitle: `${targetRule.rank_name} Rank Achieved`,
+        bonusId: eventId
+      });
+    } catch (notifErr) {
+    }
+    await db.query("COMMIT");
+    const updatedState = await getUserPromotionState(userId, db);
+    const eventResult = {
+      id: createdEventRow.id,
+      publicPromotionId: createdEventRow.public_promotion_id,
+      userId: createdEventRow.user_id,
+      rankKey: createdEventRow.rank_key,
+      rankName: createdEventRow.rank_name,
+      rankOrder: Number(createdEventRow.rank_order),
+      previousRank: createdEventRow.previous_rank,
+      qualificationType: createdEventRow.qualification_type,
+      requiredLeft: Number(createdEventRow.required_left),
+      requiredRight: Number(createdEventRow.required_right),
+      actualLeft: Number(createdEventRow.actual_left),
+      actualRight: Number(createdEventRow.actual_right),
+      consumedLeft: Number(createdEventRow.consumed_left),
+      consumedRight: Number(createdEventRow.consumed_right),
+      ruleVersion: Number(createdEventRow.rule_version),
+      rewardUsd: Number(createdEventRow.reward_usd),
+      qualifyingLeaderIds: createdEventRow.qualifying_leader_ids_json ? JSON.parse(createdEventRow.qualifying_leader_ids_json) : null,
+      status: "COMPLETED",
+      completedAt: new Date(createdEventRow.completed_at).toISOString(),
+      createdAt: new Date(createdEventRow.created_at).toISOString()
+    };
+    return {
+      promoted: true,
+      evaluatedRank: targetRule.rank_key,
+      previousRank: currentRank,
+      currentRank: targetRule.rank_key,
+      reason: "PROMOTION_SUCCESS",
+      event: eventResult,
+      state: updatedState
+    };
+  } catch (err) {
+    await db.query("ROLLBACK");
+    throw err;
+  }
+}
+async function getUserPromotionAuditLogs(userId, dbClient) {
+  const db = dbClient || await getDb();
+  await ensurePromotionTables(db);
+  const res = await db.query(
+    `
+    SELECT * FROM promotion_audit_logs
+    WHERE user_id = $1
+    ORDER BY created_at DESC
+    LIMIT 100
+    `,
+    [userId]
+  );
+  return res.rows.map((r) => ({
+    id: r.id,
+    userId: r.user_id,
+    action: r.action,
+    fromRank: r.from_rank,
+    toRank: r.to_rank,
+    details: JSON.parse(r.details_json || "{}"),
+    actorType: r.actor_type,
+    actorId: r.actor_id,
+    reason: r.reason,
+    createdAt: r.created_at instanceof Date ? r.created_at.toISOString() : String(r.created_at)
+  }));
+}
+async function adminManualRankCorrection(adminId, adminPublicId, userId, targetRankKey, reason, dbClient) {
+  const db = dbClient || await getDb();
+  await ensurePromotionTables(db);
+  if (!reason || reason.trim().length < 5) {
+    const err = new Error("Admin reason is mandatory (minimum 5 characters) for rank corrections.");
+    err.code = "REASON_REQUIRED";
+    err.statusCode = 400;
+    throw err;
+  }
+  const ladder = await getPromotionRules(db);
+  const targetRule = ladder.find((r) => r.rankKey === targetRankKey);
+  if (!targetRule) {
+    const err = new Error(`Target rank ${targetRankKey} does not exist in promotion ladder.`);
+    err.code = "INVALID_RANK";
+    err.statusCode = 400;
+    throw err;
+  }
+  const currentState = await getUserPromotionState(userId, db);
+  const fromRank = currentState.currentRank;
+  await db.query("BEGIN");
+  try {
+    const nextRule = ladder.find((r) => r.rankOrder === targetRule.rankOrder + 1);
+    await db.query(
+      `
+      UPDATE user_promotion_states
+      SET 
+        current_rank = $1,
+        current_rank_order = $2,
+        next_rank = $3,
+        next_rank_order = $4,
+        last_promoted_at = CURRENT_TIMESTAMP,
+        last_evaluated_at = CURRENT_TIMESTAMP,
+        updated_at = CURRENT_TIMESTAMP
+      WHERE user_id = $5
+      `,
+      [
+        targetRule.rankKey,
+        targetRule.rankOrder,
+        nextRule ? nextRule.rankKey : null,
+        nextRule ? nextRule.rankOrder : null,
+        userId
+      ]
+    );
+    await db.query(
+      `
+      INSERT INTO promotion_audit_logs (
+        id, user_id, action, from_rank, to_rank, details_json, actor_type, actor_id, reason, created_at
+      )
+      VALUES ($1, $2, 'ADMIN_MANUAL_ADJUSTMENT', $3, $4, $5, 'ADMIN', $6, $7, CURRENT_TIMESTAMP)
+      `,
+      [
+        uuidv44(),
+        userId,
+        fromRank,
+        targetRule.rankKey,
+        JSON.stringify({
+          fromRank,
+          toRank: targetRule.rankKey,
+          targetOrder: targetRule.rankOrder,
+          adminPublicId,
+          timestamp: (/* @__PURE__ */ new Date()).toISOString()
+        }),
+        adminPublicId,
+        reason
+      ]
+    );
+    await db.query("COMMIT");
+    return await getUserPromotionState(userId, db);
+  } catch (err) {
+    await db.query("ROLLBACK");
+    throw err;
+  }
+}
+var userEvaluationLocks;
+var init_leadershipRankService = __esm({
+  "src/server/services/leadershipRankService.ts"() {
+    init_db();
+    init_idGenerator();
+    init_walletLedgerService();
+    init_notificationService();
+    userEvaluationLocks = /* @__PURE__ */ new Map();
+  }
+});
+
 // src/server/db/db.ts
 import { PGlite } from "@electric-sql/pglite";
 import { Pool } from "pg";
 import fs from "fs";
 import path from "path";
-import { v4 as uuidv4 } from "uuid";
+import { v4 as uuidv45 } from "uuid";
 function getEffectiveDatabaseUrl() {
   if (process.env.DATABASE_URL?.trim()) {
     return process.env.DATABASE_URL.trim();
@@ -219,6 +2160,7 @@ async function getDb() {
             ssl: isUnixSocket ? false : { rejectUnauthorized: false },
             connectionTimeoutMillis: 5e3
           });
+          globalThis.__phivonexPool = pool;
           await pool.query("SELECT 1");
           client = {
             async query(sql, params) {
@@ -277,7 +2219,7 @@ async function getDb() {
         if (isProduction) {
           throw new Error("[CRITICAL_DATABASE_ERROR] Production requires a valid PostgreSQL connection. PGlite is strictly prohibited in production.");
         }
-        const dataDir = process.env.PGLITE_DATA_DIR || (process.env.NODE_ENV === "production" ? "/tmp/pglite_db" : path.resolve(process.cwd(), ".data/pglite_db"));
+        const dataDir = process.env.PGLITE_DATA_DIR || path.resolve(process.cwd(), ".data/pglite_db");
         if (!fs.existsSync(dataDir)) {
           fs.mkdirSync(dataDir, { recursive: true });
         }
@@ -287,6 +2229,7 @@ async function getDb() {
         try {
           pglite = new PGlite(dataDir);
           await pglite.waitReady;
+          globalThis.__phivonexPglite = pglite;
         } catch (pgInitErr) {
           console.warn(`[DB] PGlite failed to initialize from (${dataDir}). Recovering clean state:`, pgInitErr?.message || pgInitErr);
           try {
@@ -1386,6 +3329,12 @@ async function initSchema(client) {
     } catch (task234Err) {
       console.warn("[DB Migration] Task #23.4 Email & Automation schema migration warning:", task234Err);
     }
+    try {
+      const { ensurePromotionTables: ensurePromotionTables2 } = await Promise.resolve().then(() => (init_leadershipRankService(), leadershipRankService_exports));
+      await ensurePromotionTables2(client);
+    } catch (promoErr) {
+      console.warn("[DB Migration] Sequential Promotion schema migration warning:", promoErr);
+    }
     await backfillExistingUsers(client);
     await seedGenesisNodes(client);
     await seedEconomicConfigs(client);
@@ -1575,7 +3524,7 @@ async function seedGenesisNodes(client) {
           const placeholders = [];
           let paramIdx = 1;
           for (let n = start; n <= end; n++) {
-            const id = uuidv4();
+            const id = uuidv45();
             const publicId = formatPublicNodeId(n);
             placeholders.push(`($${paramIdx}, $${paramIdx + 1}, $${paramIdx + 2}, 'AVAILABLE', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`);
             values.push(id, n, publicId);
@@ -1720,7 +3669,7 @@ async function seedEconomicConfigs(client) {
       }
     ];
     for (const cfg of defaultConfigs) {
-      const id = uuidv4();
+      const id = uuidv45();
       await client.query(
         `
         INSERT INTO system_economic_configs (
@@ -1749,11 +3698,11 @@ var init_db = __esm({
 });
 
 // src/server/services/adminService.ts
-import { v4 as uuidv43 } from "uuid";
+import { v4 as uuidv47 } from "uuid";
 async function logAdminAction(params) {
   try {
     const db = await getDb();
-    const id = uuidv43();
+    const id = uuidv47();
     const metaStr = params.metadata ? JSON.stringify(params.metadata) : null;
     await db.query(
       `
@@ -2429,7 +4378,7 @@ __export(emailService_exports, {
   updateAutomationRule: () => updateAutomationRule,
   updateEmailTemplate: () => updateEmailTemplate
 });
-import { v4 as uuidv44 } from "uuid";
+import { v4 as uuidv48 } from "uuid";
 function getEmailProvider() {
   const apiKey = process.env.RESEND_API_KEY;
   if (apiKey && apiKey.trim() !== "" && !apiKey.includes("your_resend_api_key")) {
@@ -2455,7 +4404,7 @@ async function queueEventEmail(toEmail, eventName, templateData, scheduledSendAt
     subject = subject.replace(regex, val);
     bodyHtml = bodyHtml.replace(regex, val);
   }
-  const queueId = uuidv44();
+  const queueId = uuidv48();
   await db.query(
     `
     INSERT INTO email_queue (id, to_email, subject, body_html, status, scheduled_send_at)
@@ -2560,7 +4509,7 @@ async function triggerAutomationRule(userId, criteria, templateData) {
       ON CONFLICT (user_id, rule_id) 
       DO UPDATE SET last_triggered_at = CURRENT_TIMESTAMP
       `,
-      [uuidv44(), userId, rule.id]
+      [uuidv48(), userId, rule.id]
     );
     triggeredAny = true;
   }
@@ -2630,7 +4579,7 @@ async function sendBroadcastCampaign(adminUserId, adminPublicId, campaign) {
     let bodyHtml = campaign.bodyHtml;
     subject = subject.replace(/{{displayName}}/g, user.full_name).replace(/{{publicId}}/g, user.public_id);
     bodyHtml = bodyHtml.replace(/{{displayName}}/g, user.full_name).replace(/{{publicId}}/g, user.public_id);
-    const queueId = uuidv44();
+    const queueId = uuidv48();
     await db.query(
       `
       INSERT INTO email_queue (id, to_email, subject, body_html, status)
@@ -2669,7 +4618,7 @@ async function getAutomationRules() {
 }
 async function createAutomationRule(adminUserId, adminPublicId, rule) {
   const db = await getDb();
-  const id = uuidv44();
+  const id = uuidv48();
   await db.query(
     `
     INSERT INTO automation_rules (id, name, enabled, trigger_criteria, delay_hours, cooldown_days, template_id)
@@ -2806,7 +4755,7 @@ var init_emailService = __esm({
     MockEmailProvider = class {
       async sendEmail(to, subject, html) {
         console.log(`[MockEmailProvider] Sending email to ${to}: "${subject}"`);
-        return { providerMessageId: `mock_msg_${uuidv44()}` };
+        return { providerMessageId: `mock_msg_${uuidv48()}` };
       }
     };
     ResendEmailProvider = class {
@@ -2848,975 +4797,6 @@ var init_emailService = __esm({
   }
 });
 
-// src/server/services/walletLedgerService.ts
-var walletLedgerService_exports = {};
-__export(walletLedgerService_exports, {
-  getWalletSummary: () => getWalletSummary,
-  getWalletTransactions: () => getWalletTransactions,
-  postLedgerCredit: () => postLedgerCredit,
-  postLedgerDebit: () => postLedgerDebit,
-  postLedgerReversal: () => postLedgerReversal,
-  syncUserLedger: () => syncUserLedger
-});
-import { v4 as uuidv46 } from "uuid";
-async function postLedgerCredit(params) {
-  const { userId, sourceType, sourceId, sourceRef, amount, description, currency, createdAt, dbClient } = params;
-  if (!amount || amount <= 0) return null;
-  const db = dbClient || await getDb();
-  const id = uuidv46();
-  const publicTxnId = generateLedgerTransactionPublicId();
-  const effectiveTime = createdAt || /* @__PURE__ */ new Date();
-  const resolvedCurrency = currency || (sourceType === "COIN_SWAP" || sourceType === "WITHDRAWAL" || sourceType === "BLOCKCHAIN_DEPOSIT" ? "USDT" : "USD");
-  const res = await db.query(
-    `
-    INSERT INTO financial_ledger_entries (
-      id, public_txn_id, user_id, entry_type, source_type, source_id,
-      source_ref, description, amount, currency, status, created_at
-    )
-    VALUES ($1, $2, $3, 'CREDIT', $4, $5, $6, $7, $8, $9, 'SETTLED', $10)
-    ON CONFLICT (source_type, source_id, entry_type) DO NOTHING
-    RETURNING *
-    `,
-    [id, publicTxnId, userId, sourceType, sourceId, sourceRef, description, amount, resolvedCurrency, effectiveTime]
-  );
-  if (res.rows.length > 0) {
-    const row = res.rows[0];
-    return {
-      id: row.id,
-      publicTxnId: row.public_txn_id,
-      userId: row.user_id,
-      entryType: row.entry_type,
-      sourceType: row.source_type,
-      sourceId: row.source_id,
-      sourceRef: row.source_ref,
-      description: row.description,
-      amount: Number(row.amount),
-      currency: row.currency,
-      status: row.status,
-      createdAt: new Date(row.created_at).toISOString()
-    };
-  }
-  const existing = await db.query(
-    `
-    SELECT * FROM financial_ledger_entries
-    WHERE source_type = $1 AND source_id = $2 AND entry_type = 'CREDIT'
-    `,
-    [sourceType, sourceId]
-  );
-  if (existing.rows.length > 0) {
-    const row = existing.rows[0];
-    return {
-      id: row.id,
-      publicTxnId: row.public_txn_id,
-      userId: row.user_id,
-      entryType: row.entry_type,
-      sourceType: row.source_type,
-      sourceId: row.source_id,
-      sourceRef: row.source_ref,
-      description: row.description,
-      amount: Number(row.amount),
-      currency: row.currency,
-      status: row.status,
-      createdAt: new Date(row.created_at).toISOString()
-    };
-  }
-  return null;
-}
-async function postLedgerReversal(params) {
-  const { userId, sourceType, sourceId, sourceRef, amount, description, currency, createdAt, dbClient } = params;
-  if (!amount || amount <= 0) return null;
-  const db = dbClient || await getDb();
-  const id = uuidv46();
-  const publicTxnId = generateLedgerTransactionPublicId();
-  const effectiveTime = createdAt || /* @__PURE__ */ new Date();
-  const resolvedCurrency = currency || (sourceType === "COIN_SWAP" || sourceType === "WITHDRAWAL" || sourceType === "BLOCKCHAIN_DEPOSIT" ? "USDT" : "USD");
-  const res = await db.query(
-    `
-    INSERT INTO financial_ledger_entries (
-      id, public_txn_id, user_id, entry_type, source_type, source_id,
-      source_ref, description, amount, currency, status, created_at
-    )
-    VALUES ($1, $2, $3, 'REVERSAL', $4, $5, $6, $7, $8, $9, 'SETTLED', $10)
-    ON CONFLICT (source_type, source_id, entry_type) DO NOTHING
-    RETURNING *
-    `,
-    [id, publicTxnId, userId, sourceType, sourceId, sourceRef, description, amount, resolvedCurrency, effectiveTime]
-  );
-  if (res.rows.length > 0) {
-    const row = res.rows[0];
-    return {
-      id: row.id,
-      publicTxnId: row.public_txn_id,
-      userId: row.user_id,
-      entryType: row.entry_type,
-      sourceType: row.source_type,
-      sourceId: row.source_id,
-      sourceRef: row.source_ref,
-      description: row.description,
-      amount: Number(row.amount),
-      currency: row.currency,
-      status: row.status,
-      createdAt: new Date(row.created_at).toISOString()
-    };
-  }
-  const existing = await db.query(
-    `
-    SELECT * FROM financial_ledger_entries
-    WHERE source_type = $1 AND source_id = $2 AND entry_type = 'REVERSAL'
-    `,
-    [sourceType, sourceId]
-  );
-  if (existing.rows.length > 0) {
-    const row = existing.rows[0];
-    return {
-      id: row.id,
-      publicTxnId: row.public_txn_id,
-      userId: row.user_id,
-      entryType: row.entry_type,
-      sourceType: row.source_type,
-      sourceId: row.source_id,
-      sourceRef: row.source_ref,
-      description: row.description,
-      amount: Number(row.amount),
-      currency: row.currency,
-      status: row.status,
-      createdAt: new Date(row.created_at).toISOString()
-    };
-  }
-  return null;
-}
-async function postLedgerDebit(params) {
-  const { userId, sourceType, sourceId, sourceRef, amount, description, currency, createdAt, dbClient } = params;
-  if (!amount || amount <= 0) return null;
-  const db = dbClient || await getDb();
-  const id = uuidv46();
-  const publicTxnId = generateLedgerTransactionPublicId();
-  const effectiveTime = createdAt || /* @__PURE__ */ new Date();
-  const resolvedCurrency = currency || (sourceType === "COIN_SWAP" || sourceType === "WITHDRAWAL" || sourceType === "BLOCKCHAIN_DEPOSIT" ? "USDT" : "USD");
-  const res = await db.query(
-    `
-    INSERT INTO financial_ledger_entries (
-      id, public_txn_id, user_id, entry_type, source_type, source_id,
-      source_ref, description, amount, currency, status, created_at
-    )
-    VALUES ($1, $2, $3, 'DEBIT', $4, $5, $6, $7, $8, $9, 'SETTLED', $10)
-    ON CONFLICT (source_type, source_id, entry_type) DO NOTHING
-    RETURNING *
-    `,
-    [id, publicTxnId, userId, sourceType, sourceId, sourceRef, description, amount, resolvedCurrency, effectiveTime]
-  );
-  if (res.rows.length > 0) {
-    const row = res.rows[0];
-    return {
-      id: row.id,
-      publicTxnId: row.public_txn_id,
-      userId: row.user_id,
-      entryType: row.entry_type,
-      sourceType: row.source_type,
-      sourceId: row.source_id,
-      sourceRef: row.source_ref,
-      description: row.description,
-      amount: Number(row.amount),
-      currency: row.currency,
-      status: row.status,
-      createdAt: new Date(row.created_at).toISOString()
-    };
-  }
-  const existing = await db.query(
-    `
-    SELECT * FROM financial_ledger_entries
-    WHERE source_type = $1 AND source_id = $2 AND entry_type = 'DEBIT'
-    `,
-    [sourceType, sourceId]
-  );
-  if (existing.rows.length > 0) {
-    const row = existing.rows[0];
-    return {
-      id: row.id,
-      publicTxnId: row.public_txn_id,
-      userId: row.user_id,
-      entryType: row.entry_type,
-      sourceType: row.source_type,
-      sourceId: row.source_id,
-      sourceRef: row.source_ref,
-      description: row.description,
-      amount: Number(row.amount),
-      currency: row.currency,
-      status: row.status,
-      createdAt: new Date(row.created_at).toISOString()
-    };
-  }
-  return null;
-}
-async function syncUserLedger(userId, dbClient) {
-  const db = dbClient || await getDb();
-  const commRes = await db.query(
-    `
-    SELECT id, public_commission_id, amount_usd, status, earned_at, reversed_at
-    FROM referral_commissions
-    WHERE sponsor_user_id = $1
-    `,
-    [userId]
-  );
-  for (const c of commRes.rows) {
-    await postLedgerCredit({
-      userId,
-      sourceType: "REFERRAL_COMMISSION",
-      sourceId: c.id,
-      sourceRef: c.public_commission_id,
-      amount: Number(c.amount_usd),
-      description: "Direct Referral Commission - Node Activation",
-      createdAt: new Date(c.earned_at),
-      dbClient: db
-    });
-    if (c.status === "REVERSED") {
-      await postLedgerReversal({
-        userId,
-        sourceType: "REFERRAL_COMMISSION",
-        sourceId: c.id,
-        sourceRef: c.public_commission_id,
-        amount: Number(c.amount_usd),
-        description: "Direct Referral Commission Reversal",
-        createdAt: c.reversed_at ? new Date(c.reversed_at) : /* @__PURE__ */ new Date(),
-        dbClient: db
-      });
-    }
-  }
-  const matchRes = await db.query(
-    `
-    SELECT id, public_settlement_id, business_date, total_bonus_usd, status, settled_at
-    FROM binary_matching_settlements
-    WHERE user_id = $1 AND total_bonus_usd > 0
-    `,
-    [userId]
-  );
-  for (const m of matchRes.rows) {
-    const bDate = typeof m.business_date === "string" ? m.business_date.split("T")[0] : new Date(m.business_date).toISOString().split("T")[0];
-    await postLedgerCredit({
-      userId,
-      sourceType: "MATCHING_BONUS",
-      sourceId: m.id,
-      sourceRef: m.public_settlement_id,
-      amount: Number(m.total_bonus_usd),
-      description: `Daily Binary Matching Settlement (${bDate})`,
-      createdAt: new Date(m.settled_at),
-      dbClient: db
-    });
-    if (m.status === "REVERSED") {
-      await postLedgerReversal({
-        userId,
-        sourceType: "MATCHING_BONUS",
-        sourceId: m.id,
-        sourceRef: m.public_settlement_id,
-        amount: Number(m.total_bonus_usd),
-        description: `Daily Binary Matching Settlement Reversal (${bDate})`,
-        createdAt: /* @__PURE__ */ new Date(),
-        dbClient: db
-      });
-    }
-  }
-  const promoRes = await db.query(
-    `
-    SELECT id, public_bonus_id, milestone, amount_usd, status, qualified_at
-    FROM promotion_bonuses
-    WHERE user_id = $1
-    `,
-    [userId]
-  );
-  for (const p of promoRes.rows) {
-    await postLedgerCredit({
-      userId,
-      sourceType: "PROMOTION_BONUS",
-      sourceId: p.id,
-      sourceRef: p.public_bonus_id,
-      amount: Number(p.amount_usd),
-      description: `Promotion Milestone Bonus - ${p.milestone}`,
-      createdAt: new Date(p.qualified_at),
-      dbClient: db
-    });
-    if (p.status === "REVERSED") {
-      await postLedgerReversal({
-        userId,
-        sourceType: "PROMOTION_BONUS",
-        sourceId: p.id,
-        sourceRef: p.public_bonus_id,
-        amount: Number(p.amount_usd),
-        description: `Promotion Milestone Bonus Reversal - ${p.milestone}`,
-        createdAt: /* @__PURE__ */ new Date(),
-        dbClient: db
-      });
-    }
-  }
-  const nodeRewRes = await db.query(
-    `
-    SELECT id, public_reward_id, amount, status, accrued_at, reversed_at
-    FROM node_rewards
-    WHERE owner_user_id = $1
-    `,
-    [userId]
-  );
-  for (const nr of nodeRewRes.rows) {
-    await postLedgerCredit({
-      userId,
-      sourceType: "NODE_REWARD",
-      sourceId: nr.id,
-      sourceRef: nr.public_reward_id,
-      amount: Number(nr.amount),
-      currency: "PHIVO",
-      description: "Genesis Node Mining Reward",
-      createdAt: new Date(nr.accrued_at),
-      dbClient: db
-    });
-    if (nr.status === "REVERSED") {
-      await postLedgerReversal({
-        userId,
-        sourceType: "NODE_REWARD",
-        sourceId: nr.id,
-        sourceRef: nr.public_reward_id,
-        amount: Number(nr.amount),
-        currency: "PHIVO",
-        description: "Genesis Node Mining Reward Reversal",
-        createdAt: nr.reversed_at ? new Date(nr.reversed_at) : /* @__PURE__ */ new Date(),
-        dbClient: db
-      });
-    }
-  }
-  const depRes = await db.query(
-    `
-    SELECT id, public_deposit_id, amount, asset, tx_hash, status, credited_at, confirmed_at, created_at
-    FROM blockchain_deposits
-    WHERE user_id = $1 AND status IN ('CREDITED', 'CONFIRMED', 'SWEPT')
-    `,
-    [userId]
-  );
-  for (const d of depRes.rows) {
-    const assetName = (d.asset || "USDT").toUpperCase();
-    const effectiveDate = d.credited_at || d.confirmed_at || d.created_at || /* @__PURE__ */ new Date();
-    await postLedgerCredit({
-      userId,
-      sourceType: "BLOCKCHAIN_DEPOSIT",
-      sourceId: d.id,
-      sourceRef: d.public_deposit_id,
-      amount: Number(d.amount),
-      currency: assetName === "BNB" ? "BNB" : "USDT",
-      description: `${assetName} Blockchain Deposit (${d.tx_hash ? d.tx_hash.slice(0, 10) : "Verified"})`,
-      createdAt: new Date(effectiveDate),
-      dbClient: db
-    });
-  }
-}
-async function getWalletSummary(userId) {
-  await syncUserLedger(userId);
-  const db = await getDb();
-  const aggRes = await db.query(
-    `
-    SELECT 
-      entry_type,
-      source_type,
-      COALESCE(SUM(amount), 0) AS total_amount,
-      COUNT(*) AS count
-    FROM financial_ledger_entries
-    WHERE user_id = $1 AND status = 'SETTLED' AND (currency = 'USDT' OR currency = 'USD') AND source_type != 'NODE_REWARD'
-    GROUP BY entry_type, source_type
-    `,
-    [userId]
-  );
-  let totalEarned = 0;
-  let earningReversals = 0;
-  let totalDebited = 0;
-  let withdrawalReversals = 0;
-  let transactionCount = 0;
-  const grossCredits = {
-    referral: 0,
-    matching: 0,
-    promotion: 0,
-    nodeReward: 0,
-    swap: 0,
-    deposit: 0
-  };
-  const reversals = {
-    referral: 0,
-    matching: 0,
-    promotion: 0,
-    nodeReward: 0,
-    swap: 0,
-    deposit: 0
-  };
-  for (const row of aggRes.rows) {
-    const amt = Number(row.total_amount);
-    const cnt = Number(row.count);
-    transactionCount += cnt;
-    if (row.entry_type === "CREDIT") {
-      totalEarned += amt;
-      if (row.source_type === "REFERRAL_COMMISSION") grossCredits.referral += amt;
-      else if (row.source_type === "MATCHING_BONUS") grossCredits.matching += amt;
-      else if (row.source_type === "PROMOTION_BONUS") grossCredits.promotion += amt;
-      else if (row.source_type === "NODE_REWARD") grossCredits.nodeReward += amt;
-      else if (row.source_type === "COIN_SWAP") grossCredits.swap += amt;
-      else if (row.source_type === "BLOCKCHAIN_DEPOSIT") grossCredits.deposit += amt;
-    } else if (row.entry_type === "REVERSAL") {
-      if (row.source_type === "WITHDRAWAL") {
-        withdrawalReversals += amt;
-      } else {
-        earningReversals += amt;
-        if (row.source_type === "REFERRAL_COMMISSION") reversals.referral += amt;
-        else if (row.source_type === "MATCHING_BONUS") reversals.matching += amt;
-        else if (row.source_type === "PROMOTION_BONUS") reversals.promotion += amt;
-        else if (row.source_type === "NODE_REWARD") reversals.nodeReward += amt;
-        else if (row.source_type === "COIN_SWAP") reversals.swap += amt;
-        else if (row.source_type === "BLOCKCHAIN_DEPOSIT") reversals.deposit += amt;
-      }
-    } else if (row.entry_type === "DEBIT") {
-      totalDebited += amt;
-    }
-  }
-  const breakdown = {
-    referral: Math.max(0, grossCredits.referral - reversals.referral),
-    matching: Math.max(0, grossCredits.matching - reversals.matching),
-    promotion: Math.max(0, grossCredits.promotion - reversals.promotion),
-    nodeReward: Math.max(0, grossCredits.nodeReward - reversals.nodeReward),
-    swap: Math.max(0, grossCredits.swap - reversals.swap),
-    deposit: Math.max(0, grossCredits.deposit - reversals.deposit)
-  };
-  const netEarned = Math.max(0, totalEarned - earningReversals);
-  const netWithdrawn = Math.max(0, totalDebited - withdrawalReversals);
-  const ledgerBalance = Math.max(0, netEarned - netWithdrawn);
-  return {
-    totalEarned,
-    totalReversed: earningReversals,
-    totalWithdrawn: netWithdrawn,
-    ledgerBalance,
-    availableBalance: ledgerBalance,
-    transactionCount,
-    breakdown,
-    grossBreakdown: grossCredits
-  };
-}
-async function getWalletTransactions(userId, page = 1, limit = 20, typeFilter, searchQuery) {
-  await syncUserLedger(userId);
-  const db = await getDb();
-  const safePage = Math.max(1, page);
-  const safeLimit = Math.min(100, Math.max(1, limit));
-  const offset = (safePage - 1) * safeLimit;
-  let types = null;
-  if (typeFilter && typeFilter !== "all" && typeFilter !== "ALL") {
-    const u = typeFilter.toUpperCase();
-    if (u === "NODE_ACTIVATION" || u === "NODE_REWARD" || u === "NODE_MINING") {
-      types = ["NODE_REWARD"];
-    } else if (u === "REFERRAL_COMMISSION" || u === "REFERRAL") {
-      types = ["REFERRAL_COMMISSION"];
-    } else if (u === "MATCHING_BONUS" || u === "MATCHING") {
-      types = ["MATCHING_BONUS"];
-    } else if (u === "PROMOTION_BONUS" || u === "PROMOTION") {
-      types = ["PROMOTION_BONUS"];
-    } else {
-      types = [u];
-    }
-  }
-  const cleanSearch = searchQuery ? searchQuery.trim() : "";
-  let whereClauses = ["user_id = $1"];
-  let queryParams = [userId];
-  let paramIdx = 2;
-  if (types && types.length > 0) {
-    whereClauses.push(`source_type = ANY($${paramIdx}::text[])`);
-    queryParams.push(types);
-    paramIdx++;
-  }
-  if (cleanSearch) {
-    whereClauses.push(`(public_txn_id ILIKE $${paramIdx} OR description ILIKE $${paramIdx} OR source_ref ILIKE $${paramIdx} OR id ILIKE $${paramIdx})`);
-    queryParams.push(`%${cleanSearch}%`);
-    paramIdx++;
-  }
-  const whereSql = whereClauses.join(" AND ");
-  const countRes = await db.query(
-    `SELECT COUNT(*)::int AS count FROM financial_ledger_entries WHERE ${whereSql}`,
-    queryParams
-  );
-  const totalCount = Number(countRes.rows[0]?.count || 0);
-  const limitParamIdx = paramIdx;
-  const offsetParamIdx = paramIdx + 1;
-  const txQueryParams = [...queryParams, safeLimit, offset];
-  const txRes = await db.query(
-    `
-    SELECT *
-    FROM financial_ledger_entries
-    WHERE ${whereSql}
-    ORDER BY created_at DESC
-    LIMIT $${limitParamIdx} OFFSET $${offsetParamIdx}
-    `,
-    txQueryParams
-  );
-  const txRows = txRes.rows;
-  const totalPages = Math.ceil(totalCount / safeLimit) || 1;
-  const transactions = txRows.map((row) => ({
-    id: row.id,
-    publicTxnId: row.public_txn_id,
-    userId: row.user_id,
-    entryType: row.entry_type,
-    sourceType: row.source_type,
-    sourceId: row.source_id,
-    sourceRef: row.source_ref,
-    description: row.description,
-    amount: Number(row.amount),
-    currency: row.currency,
-    status: row.status,
-    createdAt: new Date(row.created_at).toISOString()
-  }));
-  return {
-    transactions,
-    pagination: {
-      page: safePage,
-      limit: safeLimit,
-      totalCount,
-      totalPages
-    }
-  };
-}
-var init_walletLedgerService = __esm({
-  "src/server/services/walletLedgerService.ts"() {
-    init_db();
-    init_idGenerator();
-  }
-});
-
-// src/server/services/webPushServerService.ts
-var webPushServerService_exports = {};
-__export(webPushServerService_exports, {
-  broadcastPushNotification: () => broadcastPushNotification,
-  getUserPushTokens: () => getUserPushTokens,
-  removeUserPushToken: () => removeUserPushToken,
-  saveUserPushToken: () => saveUserPushToken,
-  sendPushNotificationToUser: () => sendPushNotificationToUser
-});
-import { v4 as uuidv48 } from "uuid";
-async function saveUserPushToken(params) {
-  const { userId, token, platform = "WEB", userAgent = "" } = params;
-  if (!userId || !token) return false;
-  const db = await getDb();
-  const id = uuidv48();
-  const now = /* @__PURE__ */ new Date();
-  try {
-    await db.query(
-      `
-      INSERT INTO user_push_tokens (
-        id, user_id, token, platform, user_agent, is_active, created_at, updated_at
-      )
-      VALUES ($1, $2, $3, $4, $5, TRUE, $6, $6)
-      ON CONFLICT (user_id, token) 
-      DO UPDATE SET is_active = TRUE, updated_at = $6
-      `,
-      [id, userId, token.trim(), platform, userAgent, now]
-    );
-    console.log(`[WebPush] Successfully saved push token for user ${userId}`);
-    return true;
-  } catch (err) {
-    console.error("[WebPush] Error saving user push token:", err);
-    return false;
-  }
-}
-async function removeUserPushToken(userId, token) {
-  const db = await getDb();
-  try {
-    await db.query(
-      `UPDATE user_push_tokens SET is_active = FALSE, updated_at = CURRENT_TIMESTAMP WHERE user_id = $1 AND token = $2`,
-      [userId, token.trim()]
-    );
-    return true;
-  } catch (err) {
-    console.error("[WebPush] Error removing push token:", err);
-    return false;
-  }
-}
-async function getUserPushTokens(userId) {
-  const db = await getDb();
-  try {
-    const res = await db.query(
-      `SELECT token FROM user_push_tokens WHERE user_id = $1 AND is_active = TRUE`,
-      [userId]
-    );
-    return res.rows.map((r) => r.token);
-  } catch (err) {
-    console.error("[WebPush] Error fetching push tokens for user:", err);
-    return [];
-  }
-}
-async function sendPushNotificationToUser(userId, payload) {
-  const tokens = await getUserPushTokens(userId);
-  if (tokens.length === 0) {
-    return { sent: 0, failed: 0 };
-  }
-  const { title, body, icon = "/brand/phivonex-app-icon-192.png", url = "/app", data = {} } = payload;
-  let sent = 0;
-  let failed = 0;
-  const db = await getDb();
-  for (const token of tokens) {
-    try {
-      if (adminMessaging) {
-        await adminMessaging.send({
-          token,
-          notification: {
-            title,
-            body
-          },
-          data: {
-            url,
-            ...data
-          },
-          webpush: {
-            notification: {
-              title,
-              body,
-              icon,
-              badge: "/brand/phivonex-favicon.svg",
-              vibrate: [200, 100, 200]
-            },
-            fcmOptions: {
-              link: url
-            }
-          }
-        });
-        sent++;
-      } else {
-        sent++;
-      }
-    } catch (err) {
-      failed++;
-      console.warn(`[WebPush] Failed to send push message to token: ${err?.message}`);
-      const errorCode = err?.code || err?.errorInfo?.code;
-      if (errorCode === "messaging/invalid-registration-token" || errorCode === "messaging/registration-token-not-registered") {
-        try {
-          await db.query(
-            `UPDATE user_push_tokens SET is_active = FALSE, updated_at = CURRENT_TIMESTAMP WHERE token = $1`,
-            [token]
-          );
-        } catch {
-        }
-      }
-    }
-  }
-  return { sent, failed };
-}
-async function broadcastPushNotification(payload) {
-  const db = await getDb();
-  const res = await db.query(
-    `SELECT token, user_id FROM user_push_tokens WHERE is_active = TRUE`
-  );
-  const tokens = res.rows.map((r) => r.token);
-  if (tokens.length === 0) {
-    return { totalTokens: 0, sent: 0, failed: 0 };
-  }
-  const { title, body, icon = "/brand/phivonex-app-icon-192.png", url = "/app", data = {} } = payload;
-  let sent = 0;
-  let failed = 0;
-  for (const token of tokens) {
-    try {
-      if (adminMessaging) {
-        await adminMessaging.send({
-          token,
-          notification: { title, body },
-          data: { url, ...data },
-          webpush: {
-            notification: {
-              title,
-              body,
-              icon,
-              badge: "/brand/phivonex-favicon.svg"
-            },
-            fcmOptions: { link: url }
-          }
-        });
-        sent++;
-      } else {
-        sent++;
-      }
-    } catch {
-      failed++;
-    }
-  }
-  return { totalTokens: tokens.length, sent, failed };
-}
-var init_webPushServerService = __esm({
-  "src/server/services/webPushServerService.ts"() {
-    init_db();
-    init_firebase_admin();
-  }
-});
-
-// src/server/services/notificationService.ts
-import { v4 as uuidv49 } from "uuid";
-async function createNotification(params) {
-  const { userId, type, title, message, sourceType, sourceId } = params;
-  if (!userId || !type || !title || !message) {
-    return null;
-  }
-  const db = await getDb();
-  const id = uuidv49();
-  const publicId = generateNotificationPublicId();
-  try {
-    let query;
-    let queryParams;
-    if (sourceType && sourceId) {
-      query = `
-        INSERT INTO notifications (
-          id, public_notification_id, user_id, type, title, message, source_type, source_id, created_at
-        )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, CURRENT_TIMESTAMP)
-        ON CONFLICT (user_id, source_type, source_id, type) WHERE source_type IS NOT NULL AND source_id IS NOT NULL DO NOTHING
-        RETURNING public_notification_id, type, title, message, read_at, created_at
-      `;
-      queryParams = [id, publicId, userId, type, title, message, sourceType, sourceId];
-    } else {
-      query = `
-        INSERT INTO notifications (
-          id, public_notification_id, user_id, type, title, message, created_at
-        )
-        VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)
-        RETURNING public_notification_id, type, title, message, read_at, created_at
-      `;
-      queryParams = [id, publicId, userId, type, title, message];
-    }
-    const res = await db.query(query, queryParams);
-    if (res.rows.length === 0) {
-      return null;
-    }
-    const row = res.rows[0];
-    try {
-      const { sendPushNotificationToUser: sendPushNotificationToUser2 } = await Promise.resolve().then(() => (init_webPushServerService(), webPushServerService_exports));
-      sendPushNotificationToUser2(userId, {
-        title: row.title,
-        body: row.message,
-        data: {
-          notificationId: row.public_notification_id,
-          type: row.type,
-          url: "/app/notifications"
-        }
-      }).catch((pushErr) => {
-        console.warn("[NotificationService] Web Push delivery warning:", pushErr?.message);
-      });
-    } catch {
-    }
-    return {
-      id: row.public_notification_id,
-      type: row.type,
-      title: row.title,
-      message: row.message,
-      readAt: row.read_at ? new Date(row.read_at).toISOString() : null,
-      createdAt: new Date(row.created_at).toISOString()
-    };
-  } catch (err) {
-    console.error("[NotificationService] Error creating notification:", err);
-    return null;
-  }
-}
-async function getUserNotifications(userId, options) {
-  const db = await getDb();
-  const limit = Math.max(1, Math.min(100, options?.limit || 20));
-  const offset = Math.max(0, options?.offset || 0);
-  const filterClauses = ["user_id = $1"];
-  const queryParams = [userId];
-  if (options?.unreadOnly) {
-    filterClauses.push("read_at IS NULL");
-  }
-  if (options?.type) {
-    queryParams.push(options.type);
-    filterClauses.push(`type = $${queryParams.length}`);
-  }
-  const whereSql = filterClauses.join(" AND ");
-  const countRes = await db.query(
-    `SELECT COUNT(*) as count FROM notifications WHERE ${whereSql}`,
-    queryParams
-  );
-  const total = parseInt(countRes.rows[0]?.count || "0", 10);
-  const unreadRes = await db.query(
-    `SELECT COUNT(*) as count FROM notifications WHERE user_id = $1 AND read_at IS NULL`,
-    [userId]
-  );
-  const unreadCount = parseInt(unreadRes.rows[0]?.count || "0", 10);
-  const listParams = [...queryParams, limit, offset];
-  const listRes = await db.query(
-    `
-    SELECT public_notification_id, type, title, message, read_at, created_at
-    FROM notifications
-    WHERE ${whereSql}
-    ORDER BY created_at DESC
-    LIMIT $${queryParams.length + 1} OFFSET $${queryParams.length + 2}
-    `,
-    listParams
-  );
-  const notifications = listRes.rows.map((row) => ({
-    id: row.public_notification_id,
-    type: row.type,
-    title: row.title,
-    message: row.message,
-    readAt: row.read_at ? new Date(row.read_at).toISOString() : null,
-    createdAt: new Date(row.created_at).toISOString()
-  }));
-  return {
-    notifications,
-    total,
-    unreadCount
-  };
-}
-async function getUnreadNotificationCount(userId) {
-  const db = await getDb();
-  const res = await db.query(
-    `SELECT COUNT(*) as count FROM notifications WHERE user_id = $1 AND read_at IS NULL`,
-    [userId]
-  );
-  return parseInt(res.rows[0]?.count || "0", 10);
-}
-async function markNotificationAsRead(userId, publicNotificationId) {
-  if (!userId || !publicNotificationId) return false;
-  const db = await getDb();
-  const res = await db.query(
-    `
-    UPDATE notifications
-    SET read_at = CURRENT_TIMESTAMP
-    WHERE public_notification_id = $1 AND user_id = $2 AND read_at IS NULL
-    RETURNING id
-    `,
-    [publicNotificationId, userId]
-  );
-  return res.rows.length > 0;
-}
-async function markAllNotificationsAsRead(userId) {
-  if (!userId) return 0;
-  const db = await getDb();
-  const res = await db.query(
-    `
-    UPDATE notifications
-    SET read_at = CURRENT_TIMESTAMP
-    WHERE user_id = $1 AND read_at IS NULL
-    RETURNING id
-    `,
-    [userId]
-  );
-  return res.rows.length;
-}
-async function deleteNotification(userId, publicNotificationId) {
-  if (!userId || !publicNotificationId) return false;
-  const db = await getDb();
-  const res = await db.query(
-    `
-    DELETE FROM notifications
-    WHERE public_notification_id = $1 AND user_id = $2
-    RETURNING id
-    `,
-    [publicNotificationId, userId]
-  );
-  return res.rows.length > 0;
-}
-async function deleteAllNotifications(userId, options) {
-  if (!userId) return 0;
-  const db = await getDb();
-  const query = options?.readOnly ? `DELETE FROM notifications WHERE user_id = $1 AND read_at IS NOT NULL RETURNING id` : `DELETE FROM notifications WHERE user_id = $1 RETURNING id`;
-  const res = await db.query(query, [userId]);
-  return res.rows.length;
-}
-async function notifyNodeActivated(params) {
-  return createNotification({
-    userId: params.userId,
-    type: "NODE_ACTIVATED",
-    title: "Genesis Node Activated",
-    message: `Your Genesis Node #${params.nodeNumber} is now ACTIVE and operational in the PHIVONEX ecosystem.`,
-    sourceType: "NODE_ORDER",
-    sourceId: params.sourceId
-  });
-}
-async function notifyReferralEarned(params) {
-  const buyerRef = params.buyerPublicId ? ` from operator ${params.buyerPublicId}` : "";
-  return createNotification({
-    userId: params.userId,
-    type: "REFERRAL_EARNED",
-    title: "Referral Commission Earned",
-    message: `You earned +$${params.amountUsd.toFixed(2)} USDT direct referral commission${buyerRef}.`,
-    sourceType: "REFERRAL_COMMISSION",
-    sourceId: params.commissionId
-  });
-}
-async function notifyMatchingEarned(params) {
-  return createNotification({
-    userId: params.userId,
-    type: "MATCHING_EARNED",
-    title: "Binary Matching Bonus Earned",
-    message: `You earned +$${params.bonusUsd.toFixed(2)} USDT from the binary matching cycle settlement.`,
-    sourceType: "MATCHING_BONUS",
-    sourceId: params.settlementId
-  });
-}
-async function notifyPromotionEarned(params) {
-  return createNotification({
-    userId: params.userId,
-    type: "PROMOTION_EARNED",
-    title: "Promotion Reward Earned",
-    message: `Congratulations! You unlocked the ${params.milestoneTitle} milestone and received +$${params.bonusUsd.toFixed(2)} USDT.`,
-    sourceType: "PROMOTION_BONUS",
-    sourceId: params.bonusId
-  });
-}
-async function notifyPhivoReward(params) {
-  return createNotification({
-    userId: params.userId,
-    type: "PHIVO_REWARD",
-    title: "PHIVO Mining Reward Accrued",
-    message: `You received a mining reward of +${params.amountPhivo.toFixed(4)} PHIVO from your Genesis Nodes.`,
-    sourceType: "NODE_REWARD",
-    sourceId: params.rewardId
-  });
-}
-async function notifyPhivoSwapCompleted(params) {
-  return createNotification({
-    userId: params.userId,
-    type: "PHIVO_SWAP_COMPLETED",
-    title: "PHIVO \u2192 USDT Swap Completed",
-    message: `Successfully swapped ${params.coinAmount.toFixed(4)} PHIVO into $${params.usdtAmount.toFixed(2)} USDT at $${params.rateUsdt.toFixed(4)} per PHIVO.`,
-    sourceType: "COIN_SWAP",
-    sourceId: params.swapId
-  });
-}
-async function notifyUsdtDepositConfirmed(params) {
-  const hashNote = params.txHash ? ` (Tx: ${params.txHash.slice(0, 10)}...)` : "";
-  return createNotification({
-    userId: params.userId,
-    type: "USDT_DEPOSIT_CONFIRMED",
-    title: "USDT Deposit Confirmed",
-    message: `Your on-chain deposit of $${params.amountUsdt.toFixed(2)} USDT has been confirmed on BNB Smart Chain${hashNote}.`,
-    sourceType: "BLOCKCHAIN_DEPOSIT",
-    sourceId: params.depositId
-  });
-}
-async function notifyWithdrawalStatus(params) {
-  let title = "Withdrawal Status Updated";
-  let message = `Your withdrawal request of $${params.amountUsdt.toFixed(2)} USDT status is now ${params.status}.`;
-  if (params.status === "PENDING") {
-    title = "Withdrawal Request Submitted";
-    message = `Your withdrawal request of $${params.amountUsdt.toFixed(2)} USDT has been submitted for processing.`;
-  } else if (params.status === "APPROVED") {
-    title = "Withdrawal Request Approved";
-    message = `Your withdrawal of $${params.amountUsdt.toFixed(2)} USDT has been approved and queued for blockchain disbursement.`;
-  } else if (params.status === "COMPLETED") {
-    title = "Withdrawal Disbursed";
-    message = `Your withdrawal of $${params.amountUsdt.toFixed(2)} USDT has been successfully completed on-chain.`;
-  } else if (params.status === "REJECTED") {
-    title = "Withdrawal Rejected";
-    message = `Your withdrawal of $${params.amountUsdt.toFixed(2)} USDT was rejected${params.reason ? `: ${params.reason}` : "."} Funds have been refunded to your ledger.`;
-  }
-  return createNotification({
-    userId: params.userId,
-    type: "WITHDRAWAL_STATUS",
-    title,
-    message,
-    sourceType: "WITHDRAWAL",
-    sourceId: `${params.withdrawalId}_${params.status}`
-  });
-}
-var init_notificationService = __esm({
-  "src/server/services/notificationService.ts"() {
-    init_db();
-    init_idGenerator();
-  }
-});
-
 // src/server/services/promotionalService.ts
 var promotionalService_exports = {};
 __export(promotionalService_exports, {
@@ -3835,7 +4815,7 @@ __export(promotionalService_exports, {
   updatePromotionalBanner: () => updatePromotionalBanner,
   updatePromotionalOffer: () => updatePromotionalOffer
 });
-import { v4 as uuidv412 } from "uuid";
+import { v4 as uuidv413 } from "uuid";
 async function getPromotionalOffers(adminOnly = false) {
   const db = await getDb();
   let query = `
@@ -3870,7 +4850,7 @@ async function getPromotionalOffers(adminOnly = false) {
 }
 async function createPromotionalOffer(adminUserId, adminPublicId, offer) {
   const db = await getDb();
-  const id = uuidv412();
+  const id = uuidv413();
   await db.query(
     `
     INSERT INTO promotional_offers (
@@ -4002,7 +4982,7 @@ async function getPromotionalBanners(adminOnly = false) {
 }
 async function createPromotionalBanner(adminUserId, adminPublicId, banner) {
   const db = await getDb();
-  const id = uuidv412();
+  const id = uuidv413();
   await db.query(
     `
     INSERT INTO promotional_banners (id, content, image_url, cta_text, cta_destination, display_order, status, start_date, end_date)
@@ -4242,7 +5222,7 @@ var init_promotionalService = __esm({
 });
 
 // src/server/services/withdrawalService.ts
-import { v4 as uuidv419 } from "uuid";
+import { v4 as uuidv420 } from "uuid";
 function mapRowToWithdrawalRecord(row) {
   return {
     id: row.id,
@@ -4268,7 +5248,7 @@ function mapRowToWithdrawalRecord(row) {
 async function logWithdrawalStateTransition(params) {
   try {
     const db = await getDb();
-    const id = uuidv419();
+    const id = uuidv420();
     const now = /* @__PURE__ */ new Date();
     const userRes = await db.query(
       `SELECT email, full_name FROM users WHERE id = $1 LIMIT 1`,
@@ -4441,7 +5421,7 @@ async function createWithdrawalRequest(params) {
         err.availableBalance = availableBalance;
         throw err;
       }
-      const id = uuidv419();
+      const id = uuidv420();
       const publicWithdrawalId = generateWithdrawalPublicId();
       const now = /* @__PURE__ */ new Date();
       const insertRes = await trx.query(
@@ -5054,7 +6034,7 @@ async function backfillMissingWithdrawalStateLogs() {
           transition_timestamp, created_at
         ) VALUES ($1, $2, $3, $4, $5, $6, NULL, 'PENDING', 'USER', 'Withdrawal requested by user', $7, $8, $9, $10, $10)
       `, [
-        uuidv419(),
+        uuidv420(),
         w.id,
         w.public_withdrawal_id,
         w.user_id,
@@ -5073,7 +6053,7 @@ async function backfillMissingWithdrawalStateLogs() {
             transition_timestamp, created_at
           ) VALUES ($1, $2, $3, $4, $5, $6, 'PENDING', 'APPROVED', 'ADMIN', 'Withdrawal request approved', $7, $8, $9, $10, $10)
         `, [
-          uuidv419(),
+          uuidv420(),
           w.id,
           w.public_withdrawal_id,
           w.user_id,
@@ -5094,7 +6074,7 @@ async function backfillMissingWithdrawalStateLogs() {
             transition_timestamp, created_at
           ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'COMPLETED', 'SYSTEM', 'Payout disbursement completed on-chain', $8, $9, $10, $11, $11)
         `, [
-          uuidv419(),
+          uuidv420(),
           w.id,
           w.public_withdrawal_id,
           w.user_id,
@@ -5114,7 +6094,7 @@ async function backfillMissingWithdrawalStateLogs() {
             transition_timestamp, created_at
           ) VALUES ($1, $2, $3, $4, $5, $6, 'PENDING', 'REJECTED', 'ADMIN', $7, $8, $9, $10, $11, $11)
         `, [
-          uuidv419(),
+          uuidv420(),
           w.id,
           w.public_withdrawal_id,
           w.user_id,
@@ -5134,7 +6114,7 @@ async function backfillMissingWithdrawalStateLogs() {
             transition_timestamp, created_at
           ) VALUES ($1, $2, $3, $4, $5, $6, 'PENDING', 'CANCELLED', 'USER', 'Withdrawal request cancelled by user', $7, $8, $9, $10, $10)
         `, [
-          uuidv419(),
+          uuidv420(),
           w.id,
           w.public_withdrawal_id,
           w.user_id,
@@ -5153,7 +6133,7 @@ async function backfillMissingWithdrawalStateLogs() {
             transition_timestamp, created_at
           ) VALUES ($1, $2, $3, $4, $5, $6, 'PENDING', 'FAILED', 'SYSTEM', $7, $8, $9, $10, $11, $11)
         `, [
-          uuidv419(),
+          uuidv420(),
           w.id,
           w.public_withdrawal_id,
           w.user_id,
@@ -5413,7 +6393,7 @@ __export(bscSignerService_exports, {
   broadcastBnbWithdrawal: () => broadcastBnbWithdrawal
 });
 import { ethers as ethers3 } from "ethers";
-import { v4 as uuidv420 } from "uuid";
+import { v4 as uuidv421 } from "uuid";
 function withNonceLock(fn) {
   const res = nonceLockPromise.then(
     () => fn(),
@@ -5554,7 +6534,7 @@ async function broadcastBnbWithdrawal(params) {
       }
     }
     const nonce = await getNextTreasuryNonce(provider, activePayoutAddress);
-    const bcwId = uuidv420();
+    const bcwId = uuidv421();
     let txHash = "";
     if (payoutKey && !isMockRpc && process.env.NODE_ENV !== "test") {
       try {
@@ -5571,7 +6551,7 @@ async function broadcastBnbWithdrawal(params) {
         console.log(`[Secure Signer] Live withdrawal broadcast successful! TxHash: ${txHash}`);
       } catch (sendErr) {
         console.error("[Secure Signer] Live broadcast failed, recording hash fallback:", sendErr);
-        txHash = `0x${uuidv420().replace(/-/g, "")}${uuidv420().replace(/-/g, "")}`.slice(0, 66);
+        txHash = `0x${uuidv421().replace(/-/g, "")}${uuidv421().replace(/-/g, "")}`.slice(0, 66);
       }
     } else if (isMockRpc || process.env.NODE_ENV === "test") {
       const dummySign = ethers3.keccak256(
@@ -5581,7 +6561,7 @@ async function broadcastBnbWithdrawal(params) {
     } else {
       const signerRef = BSC_CONFIG.SIGNER_SECRET_REFERENCE;
       console.log(`[Secure Signer] Signing withdrawal ${withdrawalPublicId} via signer reference: ${signerRef}`);
-      txHash = `0x${uuidv420().replace(/-/g, "")}${uuidv420().replace(/-/g, "")}`.slice(0, 66);
+      txHash = `0x${uuidv421().replace(/-/g, "")}${uuidv421().replace(/-/g, "")}`.slice(0, 66);
     }
     const now = /* @__PURE__ */ new Date();
     const insertRes = await db.query(
@@ -5662,7 +6642,7 @@ import { fileURLToPath } from "url";
 // src/server/routes/authRoutes.ts
 init_db();
 import { Router } from "express";
-import { v4 as uuidv45 } from "uuid";
+import { v4 as uuidv49 } from "uuid";
 
 // src/server/utils/crypto.ts
 import argon2 from "argon2";
@@ -5856,7 +6836,7 @@ async function requireAdmin(req, res, next) {
 init_db();
 
 // src/server/utils/securityLogger.ts
-import { v4 as uuidv42 } from "uuid";
+import { v4 as uuidv46 } from "uuid";
 function parseUserAgentSummary(uaStr) {
   if (!uaStr) return "Standard Client";
   let browser = "Web Browser";
@@ -5897,7 +6877,7 @@ async function logSecurityEvent(db, params) {
     await db.query(
       `INSERT INTO security_events (id, user_id, event_type, description, user_agent_summary, created_at)
        VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)`,
-      [uuidv42(), params.userId, params.eventType, safeDescription, summary]
+      [uuidv46(), params.userId, params.eventType, safeDescription, summary]
     );
   } catch (err) {
     console.warn("[SecurityLogger] Failed to record security event:", err);
@@ -6028,7 +7008,7 @@ async function getUniquePublicId(db) {
     if (res.rowCount === 0) return candidate;
     attempts++;
   }
-  return `PHX-${uuidv45().slice(0, 6).toUpperCase()}`;
+  return `PHX-${uuidv49().slice(0, 6).toUpperCase()}`;
 }
 async function getUniqueReferralCode(db) {
   let attempts = 0;
@@ -6038,7 +7018,7 @@ async function getUniqueReferralCode(db) {
     if (res.rowCount === 0) return candidate;
     attempts++;
   }
-  return `PHX${uuidv45().slice(0, 6).toUpperCase()}`;
+  return `PHX${uuidv49().slice(0, 6).toUpperCase()}`;
 }
 async function syncUserToFirebase(userData) {
   try {
@@ -6247,7 +7227,7 @@ router.post("/register/verify-email", registrationLimiter, async (req, res) => {
       });
       return;
     }
-    const verificationToken = uuidv45();
+    const verificationToken = uuidv49();
     await db.query(
       `UPDATE pending_registrations SET
         is_verified = TRUE,
@@ -6298,7 +7278,7 @@ router.post("/register/complete", registrationLimiter, async (req, res) => {
       res.status(409).json({ error: "EMAIL_EXISTS", message: "An account with this email address already exists." });
       return;
     }
-    const userId = uuidv45();
+    const userId = uuidv49();
     const publicId = await getUniquePublicId(db);
     const newReferralCode = await getUniqueReferralCode(db);
     await db.query(
@@ -6336,7 +7316,7 @@ router.post("/register/complete", registrationLimiter, async (req, res) => {
     await db.query(
       `INSERT INTO sessions (id, user_id, token_hash, user_agent, expires_at, created_at, last_used_at)
        VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
-      [uuidv45(), userId, sessionTokenHash, userAgent, sessionExpiresAt]
+      [uuidv49(), userId, sessionTokenHash, userAgent, sessionExpiresAt]
     );
     await logSecurityEvent(db, {
       userId,
@@ -6455,7 +7435,7 @@ router.post("/register", registrationLimiter, async (req, res) => {
       }
     }
     const passwordHash = await hashPassword(password);
-    const userId = uuidv45();
+    const userId = uuidv49();
     const publicId = await getUniquePublicId(db);
     const newReferralCode = await getUniqueReferralCode(db);
     await db.query(
@@ -6492,7 +7472,7 @@ router.post("/register", registrationLimiter, async (req, res) => {
     await db.query(
       `INSERT INTO sessions (id, user_id, token_hash, user_agent, expires_at, created_at, last_used_at)
        VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
-      [uuidv45(), userId, sessionTokenHash, userAgent, sessionExpiresAt]
+      [uuidv49(), userId, sessionTokenHash, userAgent, sessionExpiresAt]
     );
     await logSecurityEvent(db, {
       userId,
@@ -6563,7 +7543,7 @@ router.post("/google", authLimiter, async (req, res) => {
       }
       await db.query(`UPDATE users SET last_login_at = CURRENT_TIMESTAMP WHERE id = $1`, [userId]);
     } else {
-      userId = uuidv45();
+      userId = uuidv49();
       const publicId = await getUniquePublicId(db);
       const newReferralCode = await getUniqueReferralCode(db);
       let sponsorUserId = null;
@@ -6618,7 +7598,7 @@ router.post("/google", authLimiter, async (req, res) => {
     await db.query(
       `INSERT INTO sessions (id, user_id, token_hash, user_agent, expires_at, created_at, last_used_at)
        VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
-      [uuidv45(), userId, sessionTokenHash, userAgent, sessionExpiresAt]
+      [uuidv49(), userId, sessionTokenHash, userAgent, sessionExpiresAt]
     );
     syncUserToFirebase({
       id: userId,
@@ -6777,7 +7757,7 @@ router.post("/login", loginLimiter, async (req, res) => {
     await db.query(
       `INSERT INTO sessions (id, user_id, token_hash, user_agent, expires_at, created_at, last_used_at)
        VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
-      [uuidv45(), user.id, sessionTokenHash, userAgent, sessionExpiresAt]
+      [uuidv49(), user.id, sessionTokenHash, userAgent, sessionExpiresAt]
     );
     await logSecurityEvent(db, {
       userId: user.id,
@@ -7115,7 +8095,7 @@ router.post("/resend-verification", async (req, res) => {
       await db.query(
         `INSERT INTO auth_tokens (id, user_id, type, token_hash, expires_at, created_at)
          VALUES ($1, $2, 'EMAIL_VERIFY', $3, $4, CURRENT_TIMESTAMP)`,
-        [uuidv45(), targetUserId, verifyTokenHash, expiresAt]
+        [uuidv49(), targetUserId, verifyTokenHash, expiresAt]
       );
       await logSecurityEvent(db, {
         userId: targetUserId,
@@ -7152,7 +8132,7 @@ router.post("/forgot-password", passwordResetLimiter, async (req, res) => {
       await db.query(
         `INSERT INTO auth_tokens (id, user_id, type, token_hash, expires_at, created_at)
          VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)`,
-        [uuidv45(), user.id, "PASSWORD_RESET", tokenHash, expiresAt]
+        [uuidv49(), user.id, "PASSWORD_RESET", tokenHash, expiresAt]
       );
     }
     res.status(200).json({
@@ -7639,11 +8619,11 @@ init_nodeConfig();
 init_db();
 init_idGenerator();
 init_nodeConfig();
-import { v4 as uuidv413 } from "uuid";
+import { v4 as uuidv414 } from "uuid";
 
 // src/server/services/referralCommissionService.ts
 init_db();
-import { v4 as uuidv410 } from "uuid";
+import { v4 as uuidv411 } from "uuid";
 
 // src/config/referralConfig.ts
 function formatPublicCommissionId(seq) {
@@ -7658,7 +8638,7 @@ init_walletLedgerService();
 
 // src/server/services/economicService.ts
 init_db();
-import { v4 as uuidv47 } from "uuid";
+import { v4 as uuidv410 } from "uuid";
 
 // src/server/services/systemConfigBroadcaster.ts
 init_firebase_admin();
@@ -8021,7 +9001,7 @@ async function updateEconomicConfig(params) {
     throw new Error("CONCURRENCY_ERROR: Economic config update failed due to concurrent modification.");
   }
   const updatedConfig = mapRowToConfigRecord(updateRes.rows[0]);
-  const auditId = uuidv47();
+  const auditId = uuidv410();
   const auditRes = await db.query(
     `
     INSERT INTO economic_config_audit_logs (
@@ -8387,7 +9367,7 @@ async function processNodeActivationCommission(db, orderId, nodeId, buyerUserId)
   if (collisionCheck.rows.length > 0) {
     publicCommissionId = `PHX-COM-${Math.floor(1e5 + Math.random() * 9e5)}`;
   }
-  const commissionId = uuidv410();
+  const commissionId = uuidv411();
   const commissionRate = await getDirectReferralCommissionRate();
   const insertRes = await db.query(
     `
@@ -8432,7 +9412,7 @@ async function processNodeActivationCommission(db, orderId, nodeId, buyerUserId)
       VALUES ($1, $2, 'DIRECT_REFERRAL_COMMISSION_EARNED', $3, CURRENT_TIMESTAMP)
       `,
       [
-        uuidv410(),
+        uuidv411(),
         sponsorUserId,
         `Direct referral commission ${publicCommissionId} ($50.00 USD) credited for referred buyer ${buyerPublicId} activating Genesis Node ${nodePublicId}.`
       ]
@@ -8506,7 +9486,7 @@ async function getUserCommissions(sponsorUserId) {
 // src/server/services/binaryVolumeService.ts
 init_db();
 init_idGenerator();
-import { v4 as uuidv411 } from "uuid";
+import { v4 as uuidv412 } from "uuid";
 
 // src/server/utils/timezone.ts
 var PHIVONEX_BUSINESS_TIMEZONE = "Asia/Dhaka";
@@ -8629,7 +9609,7 @@ async function propagateNodeSalesVolume(dbClient, sourceNodeId, buyerUserId, occ
   const businessDate = getDhakaBusinessDate(effectiveTimestamp);
   let eventsCreated = 0;
   for (const step of ancestors) {
-    const eventId = uuidv411();
+    const eventId = uuidv412();
     const publicEventId = generateVolumeEventPublicId();
     const insertRes = await db.query(
       `
@@ -8654,7 +9634,7 @@ async function propagateNodeSalesVolume(dbClient, sourceNodeId, buyerUserId, occ
     );
     if (insertRes.rows.length > 0) {
       eventsCreated++;
-      const dailyId = uuidv411();
+      const dailyId = uuidv412();
       await db.query(
         `
         INSERT INTO binary_daily_volumes (
@@ -9009,7 +9989,7 @@ async function executeReservation(db, userId, idempotencyKey, paymentMethod = "S
     if (reserveNodeRes.rows.length === 0) {
       continue;
     }
-    const orderId = uuidv413();
+    const orderId = uuidv414();
     const publicOrderId = generateOrderPublicId();
     const cleanIdempotencyKey = idempotencyKey && idempotencyKey.trim().length > 0 ? idempotencyKey.trim() : null;
     const expiresAt = new Date(Date.now() + RESERVATION_EXPIRY_MINUTES * 60 * 1e3);
@@ -9238,7 +10218,7 @@ async function settleNodeOrder(userId, orderIdentifier, paymentReference, dbClie
             VALUES ($1, $2, $3, 'PROMOTIONAL_BONUS', CURRENT_TIMESTAMP, TRUE)
             ON CONFLICT (node_id, user_id) DO UPDATE SET is_current_owner = TRUE, acquired_via = 'PROMOTIONAL_BONUS'
             `,
-            [uuidv413(), bonusNode.id, order.user_id]
+            [uuidv414(), bonusNode.id, order.user_id]
           );
           console.log(`[PromotionEngine] Allocated Free Bonus Promo Node #${bonusNode.node_number} (${bonusNode.public_node_id}) to user ${order.user_id} under offer "${bogoOffer.title}"`);
         }
@@ -9254,7 +10234,7 @@ async function settleNodeOrder(userId, orderIdentifier, paymentReference, dbClie
       VALUES ($1, $2, 'NODE_PURCHASE_COMPLETED', $3, CURRENT_TIMESTAMP)
       `,
       [
-        uuidv413(),
+        uuidv414(),
         order.user_id,
         `Acquired Genesis Node ${finalNode.public_node_id} (Node #${finalNode.node_number}) for $1,000 USD via order ${finalOrder.public_order_id}.`
       ]
@@ -9497,7 +10477,7 @@ async function purchaseNodeWithDepositBalance(userId, preferredAsset = "USDT") {
       }
       let reservation;
       try {
-        reservation = await createNodeReservation(userId, `dep_node_${userId}_${uuidv413()}`, `DEPOSIT_${preferredAsset}`, trx);
+        reservation = await createNodeReservation(userId, `dep_node_${userId}_${uuidv414()}`, `DEPOSIT_${preferredAsset}`, trx);
       } catch (err) {
         const existingOrders = await getUserOrders(userId, trx);
         const pending = existingOrders.find((o) => o.status === "PENDING" && o.secondsRemaining > 0);
@@ -9507,7 +10487,7 @@ async function purchaseNodeWithDepositBalance(userId, preferredAsset = "USDT") {
           throw err;
         }
       }
-      const debitTxnId = uuidv413();
+      const debitTxnId = uuidv414();
       const publicTxnId = generateLedgerTransactionPublicId();
       await trx.query(
         `
@@ -9551,7 +10531,7 @@ async function purchaseNodeWithDepositBalance(userId, preferredAsset = "USDT") {
 // src/server/services/nodeRewardService.ts
 init_db();
 init_idGenerator();
-import { v4 as uuidv414 } from "uuid";
+import { v4 as uuidv415 } from "uuid";
 
 // src/server/config/rewardConfig.ts
 var REWARD_CURRENCY = "USD";
@@ -9592,7 +10572,7 @@ async function createRewardEpoch(params) {
   );
   const epochNumber = Number(maxRes.rows[0]?.next_num || 1);
   const publicEpochId = generateEpochPublicId(epochNumber);
-  const id = uuidv414();
+  const id = uuidv415();
   const startAt = params?.startAt || /* @__PURE__ */ new Date();
   const endAt = params?.endAt || new Date(startAt.getTime() + 24 * 60 * 60 * 1e3);
   const res = await db.query(
@@ -9702,7 +10682,7 @@ async function closeAndSettleEpoch(epochId, options) {
   let rewardsCreated = 0;
   let totalDistributed = 0;
   for (const node of eligibleNodes) {
-    const rewardId = uuidv414();
+    const rewardId = uuidv415();
     const publicRewardId = generateRewardPublicId();
     const insRes = await db.query(
       `
@@ -10077,7 +11057,7 @@ import { Router as Router5 } from "express";
 // src/server/services/nodePurchaseBalanceService.ts
 init_db();
 init_idGenerator();
-import { v4 as uuidv415 } from "uuid";
+import { v4 as uuidv416 } from "uuid";
 init_walletLedgerService();
 var userLocks = /* @__PURE__ */ new Map();
 function withUserLock(userId, fn) {
@@ -10183,7 +11163,7 @@ async function processNodePurchaseWithAssetBalance(userId, asset = "USDT") {
     try {
       reservation = await createNodeReservation(
         userId,
-        `node_bal_req_${selectedAsset}_${userId}_${uuidv415()}`,
+        `node_bal_req_${selectedAsset}_${userId}_${uuidv416()}`,
         `DEPOSIT_${selectedAsset}`
       );
     } catch (err) {
@@ -10214,7 +11194,7 @@ async function processNodePurchaseWithAssetBalance(userId, asset = "USDT") {
           `SELECT id FROM financial_ledger_entries WHERE source_id = $1 AND source_type = 'NODE_PURCHASE'`,
           [orderId]
         );
-        let debitTxnId = uuidv415();
+        let debitTxnId = uuidv416();
         let publicTxnId = generateLedgerTransactionPublicId();
         if (existingDebitRes.rows.length === 0) {
           await trx.query(
@@ -10556,7 +11536,7 @@ import { Router as Router7 } from "express";
 // src/server/services/binaryPlacementService.ts
 init_db();
 init_idGenerator();
-import { v4 as uuidv416 } from "uuid";
+import { v4 as uuidv417 } from "uuid";
 async function validateNoCycle(db, memberId, targetParentId) {
   if (memberId === targetParentId) {
     const error = new Error("Self-parenting is not permitted.");
@@ -10748,7 +11728,7 @@ async function placeMember(sponsorUserId, memberPublicId, preferredSide) {
       VALUES ($1, $2, 'BINARY_MEMBER_PLACED', $3, CURRENT_TIMESTAMP)
       `,
       [
-        uuidv416(),
+        uuidv417(),
         sponsorUserId,
         `Placed member ${member.public_id} into ${finalSide} leg under parent ${parentPublicId}.`
       ]
@@ -11032,7 +12012,7 @@ init_db();
 init_idGenerator();
 init_walletLedgerService();
 init_notificationService();
-import { v4 as uuidv417 } from "uuid";
+import { v4 as uuidv418 } from "uuid";
 async function getActiveMatchingConfig(dbClient) {
   const db = dbClient || await getDb();
   try {
@@ -11333,7 +12313,7 @@ async function settleUserMatchingForDate(dbClient, userId, businessDate) {
     const config = await getActiveMatchingConfig(db);
     const sponsorQualified = await checkSponsorQualification(db, userId);
     const decomposition = calculateDynamicMatchingDecomposition(availableLeft, availableRight, config, sponsorQualified);
-    const settlementId = uuidv417();
+    const settlementId = uuidv418();
     const publicSettlementId = generateSettlementPublicId();
     const settledAt = /* @__PURE__ */ new Date();
     const insertSettlementRes = await db.query(
@@ -11379,7 +12359,7 @@ async function settleUserMatchingForDate(dbClient, userId, businessDate) {
       return settleUserMatchingForDate(db, userId, businessDate);
     }
     for (const comp of decomposition.components) {
-      const compId = uuidv417();
+      const compId = uuidv418();
       await db.query(
         `
         INSERT INTO binary_matching_components (
@@ -11753,7 +12733,7 @@ async function updateMatchingConfig(adminUserId, params) {
   await db.query("BEGIN");
   try {
     const nextVersion = currentConfig.version + 1;
-    const configId = uuidv417();
+    const configId = uuidv418();
     await db.query(
       `
       INSERT INTO binary_matching_config (
@@ -11773,7 +12753,7 @@ async function updateMatchingConfig(adminUserId, params) {
         JSON.stringify(params.tiers)
       ]
     );
-    const auditId = uuidv417();
+    const auditId = uuidv418();
     await db.query(
       `
       INSERT INTO binary_matching_config_audit (
@@ -11894,7 +12874,7 @@ init_db();
 init_idGenerator();
 init_walletLedgerService();
 init_notificationService();
-import { v4 as uuidv418 } from "uuid";
+import { v4 as uuidv419 } from "uuid";
 var OFFICIAL_PROMOTIONS = [
   { milestone: "20/20", unitsRequired: 20, bonusUsd: 5e3 },
   { milestone: "50/50", unitsRequired: 50, bonusUsd: 1e4 },
@@ -11933,7 +12913,7 @@ async function evaluateUserPromotions(userId) {
     const isQualified = leftUnits >= promo.unitsRequired && rightUnits >= promo.unitsRequired;
     const isAlreadyEarned = earnedMilestonesSet.has(promo.milestone);
     if (isQualified && !isAlreadyEarned) {
-      const bonusId = uuidv418();
+      const bonusId = uuidv419();
       const publicBonusId = generatePromotionBonusPublicId();
       await db.query(
         `
@@ -12051,8 +13031,96 @@ async function evaluateUserPromotions(userId) {
 }
 
 // src/server/routes/promotionRoutes.ts
+init_leadershipRankService();
 init_promotionalService();
 var promotionRouter = Router9();
+promotionRouter.get("/ranks/me", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const state = await getUserPromotionState(userId);
+    return res.status(200).json({ success: true, state });
+  } catch (err) {
+    console.error("[Promotion API] Error in GET /api/promotions/ranks/me:", err);
+    return res.status(500).json({ error: "SERVER_ERROR", message: "Failed to retrieve user rank state" });
+  }
+});
+promotionRouter.post("/ranks/evaluate", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const result = await evaluateUserRankPromotion(userId);
+    return res.status(200).json({ success: true, result });
+  } catch (err) {
+    console.error("[Promotion API] Error in POST /api/promotions/ranks/evaluate:", err);
+    return res.status(500).json({ error: "SERVER_ERROR", message: err.message || "Evaluation failed" });
+  }
+});
+promotionRouter.get("/ranks/rules", requireAuth, async (req, res) => {
+  try {
+    const rules = await getPromotionRules();
+    return res.status(200).json({ success: true, rules });
+  } catch (err) {
+    console.error("[Promotion API] Error in GET /api/promotions/ranks/rules:", err);
+    return res.status(500).json({ error: "SERVER_ERROR", message: "Failed to retrieve promotion rules" });
+  }
+});
+promotionRouter.put("/ranks/rules/:id", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const admin = req.user;
+    const { id } = req.params;
+    const { requiredLeft, requiredRight, requiredLeaderRank, legBalanceRule, rewardUsd, status, reason } = req.body || {};
+    if (!reason || String(reason).trim().length < 5) {
+      return res.status(400).json({ error: "INVALID_INPUT", message: "Reason is required (min 5 characters)." });
+    }
+    const updated = await updatePromotionRule(admin.id, admin.public_id, id, {
+      requiredLeft: typeof requiredLeft === "number" ? requiredLeft : void 0,
+      requiredRight: typeof requiredRight === "number" ? requiredRight : void 0,
+      requiredLeaderRank: requiredLeaderRank !== void 0 ? requiredLeaderRank : void 0,
+      legBalanceRule: legBalanceRule !== void 0 ? legBalanceRule : void 0,
+      rewardUsd: typeof rewardUsd === "number" ? rewardUsd : void 0,
+      status: status !== void 0 ? status : void 0,
+      reason: String(reason).trim()
+    });
+    return res.status(200).json({ success: true, rule: updated });
+  } catch (err) {
+    console.error("[Admin Promotion API] Error updating rank rule:", err);
+    return res.status(err.statusCode || 500).json({ error: err.code || "SERVER_ERROR", message: err.message });
+  }
+});
+promotionRouter.get("/ranks/user/:userId", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const state = await getUserPromotionState(userId);
+    const auditLogs = await getUserPromotionAuditLogs(userId);
+    return res.status(200).json({ success: true, state, auditLogs });
+  } catch (err) {
+    console.error("[Admin Promotion API] Error inspecting user rank state:", err);
+    return res.status(500).json({ error: "SERVER_ERROR", message: "Failed to inspect user rank state" });
+  }
+});
+promotionRouter.post("/ranks/evaluate/:userId", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const result = await evaluateUserRankPromotion(userId);
+    return res.status(200).json({ success: true, result });
+  } catch (err) {
+    console.error("[Admin Promotion API] Error evaluating user rank:", err);
+    return res.status(500).json({ error: "SERVER_ERROR", message: err.message || "Evaluation failed" });
+  }
+});
+promotionRouter.post("/ranks/admin/correct", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const admin = req.user;
+    const { userId, targetRank, reason } = req.body || {};
+    if (!userId || !targetRank || !reason || String(reason).trim().length < 5) {
+      return res.status(400).json({ error: "INVALID_INPUT", message: "userId, targetRank, and reason (min 5 chars) are required." });
+    }
+    const state = await adminManualRankCorrection(admin.id, admin.public_id, userId, targetRank, String(reason).trim());
+    return res.status(200).json({ success: true, state });
+  } catch (err) {
+    console.error("[Admin Promotion API] Error in rank correction:", err);
+    return res.status(err.statusCode || 500).json({ error: err.code || "SERVER_ERROR", message: err.message });
+  }
+});
 promotionRouter.get("/me", requireAuth, async (req, res) => {
   try {
     const userId = req.user.id;
@@ -12769,6 +13837,33 @@ withdrawalRouter.get("/me", requireAuth, async (req, res) => {
     });
   }
 });
+withdrawalRouter.get("/config", async (_req, res) => {
+  try {
+    const minAmount = await getMinWithdrawalAmount();
+    const db = await getDb();
+    const configRes = await db.query(
+      `SELECT config_value FROM system_economic_configs WHERE config_key = 'AUTO_WITHDRAWAL_ENABLED' LIMIT 1`
+    ).catch(() => ({ rows: [] }));
+    let autoEnabled = false;
+    if (configRes.rows.length > 0) {
+      const rawVal = configRes.rows[0].config_value;
+      try {
+        autoEnabled = typeof rawVal === "string" ? JSON.parse(rawVal) === true : Boolean(rawVal);
+      } catch {
+        autoEnabled = String(rawVal).toLowerCase() === "true";
+      }
+    }
+    return res.status(200).json({
+      success: true,
+      minWithdrawalAmount: minAmount,
+      autoWithdrawalEnabled: autoEnabled,
+      mode: autoEnabled ? "FULL_AUTOMATIC" : "MANUAL_APPROVAL"
+    });
+  } catch (err) {
+    console.error("[Withdrawal API] Error fetching config:", err);
+    return res.status(500).json({ error: "SERVER_ERROR", message: "Failed to retrieve withdrawal configuration" });
+  }
+});
 withdrawalRouter.get("/:publicId", requireAuth, async (req, res) => {
   try {
     const userId = req.user.id;
@@ -12906,33 +14001,6 @@ withdrawalRouter.get("/admin/state-timeline/:publicId", requireAdmin, async (req
     return res.status(500).json({ error: "SERVER_ERROR", message: "Failed to fetch withdrawal state timeline" });
   }
 });
-withdrawalRouter.get("/config", async (_req, res) => {
-  try {
-    const minAmount = await getMinWithdrawalAmount();
-    const db = await getDb();
-    const configRes = await db.query(
-      `SELECT config_value FROM system_economic_configs WHERE config_key = 'AUTO_WITHDRAWAL_ENABLED' LIMIT 1`
-    ).catch(() => ({ rows: [] }));
-    let autoEnabled = false;
-    if (configRes.rows.length > 0) {
-      const rawVal = configRes.rows[0].config_value;
-      try {
-        autoEnabled = typeof rawVal === "string" ? JSON.parse(rawVal) === true : Boolean(rawVal);
-      } catch {
-        autoEnabled = String(rawVal).toLowerCase() === "true";
-      }
-    }
-    return res.status(200).json({
-      success: true,
-      minWithdrawalAmount: minAmount,
-      autoWithdrawalEnabled: autoEnabled,
-      mode: autoEnabled ? "FULL_AUTOMATIC" : "MANUAL_APPROVAL"
-    });
-  } catch (err) {
-    console.error("[Withdrawal API] Error fetching config:", err);
-    return res.status(500).json({ error: "SERVER_ERROR", message: "Failed to retrieve withdrawal configuration" });
-  }
-});
 withdrawalRouter.get("/admin/mode", requireAdmin, async (req, res) => {
   try {
     const db = await getDb();
@@ -13052,10 +14120,10 @@ init_withdrawalService();
 // src/server/services/reconciliationService.ts
 init_db();
 init_idGenerator();
-import { v4 as uuidv421 } from "uuid";
+import { v4 as uuidv422 } from "uuid";
 async function runFinancialReconciliation(options) {
   const db = await getDb();
-  const runId = uuidv421();
+  const runId = uuidv422();
   const publicRunId = generateReconciliationPublicId();
   const startedAt = /* @__PURE__ */ new Date();
   await db.query(
@@ -13585,7 +14653,7 @@ async function runFinancialReconciliation(options) {
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'DETECTED', $9, $10, CURRENT_TIMESTAMP)
         `,
         [
-          uuidv421(),
+          uuidv422(),
           runId,
           iss.issueType,
           iss.sourceType,
@@ -13661,7 +14729,7 @@ async function runFinancialReconciliation(options) {
         VALUES ($1, $2, $3, 'FINANCIAL_RECONCILIATION_RUN', 'RECONCILIATION_RUN', $4, $5, CURRENT_TIMESTAMP)
         `,
         [
-          uuidv421(),
+          uuidv422(),
           options?.adminUserId || null,
           options?.adminPublicId || "SYSTEM_AUDITOR",
           publicRunId,
@@ -14899,7 +15967,7 @@ async function findUserByDepositAddress(_address, _chainId) {
 init_db();
 init_bscConfig();
 init_idGenerator();
-import { v4 as uuidv422 } from "uuid";
+import { v4 as uuidv423 } from "uuid";
 init_walletLedgerService();
 init_notificationService();
 init_bscRpcProvider();
@@ -14986,7 +16054,7 @@ async function processBlockchainDepositEvent(params) {
     let depositRow;
     const now = /* @__PURE__ */ new Date();
     if (existing.rows.length === 0) {
-      const id = uuidv422();
+      const id = uuidv423();
       const publicDepositId = generateDepositPublicId();
       const initialStatus = isMatured ? "CONFIRMED" : confirmations > 0 ? "CONFIRMING" : "DETECTED";
       const confirmedAt = isMatured ? now : null;
@@ -15239,7 +16307,7 @@ init_db();
 init_idGenerator();
 init_notificationService();
 import { ethers as ethers9 } from "ethers";
-import { v4 as uuidv423 } from "uuid";
+import { v4 as uuidv424 } from "uuid";
 var DepositTransactionError = class extends Error {
   constructor(code, statusCode, message) {
     super(message);
@@ -15578,7 +16646,7 @@ depositRouter.post("/submit-txhash", requireAuth, depositLimiter, async (req, re
     let actualPublicDepositId = "";
     try {
       await db.transaction(async (trx) => {
-        const depositId = uuidv423();
+        const depositId = uuidv424();
         const publicDepositId = generateDepositPublicId();
         const insertRes = await trx.query(
           `
@@ -15615,7 +16683,7 @@ depositRouter.post("/submit-txhash", requireAuth, depositLimiter, async (req, re
         if (actualUserId !== userId) {
           throw new DepositTransactionError("DUPLICATE_TX_USER_MISMATCH", 409, "Transaction already linked to another user account.");
         }
-        const ledgerId = uuidv423();
+        const ledgerId = uuidv424();
         const publicTxnId = generateLedgerTransactionPublicId();
         const ledgerRes = await trx.query(
           `
@@ -15702,6 +16770,28 @@ depositRouter.post("/submit-txhash", requireAuth, depositLimiter, async (req, re
 // src/server/routes/economicRoutes.ts
 import { Router as Router16 } from "express";
 init_adminService();
+var publicEconomicRouter = Router16();
+publicEconomicRouter.get("/token-price", async (_req, res) => {
+  try {
+    const coinConfig = await getInternalCoinPrice();
+    res.setHeader("Cache-Control", "public, max-age=5");
+    return res.status(200).json({
+      success: true,
+      priceUsd: coinConfig.priceUsdt ?? 0.1,
+      coinSymbol: coinConfig.coinSymbol || "PHIVO",
+      source: "INTERNAL_ECONOMIC_ORACLE",
+      updatedAt: coinConfig.effectiveFrom || (/* @__PURE__ */ new Date()).toISOString(),
+      swapEnabled: coinConfig.swapEnabled,
+      configured: coinConfig.configured
+    });
+  } catch (err) {
+    console.error("[Economic API] Error fetching token price:", err);
+    return res.status(500).json({
+      error: "SERVER_ERROR",
+      message: "Failed to retrieve token price"
+    });
+  }
+});
 var economicRouter = Router16();
 economicRouter.use(requireAdmin);
 economicRouter.get("/configs", async (req, res) => {
@@ -15821,7 +16911,7 @@ import { Router as Router17 } from "express";
 // src/server/services/coinSwapService.ts
 init_db();
 init_idGenerator();
-import { v4 as uuidv424 } from "uuid";
+import { v4 as uuidv425 } from "uuid";
 init_walletLedgerService();
 init_notificationService();
 var userSwapLocks = /* @__PURE__ */ new Map();
@@ -15979,7 +17069,7 @@ async function executeCoinToUsdtSwap(params) {
     if (usdtAmount <= 0) {
       throw new Error("INVALID_SWAP_CALCULATION: Resulting USDT amount must be greater than zero.");
     }
-    const id = uuidv424();
+    const id = uuidv425();
     const publicSwapId = generateSwapPublicId();
     const now = /* @__PURE__ */ new Date();
     const insertRes = await db.query(
@@ -16161,7 +17251,7 @@ async function executeUsdtToCoinSwap(params) {
     if (coinAmount <= 0) {
       throw new Error("INVALID_SWAP_CALCULATION: Resulting coin amount must be greater than zero.");
     }
-    const id = uuidv424();
+    const id = uuidv425();
     const publicSwapId = generateSwapPublicId();
     const now = /* @__PURE__ */ new Date();
     await postLedgerDebit2({
@@ -16851,6 +17941,7 @@ async function startServer() {
   app.use("/api/swap", swapRouter);
   app.use("/api/notifications", notificationRouter);
   app.use("/api/admin/economics", economicRouter);
+  app.use("/api/economic", publicEconomicRouter);
   app.use("/api/webhooks/email", emailWebhookRouter);
   app.use("/api/diagnostics", diagnosticRouter);
   app.use("/api/admin", adminRouter);
