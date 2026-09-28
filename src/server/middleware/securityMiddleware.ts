@@ -10,11 +10,18 @@ import { logSecurityEvent } from '../utils/securityLogger';
  */
 export function securityHeadersMiddleware(req: Request, res: Response, next: NextFunction): void {
   // Content Security Policy
-  // Preserves Google AI Studio iframe embedding while protecting against malicious framing
-  res.setHeader(
-    'Content-Security-Policy',
-    "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://www.gstatic.com; style-src 'self' 'unsafe-inline'; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: https: blob:; connect-src 'self' https: wss:; worker-src 'self' blob: https://www.gstatic.com; manifest-src 'self'; frame-ancestors 'self' https://*.google.com https://*.run.app https://*.aistudio.google.com;"
-  );
+  // Preserves Google AI Studio iframe embedding in both production and development environments
+  if (process.env.NODE_ENV === 'production') {
+    res.setHeader(
+      'Content-Security-Policy',
+      "default-src 'self' https: data: blob: 'unsafe-inline' 'unsafe-eval'; frame-ancestors 'self' https://*.google.com https://*.run.app https://*.aistudio.google.com https://*.googleusercontent.com;"
+    );
+  } else {
+    res.setHeader(
+      'Content-Security-Policy',
+      "default-src 'self' http: https: data: blob: 'unsafe-inline' 'unsafe-eval' ws: wss:; frame-ancestors *;"
+    );
+  }
 
   // Prevent MIME type sniffing
   res.setHeader('X-Content-Type-Options', 'nosniff');

@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { generateLedgerTransactionPublicId } from '../utils/idGenerator';
 import { getNodeBasePrice, getBnbPriceUsd } from './economicService';
 import { createNodeReservation, settleNodeOrder, getUserOrders } from './nodeOrderService';
+import { getWalletSummary } from './walletLedgerService';
 
 export interface AssetBalanceInfo {
   available: number;
@@ -50,27 +51,9 @@ export async function validateUserNodePurchaseBalances(
   const bnbRequired = bnbPriceUsd && bnbPriceUsd > 0 ? Number((nodePriceUsd / bnbPriceUsd).toFixed(4)) : 0;
   const usdtRequired = nodePriceUsd;
 
-  // 2. Compute USDT Credited Deposits vs Node Purchase Debits
-  const usdtDepositsRes = await db.query<{ total: string | number }>(
-    `
-    SELECT COALESCE(SUM(amount), 0) AS total
-    FROM blockchain_deposits
-    WHERE user_id = $1 AND status = 'CREDITED' AND (asset = 'USDT' OR asset IS NULL)
-    `,
-    [userId]
-  );
-  const totalUsdtDeposits = Number(usdtDepositsRes.rows[0]?.total || 0);
-
-  const usdtDebitsRes = await db.query<{ total: string | number }>(
-    `
-    SELECT COALESCE(SUM(amount), 0) AS total
-    FROM financial_ledger_entries
-    WHERE user_id = $1 AND entry_type = 'DEBIT' AND source_type = 'NODE_PURCHASE' AND (currency = 'USDT' OR currency = 'USD')
-    `,
-    [userId]
-  );
-  const totalUsdtDebits = Number(usdtDebitsRes.rows[0]?.total || 0);
-  const availableUsdt = Math.max(0, totalUsdtDeposits - totalUsdtDebits);
+  // 2. Compute unified USDT Available Balance (Deposits + Earnings - Debits)
+  const walletSummary = await getWalletSummary(userId);
+  const availableUsdt = walletSummary.availableBalance;
 
   // 3. Compute BNB Credited Deposits vs Node Purchase Debits
   const bnbDepositsRes = await db.query<{ total: string | number }>(

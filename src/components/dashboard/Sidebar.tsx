@@ -2,6 +2,7 @@ import React from 'react';
 import {
   LayoutDashboard,
   Server,
+  Activity,
   Network,
   Coins,
   ArrowLeftRight,
@@ -24,6 +25,7 @@ import { PhivonexSymbol } from '../brand/PhivonexSymbol';
 export type DashboardTab =
   | 'overview'
   | 'nodes'
+  | 'node-health'
   | 'network'
   | 'referrals'
   | 'wallet'
@@ -56,6 +58,7 @@ interface NavItem {
 const NAV_ITEMS: NavItem[] = [
   { id: 'overview', label: 'Overview', icon: LayoutDashboard },
   { id: 'nodes', label: 'My Nodes', icon: Server },
+  { id: 'node-health', label: 'Node Health', icon: Activity },
   { id: 'network', label: 'Network', icon: GitFork },
   { id: 'referrals', label: 'Direct Referrals', icon: Users },
   { id: 'wallet', label: 'Wallet & Ledger', icon: Wallet },

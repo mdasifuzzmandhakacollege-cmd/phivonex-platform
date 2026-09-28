@@ -36,6 +36,8 @@ export interface WalletBreakdown {
   matching: number;
   promotion: number;
   nodeReward?: number;
+  deposit?: number;
+  swap?: number;
 }
 
 export interface WalletSummary {
@@ -72,10 +74,11 @@ export interface WalletTransactionsResponse {
   };
 }
 
-export type TransactionFilterType = 'all' | 'node_activation' | 'referral_commission' | 'matching_bonus' | 'promotion_bonus';
+export type TransactionFilterType = 'all' | 'deposit' | 'node_activation' | 'referral_commission' | 'matching_bonus' | 'promotion_bonus' | 'swap' | 'withdrawal';
 
 const FILTER_OPTIONS: { id: TransactionFilterType; label: string; icon: React.FC<{ className?: string }> }[] = [
   { id: 'all', label: 'All Types', icon: Layers },
+  { id: 'deposit', label: 'Deposits', icon: ArrowDownLeft },
   { id: 'node_activation', label: 'Node Activations', icon: Coins },
   { id: 'referral_commission', label: 'Referral Commission', icon: Users },
   { id: 'matching_bonus', label: 'Matching Bonus', icon: GitFork },
@@ -380,7 +383,26 @@ export const WalletSection: React.FC = () => {
           <span className="text-[11px] font-mono text-[#98A2B3]">Real-time Reconciliation</span>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+          {/* Blockchain Deposits */}
+          <div className="p-4 rounded-xl bg-[#0B1528] border border-white/[0.06] hover:border-[#32D583]/30 transition-all space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-xs text-[#98A2B3] flex items-center gap-1.5">
+                <ArrowDownLeft className="w-3.5 h-3.5 text-[#32D583]" />
+                <span>Deposits</span>
+              </span>
+              <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-[#32D583]/10 text-[#32D583]">
+                BSC BEP-20
+              </span>
+            </div>
+            <div className="text-xl font-mono font-bold text-white">
+              {loading ? '...' : formatUsd(summary?.breakdown.deposit || 0)}
+            </div>
+            <p className="text-[10px] text-[#98A2B3]">
+              Confirmed on-chain BNB/USDT deposit funding
+            </p>
+          </div>
+
           {/* Referral Commission */}
           <div className="p-4 rounded-xl bg-[#0B1528] border border-white/[0.06] hover:border-[#00CFFF]/30 transition-all space-y-2">
             <div className="flex items-center justify-between">

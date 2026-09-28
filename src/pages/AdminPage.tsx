@@ -151,7 +151,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onNavigate, currentPath = 
         setAutoWithdrawalEnabled(data.autoWithdrawalEnabled);
         setAuditFeedback({
           type: 'success',
-          message: data.message || `উইথড্রোল মোড সফলভাবে পরিবর্তিত হয়েছে: ${data.mode}`,
+          message: data.message || `Withdrawal payout mode changed successfully: ${data.mode}`,
         });
         fetchAdminData();
       } else {
@@ -910,23 +910,23 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onNavigate, currentPath = 
                   </div>
                   <div>
                     <div className="flex flex-wrap items-center gap-2">
-                      <h3 className="text-base font-bold text-white">Withdrawal Payout Control (উইথড্রোল মোড ব্যবস্থাপনা)</h3>
+                      <h3 className="text-base font-bold text-white">Withdrawal Payout Control</h3>
                       <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold uppercase tracking-wider border ${
                         autoWithdrawalEnabled
                           ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
                           : 'bg-amber-500/20 text-amber-300 border-amber-500/40'
                       }`}>
-                        {autoWithdrawalEnabled ? '🟢 FULL AUTOMATIC (২৪/৭ অটোমেটিক চালু)' : '⏸️ MANUAL 1-CLICK APPROVAL (ম্যানুয়াল অনুমোদন)'}
+                        {autoWithdrawalEnabled ? '🟢 FULL AUTOMATIC (24/7 ACTIVE)' : '⏸️ MANUAL APPROVAL MODE'}
                       </span>
                     </div>
                     <p className="text-xs text-[#98A2B3] mt-1 max-w-2xl leading-relaxed">
                       {autoWithdrawalEnabled ? (
                         <span>
-                          <strong className="text-emerald-400">ফুল অটোমেটিক মোড চালু:</strong> পাবলিক উইথড্র দেওয়ার সাথে সাথে সিস্টেম স্বয়ংক্রিয়ভাবে ব্লকচেইনে কল করে ব্যালেন্স কেটে সরাসরি ইউজারের ওয়ালেটে মাল পৌছে দিবে (ঘুমিয়ে থাকলেও অটো টাকা চলে যাবে)।
+                          <strong className="text-emerald-400">Full Automatic Mode Active:</strong> Public withdrawal requests trigger backend smart contract calls directly to the user's wallet without delay.
                         </span>
                       ) : (
                         <span>
-                          <strong className="text-amber-400">ম্যানুয়াল মোড চালু:</strong> পাবলিক উইথড্র দিলে রিকোয়েস্ট পেন্ডিং থাকবে। এডমিন প্যানেল থেকে ১-ক্লিকে "Approve" দিলেই সাথে সাথে অটো তার ওয়ালেটে মাল চলে যাবে।
+                          <strong className="text-amber-400">Manual Approval Mode Active:</strong> Public withdrawal requests enter the queue for administrator 1-click review and payout execution.
                         </span>
                       )}
                     </p>
@@ -938,7 +938,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onNavigate, currentPath = 
                     onClick={() => setActiveTab('withdrawals')}
                     className="px-3.5 py-2.5 rounded-xl bg-white/[0.05] hover:bg-white/[0.1] text-white/90 hover:text-white border border-white/[0.08] text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer whitespace-nowrap"
                   >
-                    <span>উইথড্রোল কিউ দেখুন ({summary?.pendingWithdrawalsCount || 0})</span>
+                    <span>View Withdrawal Queue ({summary?.pendingWithdrawalsCount || 0})</span>
                     <ArrowUpRight className="w-4 h-4 text-amber-400" />
                   </button>
 
@@ -956,7 +956,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onNavigate, currentPath = 
                     ) : (
                       <Power className="w-4 h-4" />
                     )}
-                    <span>{autoWithdrawalEnabled ? 'সুইচ করুন: ম্যানুয়াল অনুমোদন' : 'সুইচ করুন: ফুল অটোমেটিক মোড'}</span>
+                    <span>{autoWithdrawalEnabled ? 'Switch to Manual Approval' : 'Switch to Full Automatic'}</span>
                   </button>
                 </div>
               </div>

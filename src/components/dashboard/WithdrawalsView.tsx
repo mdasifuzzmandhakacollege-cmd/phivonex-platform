@@ -76,7 +76,7 @@ export const WithdrawalsView: React.FC<WithdrawalsViewProps> = ({ user, onNaviga
     try {
       setLoading(true);
       const [walletRes, historyRes] = await Promise.all([
-        fetch('/api/wallet/summary').catch(() => null),
+        fetch('/api/wallet/me', { credentials: 'include' }).catch(() => null),
         fetch('/api/withdrawals/me?limit=50').catch(() => null),
       ]);
 

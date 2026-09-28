@@ -104,7 +104,7 @@ export const NotificationsView: React.FC<NotificationsViewProps> = ({ user, onNa
         setIsSubscribed(true);
         setPushFeedback({
           type: 'success',
-          message: '🎉 Web Push সফলভাবে সক্রিয় হয়েছে! আপনি এখন ব্রাউজার বা ব্যাকগ্রাউন্ডে রিয়েল-টাইমে নোটিফিকেশন পাবেন।',
+          message: '🎉 Web Push Notifications successfully activated! You will now receive real-time background push alerts for deposits, node rewards, commissions, and withdrawals.',
         });
       } else {
         if (typeof window !== 'undefined' && 'Notification' in window) {
@@ -128,7 +128,7 @@ export const NotificationsView: React.FC<NotificationsViewProps> = ({ user, onNa
       if (res.success) {
         setPushFeedback({
           type: 'success',
-          message: '🔔 টেস্ট পুশ নোটিফিকেশন পাঠানো হয়েছে! আপনার স্ক্রিনে নোটিফিকেশন পপ-আপ দেখুন।',
+          message: '🔔 Test Web Push notification dispatched! Check your device screen for the popup alert.',
         });
       } else {
         setPushFeedback({
@@ -362,7 +362,7 @@ export const NotificationsView: React.FC<NotificationsViewProps> = ({ user, onNa
                 <BellRing className="w-5 h-5" />
               </div>
               <h3 className="text-base font-bold text-white flex items-center gap-2">
-                <span>Web Push Messaging (ওয়েব পুশ নোটিফিকেশন)</span>
+                <span>Real-Time Web Push Messaging</span>
               </h3>
               <span className={`px-2.5 py-0.5 rounded-full text-[11px] font-mono font-semibold flex items-center gap-1.5 border ${
                 pushPermission === 'granted'
@@ -375,7 +375,7 @@ export const NotificationsView: React.FC<NotificationsViewProps> = ({ user, onNa
                   pushPermission === 'granted' ? 'bg-emerald-400 animate-pulse' : pushPermission === 'denied' ? 'bg-rose-400' : 'bg-[#00CFFF]'
                 }`} />
                 {pushPermission === 'granted'
-                  ? 'Active & Subscribed (সক্রিয়)'
+                  ? 'Active & Subscribed'
                   : pushPermission === 'denied'
                   ? 'Blocked in Browser'
                   : 'Ready to Activate'}
@@ -386,7 +386,7 @@ export const NotificationsView: React.FC<NotificationsViewProps> = ({ user, onNa
             </div>
 
             <p className="text-xs text-[#98A2B3] leading-relaxed">
-              Firebase Cloud Messaging (FCM) ব্যবহারের মাধ্যমে ব্রাউজার বন্ধ থাকলেও ক্রিপ্টো ডিপোজিট, নোড থেকে ডেইলি কয়েন মাইনিং, রেফারেল কমিশন এবং উইথড্রোল ডিসবার্সমেন্টের ইনস্ট্যান্ট পুশ অ্যালার্ট সরাসরি আপনার ডিভাইস স্ক্রিনে পৌঁছে যাবে।
+              Powered by Firebase Cloud Messaging (FCM). Receive instant browser and device push alerts for crypto deposits, daily node coin mining, referral rewards, and withdrawal disbursements—even when your browser tab is closed.
             </p>
           </div>
 
@@ -406,7 +406,7 @@ export const NotificationsView: React.FC<NotificationsViewProps> = ({ user, onNa
                 ) : (
                   <>
                     <Radio className="w-4 h-4" />
-                    <span>Enable Web Push (চালু করুন)</span>
+                    <span>Enable Web Push Alerts</span>
                   </>
                 )}
               </button>
@@ -425,7 +425,7 @@ export const NotificationsView: React.FC<NotificationsViewProps> = ({ user, onNa
                   ) : (
                     <>
                       <Send className="w-4 h-4 text-emerald-400" />
-                      <span>Send Test Push (টেস্ট পাঠান)</span>
+                      <span>Send Test Push Alert</span>
                     </>
                   )}
                 </button>

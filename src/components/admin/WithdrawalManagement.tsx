@@ -377,23 +377,23 @@ export const WithdrawalManagement: React.FC<WithdrawalManagementProps> = ({
           </div>
           <div>
             <div className="flex flex-wrap items-center gap-2">
-              <h3 className="text-base font-bold text-white">Automated Blockchain Payout Engine (উইথড্রোল কন্ট্রোল ইঞ্জিন)</h3>
+              <h3 className="text-base font-bold text-white">Automated Blockchain Payout Engine</h3>
               <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold uppercase tracking-wider border ${
                 autoWithdrawalEnabled
                   ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
                   : 'bg-amber-500/20 text-amber-300 border-amber-500/40'
               }`}>
-                {autoWithdrawalEnabled ? '🟢 FULL AUTOMATIC (২৪/৭ অটোমেটিক চালু)' : '⏸️ MANUAL APPROVAL MODE (ম্যানুয়াল অনুমোদন)'}
+                {autoWithdrawalEnabled ? '🟢 FULL AUTOMATIC (24/7 ACTIVE)' : '⏸️ MANUAL APPROVAL MODE'}
               </span>
             </div>
             <p className="text-xs text-[#98A2B3] mt-1 max-w-2xl leading-relaxed">
               {autoWithdrawalEnabled ? (
                 <span>
-                  <strong className="text-emerald-400">ফুল অটোমেটিক সক্রিয়:</strong> পাবলিক উইথড্র দেওয়ার সাথে সাথে ব্যাকএন্ড স্বয়ংক্রিয়ভাবে ব্লকচেইনে কল করে সরাসরি ইউজারের ওয়ালেটে মাল পাঠিয়ে দেবে (এডমিন ঘুমিয়ে থাকলেও অটো টাকা চলে যাবে)।
+                  <strong className="text-emerald-400">Full Automatic Mode Active:</strong> Public withdrawal requests trigger backend smart contract calls directly to the user's wallet without delay.
                 </span>
               ) : (
                 <span>
-                  <strong className="text-amber-400">ম্যানুয়াল অনুমোদন সক্রিয়:</strong> পাবলিক উইথড্র দিলে রিকোয়েস্ট নিচে পেন্ডিং লিস্টে জমা হবে। এডমিন ১-ক্লিকে "Approve & Payout" দিলেই সাথে সাথে অটো তার ওয়ালেটে মাল চলে যাবে।
+                  <strong className="text-amber-400">Manual Approval Mode Active:</strong> Public withdrawal requests enter the queue below for administrator 1-click review and payout execution.
                 </span>
               )}
             </p>
@@ -415,7 +415,7 @@ export const WithdrawalManagement: React.FC<WithdrawalManagementProps> = ({
             ) : (
               <Power className="w-4 h-4" />
             )}
-            <span>{autoWithdrawalEnabled ? 'সুইচ করুন: ম্যানুয়াল অনুমোদন' : 'সুইচ করুন: ফুল অটোমেটিক মোড'}</span>
+            <span>{autoWithdrawalEnabled ? 'Switch to Manual Approval' : 'Switch to Full Automatic'}</span>
           </button>
         </div>
       </div>
@@ -768,19 +768,19 @@ export const WithdrawalManagement: React.FC<WithdrawalManagementProps> = ({
                               onClick={() => handleInstantPayout(w.publicWithdrawalId)}
                               disabled={instantPayoutLoadingId === w.publicWithdrawalId}
                               className="px-3.5 py-1.5 rounded-xl bg-gradient-to-r from-emerald-500/30 via-teal-500/30 to-emerald-500/30 hover:from-emerald-500/40 hover:to-teal-500/40 text-emerald-300 border border-emerald-500/50 text-[11px] font-extrabold transition-all shadow-md active:scale-95 flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
-                              title="১-ক্লিকে এপ্রুভ ও ইউজারের ব্লকচেইন ওয়ালেটে মাল পৌছে দিন"
+                              title="1-Click Approve and Disburse to User Wallet"
                             >
                               {instantPayoutLoadingId === w.publicWithdrawalId ? (
                                 <Loader2 className="w-3.5 h-3.5 animate-spin text-emerald-400" />
                               ) : (
                                 <Zap className="w-3.5 h-3.5 text-amber-400 fill-amber-400" />
                               )}
-                              <span>⚡ Approve &amp; Send (১-ক্লিক ট্রান্সফার)</span>
+                              <span>⚡ Approve &amp; Send</span>
                             </button>
                             <button
                               onClick={() => setSelectedTarget({ item: w, action: 'REJECT' })}
                               className="px-2.5 py-1.5 rounded-xl bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/30 text-[11px] font-bold transition-all shadow-sm active:scale-95"
-                              title="উইথড্রোল বাতিল করে ইউজারের ব্যালেন্সে ফেরত দিন"
+                              title="Reject withdrawal and refund balance"
                             >
                               Reject &amp; Refund
                             </button>

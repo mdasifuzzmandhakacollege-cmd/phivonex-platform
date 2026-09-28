@@ -14,7 +14,8 @@ import {
   Clock,
   ArrowRight,
   Volume2,
-  VolumeX
+  VolumeX,
+  Wallet
 } from 'lucide-react';
 import { PhivonexLogo } from '../brand/PhivonexLogo';
 import { PhivonexSymbol } from '../brand/PhivonexSymbol';
@@ -51,6 +52,31 @@ export const Topbar: React.FC<TopbarProps> = ({
 }) => {
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
   const [isNotifOpen, setIsNotifOpen] = useState(false);
+  const [availableBalance, setAvailableBalance] = useState<number | null>(null);
+
+  // Poll available wallet balance every 10 seconds for real-time header display
+  useEffect(() => {
+    let isMounted = true;
+    const fetchBalance = async () => {
+      try {
+        const res = await fetch('/api/wallet/me', { credentials: 'include' });
+        if (res.ok) {
+          const data = await res.json();
+          if (isMounted) {
+            setAvailableBalance(typeof data.availableBalance === 'number' ? data.availableBalance : 0);
+          }
+        }
+      } catch {
+        // silent fallback
+      }
+    };
+    fetchBalance();
+    const interval = setInterval(fetchBalance, 10000);
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+    };
+  }, []);
   
   const {
     unreadCount,
@@ -187,8 +213,24 @@ export const Topbar: React.FC<TopbarProps> = ({
         </div>
       </div>
 
-      {/* Right Area: Public Portal Link + PWA Install + Network Status + User Menu */}
-      <div className="flex items-center gap-2 sm:gap-4">
+      {/* Right Area: Available Balance + Public Portal Link + PWA Install + Network Status + User Menu */}
+      <div className="flex items-center gap-2 sm:gap-3">
+        {/* Available Balance Header Badge */}
+        <button
+          onClick={() => onSelectTab('wallet')}
+          className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-[#00CFFF]/10 hover:bg-[#00CFFF]/20 border border-[#00CFFF]/30 transition-all cursor-pointer min-h-[36px] shadow-sm hover:shadow-[#00CFFF]/20"
+          title="Click to view Wallet & Ledger"
+        >
+          <Wallet className="w-3.5 h-3.5 text-[#00CFFF]" />
+          <div className="flex items-center gap-1 font-mono">
+            <span className="text-[10px] uppercase text-[#98A2B3] hidden sm:inline">Available:</span>
+            <span className="text-xs font-bold text-white">
+              ${availableBalance !== null ? availableBalance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '0.00'}
+            </span>
+            <span className="text-[10px] text-[#00CFFF] font-semibold">USDT</span>
+          </div>
+        </button>
+
         <PWAInstallHeaderButton />
 
         {/* Public Portal link */}

@@ -19,16 +19,22 @@ export const walletRouter = Router();
  * - Server-authoritative calculations only.
  * - No withdrawal endpoints implemented.
  */
-walletRouter.get('/me', requireAuth, async (req: AuthRequest, res: Response) => {
+const handleGetWalletSummary = async (req: AuthRequest, res: Response) => {
   try {
     const userId = req.user!.id;
     const summary = await getWalletSummary(userId);
     return res.status(200).json(summary);
   } catch (err: any) {
-    console.error('[Wallet API] Error in GET /api/wallet/me:', err);
+    console.error('[Wallet API] Error in GET wallet summary:', err);
     return res.status(500).json({ error: 'Failed to retrieve wallet summary' });
   }
-});
+};
+
+/**
+ * GET /api/wallet/me and GET /api/wallet/summary
+ */
+walletRouter.get('/me', requireAuth, handleGetWalletSummary);
+walletRouter.get('/summary', requireAuth, handleGetWalletSummary);
 
 /**
  * GET /api/wallet/transactions

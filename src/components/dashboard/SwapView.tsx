@@ -90,7 +90,7 @@ export const SwapView: React.FC<SwapViewProps> = ({ user, onNavigateTab }) => {
         fetch('/api/swap/balance', { credentials: 'include' }),
         fetch('/api/swap/quote?amount=1'),
         fetch('/api/swap/history?limit=30', { credentials: 'include' }),
-        fetch('/api/wallets/summary', { credentials: 'include' }),
+        fetch('/api/wallet/me', { credentials: 'include' }),
       ]);
 
       if (balRes.ok) {

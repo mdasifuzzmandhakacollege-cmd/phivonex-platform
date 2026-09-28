@@ -93,6 +93,7 @@ async function startServer() {
   app.use('/api/matching', matchingRouter);
   app.use('/api/promotions', promotionRouter);
   app.use('/api/wallet', walletRouter);
+  app.use('/api/wallets', walletRouter);
   app.use('/api/rewards', rewardRouter);
   app.use('/api/public/network', publicNetworkRouter);
   app.use('/api/withdrawals', withdrawalRouter);

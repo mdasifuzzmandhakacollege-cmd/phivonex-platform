@@ -569,6 +569,41 @@ export async function syncUserLedger(userId: string): Promise<void> {
       });
     }
   }
+
+  // 5. Reconcile Confirmed/Credited Blockchain Deposits into Financial Ledger
+  const depRes = await db.query<{
+    id: string;
+    public_deposit_id: string;
+    amount: string | number;
+    asset: string;
+    tx_hash: string;
+    status: string;
+    credited_at: Date;
+    confirmed_at: Date;
+    created_at: Date;
+  }>(
+    `
+    SELECT id, public_deposit_id, amount, asset, tx_hash, status, credited_at, confirmed_at, created_at
+    FROM blockchain_deposits
+    WHERE user_id = $1 AND status IN ('CREDITED', 'CONFIRMED', 'SWEPT')
+    `,
+    [userId]
+  );
+
+  for (const d of depRes.rows) {
+    const assetName = (d.asset || 'USDT').toUpperCase();
+    const effectiveDate = d.credited_at || d.confirmed_at || d.created_at || new Date();
+    await postLedgerCredit({
+      userId,
+      sourceType: 'BLOCKCHAIN_DEPOSIT',
+      sourceId: d.id,
+      sourceRef: d.public_deposit_id,
+      amount: Number(d.amount),
+      currency: assetName === 'BNB' ? 'BNB' : 'USDT',
+      description: `${assetName} Blockchain Deposit (${d.tx_hash ? d.tx_hash.slice(0, 10) : 'Verified'})`,
+      createdAt: new Date(effectiveDate),
+    });
+  }
 }
 
 /**
@@ -577,10 +612,10 @@ export async function syncUserLedger(userId: string): Promise<void> {
  * - totalReversed
  * - ledgerBalance
  * - transactionCount
- * - breakdown by source type (referral, matching, promotion, nodeReward)
+ * - breakdown by source type (referral, matching, promotion, nodeReward, deposit, swap)
  */
 export async function getWalletSummary(userId: string): Promise<WalletSummaryResponse> {
-  // Sync unposted earnings first
+  // Sync unposted earnings and deposits first
   await syncUserLedger(userId);
 
   const db = await getDb();
@@ -617,6 +652,7 @@ export async function getWalletSummary(userId: string): Promise<WalletSummaryRes
     promotion: 0,
     nodeReward: 0,
     swap: 0,
+    deposit: 0,
   };
 
   const reversals = {
@@ -625,6 +661,7 @@ export async function getWalletSummary(userId: string): Promise<WalletSummaryRes
     promotion: 0,
     nodeReward: 0,
     swap: 0,
+    deposit: 0,
   };
 
   for (const row of aggRes.rows) {
@@ -639,6 +676,7 @@ export async function getWalletSummary(userId: string): Promise<WalletSummaryRes
       else if (row.source_type === 'PROMOTION_BONUS') grossCredits.promotion += amt;
       else if (row.source_type === 'NODE_REWARD') grossCredits.nodeReward += amt;
       else if (row.source_type === 'COIN_SWAP') grossCredits.swap += amt;
+      else if (row.source_type === 'BLOCKCHAIN_DEPOSIT') grossCredits.deposit += amt;
     } else if (row.entry_type === 'REVERSAL') {
       if (row.source_type === 'WITHDRAWAL') {
         withdrawalReversals += amt;
@@ -649,19 +687,21 @@ export async function getWalletSummary(userId: string): Promise<WalletSummaryRes
         else if (row.source_type === 'PROMOTION_BONUS') reversals.promotion += amt;
         else if (row.source_type === 'NODE_REWARD') reversals.nodeReward += amt;
         else if (row.source_type === 'COIN_SWAP') reversals.swap += amt;
+        else if (row.source_type === 'BLOCKCHAIN_DEPOSIT') reversals.deposit += amt;
       }
     } else if (row.entry_type === 'DEBIT') {
       totalDebited += amt;
     }
   }
 
-  // Net breakdown per earning channel
+  // Net breakdown per channel
   const breakdown = {
     referral: Math.max(0, grossCredits.referral - reversals.referral),
     matching: Math.max(0, grossCredits.matching - reversals.matching),
     promotion: Math.max(0, grossCredits.promotion - reversals.promotion),
     nodeReward: Math.max(0, grossCredits.nodeReward - reversals.nodeReward),
     swap: Math.max(0, grossCredits.swap - reversals.swap),
+    deposit: Math.max(0, grossCredits.deposit - reversals.deposit),
   };
 
   const netEarned = Math.max(0, totalEarned - earningReversals);

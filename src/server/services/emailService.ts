@@ -576,21 +576,39 @@ export async function sendVerificationCodeEmail(toEmail: string, code: string): 
   const provider = getEmailProvider();
   const subject = 'Verify your PHIVONEX account';
   const html = `
-    <div style="font-family: 'Plus Jakarta Sans', 'Segoe UI', Helvetica, Arial, sans-serif; background-color: #05070C; color: #F7FAFC; padding: 40px 20px; text-align: center; border-radius: 12px; max-width: 600px; margin: 0 auto; border: 1px solid rgba(0, 207, 255, 0.15);">
-      <div style="margin-bottom: 24px;">
-        <span style="font-size: 24px; font-weight: 800; letter-spacing: 2px; color: #ffffff; font-family: monospace;">PHIVONEX</span>
-      </div>
-      <h2 style="font-size: 20px; font-weight: 700; color: #ffffff; margin-bottom: 12px;">Verify Your Email Address</h2>
-      <p style="font-size: 14px; color: #98A2B3; max-width: 480px; margin: 0 auto 30px auto; line-height: 1.6;">
-        Welcome to PHIVONEX. Use the 6-digit verification code below to complete your secure account registration. This code will expire in 10 minutes.
-      </p>
-      <div style="background: rgba(0, 207, 255, 0.08); border: 1px solid rgba(0, 207, 255, 0.2); border-radius: 8px; padding: 18px 30px; display: inline-block; font-size: 32px; font-weight: 800; letter-spacing: 6px; color: #00CFFF; font-family: monospace; margin-bottom: 30px; box-shadow: 0 0 20px rgba(0, 207, 255, 0.1);">
-        ${code}
-      </div>
-      <div style="border-top: 1px solid rgba(255,255,255,0.06); padding-top: 24px; max-width: 480px; margin: 0 auto; text-align: left; font-size: 11px; color: #586575; line-height: 1.5;">
-        <p style="margin-bottom: 8px;"><strong>Security Note:</strong> Never share this code with anyone. PHIVONEX administrators will never ask for your verification code.</p>
-        <p>If you did not request this email, please ignore it. Your email address remains safe.</p>
-      </div>
+    <div style="background-color: #05070c; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #f8fafc; padding: 40px 15px; margin: 0; width: 100%;">
+      <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width: 620px; margin: 0 auto; background-color: #0b1329; border: 1px solid #1e293b; border-radius: 16px; overflow: hidden; box-shadow: 0 20px 50px rgba(0, 207, 255, 0.08);">
+        <tr>
+          <td style="background: linear-gradient(135deg, #0f172a 0%, #070d1e 100%); padding: 32px 30px; border-bottom: 1px solid rgba(0, 207, 255, 0.2); text-align: center;">
+            <div style="font-size: 26px; font-weight: 900; letter-spacing: 4px; color: #ffffff; font-family: monospace;">PHIVONEX</div>
+            <div style="font-size: 10px; font-weight: 700; letter-spacing: 2px; color: #00CFFF; margin-top: 6px; text-transform: uppercase;">DECENTRALIZED AUTONOMOUS NODE INFRASTRUCTURE</div>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding: 35px 30px; text-align: center;">
+            <div style="display: inline-block; padding: 6px 14px; background: rgba(0, 207, 255, 0.12); border: 1px solid rgba(0, 207, 255, 0.3); border-radius: 20px; font-size: 11px; font-weight: 700; color: #00CFFF; font-family: monospace; text-transform: uppercase; margin-bottom: 20px;">
+              ACCOUNT AUTHENTICATION
+            </div>
+            <h1 style="font-size: 22px; font-weight: 800; color: #ffffff; margin: 0 0 14px 0; line-height: 1.3;">Verify Your Email Address</h1>
+            <p style="font-size: 14px; color: #94a3b8; line-height: 1.6; max-width: 480px; margin: 0 auto 25px auto;">
+              Welcome to PHIVONEX. Use the 6-digit cryptographic verification code below to complete your secure account registration. This code expires in 10 minutes.
+            </p>
+            <div style="background: rgba(0, 207, 255, 0.08); border: 1px solid rgba(0, 207, 255, 0.3); border-radius: 12px; padding: 18px 30px; display: inline-block; font-size: 36px; font-weight: 900; letter-spacing: 8px; color: #00CFFF; font-family: monospace; margin-bottom: 30px; box-shadow: 0 0 25px rgba(0, 207, 255, 0.2);">
+              ${code}
+            </div>
+            <div style="border-top: 1px solid rgba(255,255,255,0.06); padding-top: 20px; max-width: 480px; margin: 0 auto; text-align: left; font-size: 11px; color: #64748b; line-height: 1.5;">
+              <p style="margin-bottom: 6px;"><strong>Security Note:</strong> Never share this verification code with anyone. PHIVONEX administrators will never request your OTP.</p>
+              <p style="margin: 0;">If you did not initiate this request, please ignore this transmission.</p>
+            </div>
+          </td>
+        </tr>
+        <tr>
+          <td style="background-color: #070c1a; padding: 20px 30px; border-top: 1px solid rgba(255, 255, 255, 0.06); font-size: 11px; color: #475569; line-height: 1.5; text-align: center;">
+            <p style="margin: 0 0 4px 0; font-family: monospace; color: #64748b;">PHIVONEX Security Matrix • 256-Bit Cryptographic Authorization</p>
+            <p style="margin: 0;">Automated Authentication Transmission.</p>
+          </td>
+        </tr>
+      </table>
     </div>
   `;
   const result = await provider.sendEmail(toEmail, subject, html);

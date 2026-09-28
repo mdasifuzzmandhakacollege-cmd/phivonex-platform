@@ -119,18 +119,20 @@ export const BuyNodeView: React.FC<BuyNodeViewProps> = ({ user, onNavigateTab })
         setStats(statsData);
       }
 
+      let usdtAvailBalance = 0;
       if (valRes.ok) {
         const valData = await valRes.json();
         if (valData.success && valData.validation) {
           setBalanceValidation(valData.validation);
+          usdtAvailBalance = Number(valData.validation.usdtBalance?.available || 0);
+          setDepositBalance(usdtAvailBalance);
         }
       }
 
       if (depRes.ok) {
         const depData = await depRes.json();
-        if (depData.success && depData.data?.summary) {
+        if (depData.success && depData.data?.summary && usdtAvailBalance === 0) {
           const totalCredited = Number(depData.data.summary.totalCreditedBnb || 0);
-          // Check credited deposits
           const creditedDeposits = (depData.data.deposits || []).filter((d: any) => d.status === 'CREDITED');
           const sumCredited = creditedDeposits.reduce((acc: number, d: any) => acc + Number(d.amount || 0), 0);
           setDepositBalance(sumCredited > 0 ? sumCredited : totalCredited);
