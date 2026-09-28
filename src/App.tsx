@@ -6,6 +6,7 @@
 import React, { useState, useEffect } from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { NotificationProvider } from './context/NotificationContext';
+import { SystemConfigProvider } from './context/SystemConfigContext';
 
 // Pages
 import { RegisterPage } from './pages/RegisterPage';
@@ -163,9 +164,11 @@ function AppContent() {
 export default function App() {
   return (
     <AuthProvider>
-      <NotificationProvider>
-        <AppContent />
-      </NotificationProvider>
+      <SystemConfigProvider>
+        <NotificationProvider>
+          <AppContent />
+        </NotificationProvider>
+      </SystemConfigProvider>
     </AuthProvider>
   );
 }

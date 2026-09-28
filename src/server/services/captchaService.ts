@@ -103,10 +103,10 @@ export async function updateCaptchaConfig(newConfig: Partial<CaptchaConfig>): Pr
   };
 
   try {
-    const { adminFirestore } = await import('../../lib/firebase-admin');
-    await adminFirestore.collection('system_security_settings').doc('captcha_config').set(currentConfig, { merge: true });
+    const { broadcastSystemConfigChange } = await import('./systemConfigBroadcaster');
+    await broadcastSystemConfigChange('CAPTCHA_CONFIG', currentConfig, 'SECURITY');
   } catch (err) {
-    console.warn('[CaptchaService] Failed to persist config to Firestore:', err);
+    console.warn('[CaptchaService] Failed to broadcast captcha config:', err);
   }
 
   return { ...currentConfig };

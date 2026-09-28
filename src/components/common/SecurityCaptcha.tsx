@@ -45,6 +45,15 @@ export const SecurityCaptcha: React.FC<SecurityCaptchaProps> = ({
   const [loadingChallenge, setLoadingChallenge] = useState<boolean>(true);
   const [interactiveMode, setInteractiveMode] = useState<boolean>(false);
 
+  // Keep ref to callback props to avoid triggering loadChallenge when inline callbacks re-create
+  const onVerifyRef = React.useRef(onVerify);
+  const onResetRef = React.useRef(onReset);
+
+  useEffect(() => {
+    onVerifyRef.current = onVerify;
+    onResetRef.current = onReset;
+  }, [onVerify, onReset]);
+
   // Load challenge or try background Enterprise execution
   const loadChallenge = useCallback(async () => {
     setLoadingChallenge(true);
@@ -52,7 +61,7 @@ export const SecurityCaptcha: React.FC<SecurityCaptchaProps> = ({
     setIsVerified(false);
     setUserAnswer('');
     setUserVisualCode('');
-    if (onReset) onReset();
+    if (onResetRef.current) onResetRef.current();
 
     try {
       const config = await getClientCaptchaConfig();
@@ -63,7 +72,7 @@ export const SecurityCaptcha: React.FC<SecurityCaptchaProps> = ({
         setIsVerified(true);
         const bypassToken = `CAPTCHA_BYPASS_DISABLED_${Date.now()}`;
         setVerifiedToken(bypassToken);
-        onVerify(bypassToken);
+        if (onVerifyRef.current) onVerifyRef.current(bypassToken);
         setLoadingChallenge(false);
         return;
       }
@@ -73,7 +82,7 @@ export const SecurityCaptcha: React.FC<SecurityCaptchaProps> = ({
       if (googleToken && googleToken.length > 20) {
         setIsVerified(true);
         setVerifiedToken(googleToken);
-        onVerify(googleToken);
+        if (onVerifyRef.current) onVerifyRef.current(googleToken);
         setLoadingChallenge(false);
         return;
       }
@@ -89,7 +98,7 @@ export const SecurityCaptcha: React.FC<SecurityCaptchaProps> = ({
     } finally {
       setLoadingChallenge(false);
     }
-  }, [action, onVerify, onReset]);
+  }, [action]);
 
   useEffect(() => {
     loadChallenge();
@@ -121,10 +130,12 @@ export const SecurityCaptcha: React.FC<SecurityCaptchaProps> = ({
       if (res.success && res.verificationToken) {
         setIsVerified(true);
         setVerifiedToken(res.verificationToken);
-        onVerify(res.verificationToken, {
-          answer: userAnswer.trim(),
-          visualCode: codeToVerify,
-        });
+        if (onVerifyRef.current) {
+          onVerifyRef.current(res.verificationToken, {
+            answer: userAnswer.trim(),
+            visualCode: codeToVerify,
+          });
+        }
       } else {
         setErrorMsg(res.message || 'Incorrect verification code. Please try again.');
         // Refresh challenge on error
@@ -152,7 +163,9 @@ export const SecurityCaptcha: React.FC<SecurityCaptchaProps> = ({
       if (res.success && res.verificationToken) {
         setIsVerified(true);
         setVerifiedToken(res.verificationToken);
-        onVerify(res.verificationToken);
+        if (onVerifyRef.current) {
+          onVerifyRef.current(res.verificationToken);
+        }
       } else {
         setInteractiveMode(true);
       }

@@ -37,11 +37,12 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 async function startServer() {
-  // Configuration validation for production environment
+  // Configuration validation for production environment (terminates startup on failure)
   try {
     validateProductionConfig();
   } catch (configErr) {
-    console.warn('[Server Startup Configuration Notice]', configErr);
+    console.error('[CRITICAL_STARTUP_ERROR] Production configuration validation failed:', configErr);
+    process.exit(1);
   }
 
   const app = express();
@@ -107,8 +108,15 @@ async function startServer() {
   app.use('/api/admin', adminRouter);
 
   // Health checks
-  app.get('/api/health', (req, res) => {
-    res.json({ status: 'ok', time: new Date().toISOString() });
+  app.get('/api/health', async (req, res) => {
+    try {
+      const db = await getDb();
+      await db.query('SELECT 1');
+      res.status(200).json({ status: 'ok', database: 'connected', time: new Date().toISOString() });
+    } catch (err: any) {
+      console.error('[Health Check Error] PostgreSQL connection verification failed:', err);
+      res.status(503).json({ status: 'unhealthy', error: 'Database unavailable or unhealthy', time: new Date().toISOString() });
+    }
   });
 
   app.get('/api/health/db', (req, res, next) => {

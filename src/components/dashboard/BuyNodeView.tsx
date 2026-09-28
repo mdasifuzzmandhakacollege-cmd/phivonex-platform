@@ -21,6 +21,7 @@ import {
   ExternalLink
 } from 'lucide-react';
 import { UserProfile } from '../../context/AuthContext';
+import { useSystemConfig } from '../../context/SystemConfigContext';
 import { GENESIS_NODE_CAP, NODE_BASE_PRICE_USD, RESERVATION_EXPIRY_MINUTES } from '../../config/nodeConfig';
 import { UsdtIcon, BnbIcon, PhivoCoinIcon } from '../brand/CryptoIcons';
 import { SecurityCaptcha } from '../common/SecurityCaptcha';
@@ -58,6 +59,7 @@ interface NodeOrder {
 }
 
 export const BuyNodeView: React.FC<BuyNodeViewProps> = ({ user, onNavigateTab }) => {
+  const { nodeBasePriceUsd: realTimeNodePrice } = useSystemConfig();
   const [stats, setStats] = useState<NodeStats | null>(null);
   const [activeOrder, setActiveOrder] = useState<NodeOrder | null>(null);
   const [pastOrders, setPastOrders] = useState<NodeOrder[]>([]);
@@ -437,7 +439,7 @@ export const BuyNodeView: React.FC<BuyNodeViewProps> = ({ user, onNavigateTab })
           <div className="flex flex-wrap items-center gap-6 pt-2 text-xs font-mono">
             <div>
               <span className="text-[#98A2B3] block text-[10px]">FIXED PRICE</span>
-              <span className="text-lg font-bold text-white font-mono">${NODE_BASE_PRICE_USD.toLocaleString()} USD</span>
+              <span className="text-lg font-bold text-white font-mono">${(realTimeNodePrice || stats?.basePriceUsd || NODE_BASE_PRICE_USD).toLocaleString()} USD</span>
             </div>
             <div className="h-8 w-px bg-white/[0.08]" />
             <div>

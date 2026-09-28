@@ -15,12 +15,15 @@ import {
   ArrowRight,
   Volume2,
   VolumeX,
-  Wallet
+  Wallet,
+  Wifi,
+  WifiOff
 } from 'lucide-react';
 import { PhivonexLogo } from '../brand/PhivonexLogo';
 import { PhivonexSymbol } from '../brand/PhivonexSymbol';
 import { UserProfile } from '../../context/AuthContext';
 import { useNotifications } from '../../context/NotificationContext';
+import { useSystemConfig } from '../../context/SystemConfigContext';
 import { DashboardTab } from './Sidebar';
 import { PWAInstallHeaderButton } from '../PWAInstallPrompt';
 
@@ -50,6 +53,7 @@ export const Topbar: React.FC<TopbarProps> = ({
   onLogout,
   onNavigate,
 }) => {
+  const { isConnected } = useSystemConfig();
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
   const [isNotifOpen, setIsNotifOpen] = useState(false);
   const [availableBalance, setAvailableBalance] = useState<number | null>(null);
@@ -207,9 +211,17 @@ export const Topbar: React.FC<TopbarProps> = ({
           <h1 className="text-sm sm:text-base font-bold text-white tracking-tight">
             {getPageTitle(activeTab)}
           </h1>
-          <span className="hidden sm:inline-block text-xs font-mono text-[#00CFFF] bg-[#00CFFF]/10 border border-[#00CFFF]/20 px-2 py-0.5 rounded-full">
-            Protocol Live
-          </span>
+          <div
+            className={`hidden sm:flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-mono border transition-all ${
+              isConnected
+                ? 'bg-[#00CFFF]/10 border-[#00CFFF]/30 text-[#00CFFF]'
+                : 'bg-[#F04438]/10 border-[#F04438]/30 text-[#F04438] animate-pulse'
+            }`}
+            title={isConnected ? 'Connected to Live Protocol Ledger & Real-Time Sync' : 'Disconnected from Protocol Sync'}
+          >
+            <span className={`w-1.5 h-1.5 rounded-full ${isConnected ? 'bg-[#00CFFF] animate-pulse' : 'bg-[#F04438]'}`} />
+            <span>{isConnected ? 'Protocol Live' : 'Ledger Offline'}</span>
+          </div>
         </div>
       </div>
 

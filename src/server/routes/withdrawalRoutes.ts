@@ -15,6 +15,7 @@ import {
 import { broadcastBnbWithdrawal } from '../services/bscSignerService';
 import { verifyCaptcha } from '../services/captchaService';
 import { getDb } from '../db/db';
+import { broadcastSystemConfigChange } from '../services/systemConfigBroadcaster';
 
 export const withdrawalRouter = Router();
 
@@ -438,17 +439,8 @@ withdrawalRouter.post('/admin/min-amount', requireAdmin, async (req: AuthRequest
           updated_at = CURRENT_TIMESTAMP
     `, [JSON.stringify(num), adminPublicId]);
 
-    // Sync to Firestore for cloud persistence
-    try {
-      const { adminFirestore } = await import('../../lib/firebase-admin');
-      await adminFirestore.collection('system_settings').doc('withdrawals').set({
-        minWithdrawalAmount: num,
-        updatedAt: new Date().toISOString(),
-        updatedBy: adminPublicId,
-      }, { merge: true });
-    } catch (fsErr) {
-      console.warn('[Withdrawal API] Firestore min-amount sync warning:', fsErr);
-    }
+    // Sync and broadcast in real-time
+    await broadcastSystemConfigChange('MIN_WITHDRAWAL_AMOUNT', num, 'GATEWAY');
 
     return res.status(200).json({
       success: true,
@@ -479,18 +471,8 @@ withdrawalRouter.post('/admin/mode', requireAdmin, async (req: AuthRequest, res:
 
     (globalThis as any).__AUTO_WITHDRAWAL_ENABLED = isAuto;
 
-    // Sync to Firestore for cloud persistence
-    try {
-      const { adminFirestore } = await import('../../lib/firebase-admin');
-      await adminFirestore.collection('system_settings').doc('withdrawals').set({
-        autoWithdrawalEnabled: isAuto,
-        mode: isAuto ? 'FULL_AUTOMATIC' : 'MANUAL_APPROVAL',
-        updatedAt: new Date().toISOString(),
-        updatedBy: (req.user as any)?.publicId || req.user?.email || 'ADMIN',
-      }, { merge: true });
-    } catch (fsErr) {
-      console.warn('[Withdrawal API] Firestore mode sync warning:', fsErr);
-    }
+    // Sync and broadcast in real-time
+    await broadcastSystemConfigChange('AUTO_WITHDRAWAL_ENABLED', isAuto, 'GATEWAY');
 
     return res.status(200).json({
       success: true,

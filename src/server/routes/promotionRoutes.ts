@@ -17,6 +17,7 @@ import {
   updatePerformancePopupSettings,
   getPerformancePopupData,
 } from '../services/promotionalService';
+import { broadcastSystemConfigChange } from '../services/systemConfigBroadcaster';
 
 export const promotionRouter = Router();
 

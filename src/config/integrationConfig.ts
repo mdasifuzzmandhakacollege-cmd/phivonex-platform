@@ -42,7 +42,7 @@ export function validateProductionConfig(): void {
 
   const missingOrInvalid: string[] = [];
 
-  // 1. Validate DATABASE_URL (If provided, must be valid connection string; if absent, embedded engine activates)
+  // 1. Validate DATABASE_URL (Mandatory in production)
   const databaseUrl = process.env.DATABASE_URL?.trim();
   if (databaseUrl) {
     if (
@@ -53,7 +53,7 @@ export function validateProductionConfig(): void {
       missingOrInvalid.push('DATABASE_URL must be a valid PostgreSQL connection string starting with postgresql:// or postgres://');
     }
   } else {
-    console.log('[CONFIG] DATABASE_URL not set in environment. Embedded database engine will be active.');
+    missingOrInvalid.push('DATABASE_URL is mandatory in production');
   }
 
   // 2. Validate DEPOSIT_ADDRESS_XPUB (Optional if using direct Treasury deposits, must be valid if provided)

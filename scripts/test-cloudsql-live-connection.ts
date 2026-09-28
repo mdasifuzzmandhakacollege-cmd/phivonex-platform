@@ -10,6 +10,7 @@
  */
 
 import { Pool } from 'pg';
+import fs from 'node:fs';
 import { getDb } from '../src/server/db/db';
 
 let passed = 0;
@@ -30,9 +31,9 @@ async function runLiveCloudSqlVerification() {
   console.log('🐘 PHIVONEX — LIVE CLOUD SQL POSTGRESQL VERIFICATION');
   console.log('===============================================================\n');
 
-  if (!process.env.SQL_HOST || !process.env.SQL_USER || !process.env.SQL_PASSWORD || !process.env.SQL_DB_NAME) {
-    console.warn('⚠️ Cloud SQL environment variables not detected in this runner process.');
-    console.log('Skipping live Cloud SQL probe (environment variables unavailable).');
+  if (!process.env.SQL_HOST || !process.env.SQL_USER || !process.env.SQL_PASSWORD || !process.env.SQL_DB_NAME || (process.env.SQL_HOST.startsWith('/') && !fs.existsSync(process.env.SQL_HOST))) {
+    console.warn('⚠️ Cloud SQL environment variables or Unix socket file not detected on disk.');
+    console.log('Skipping live Cloud SQL probe (socket file unavailable in current container).');
     process.exit(0);
   }
 

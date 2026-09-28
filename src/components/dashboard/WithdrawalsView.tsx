@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 import { UserProfile } from '../../context/AuthContext';
 import { SecurityCaptcha } from '../common/SecurityCaptcha';
+import { useSystemConfig } from '../../context/SystemConfigContext';
 
 interface WithdrawalsViewProps {
   user: UserProfile;
@@ -48,10 +49,17 @@ export interface WithdrawalItem {
 }
 
 export const WithdrawalsView: React.FC<WithdrawalsViewProps> = ({ user, onNavigateTab }) => {
+  const { minWithdrawalAmount: realTimeMinAmount } = useSystemConfig();
   const [availableBalance, setAvailableBalance] = useState<number>(0);
   const [totalWithdrawn, setTotalWithdrawn] = useState<number>(0);
   const [pendingTotal, setPendingTotal] = useState<number>(0);
-  const [minWithdrawalAmount, setMinWithdrawalAmount] = useState<number>(0.10);
+  const [minWithdrawalAmount, setMinWithdrawalAmount] = useState<number>(realTimeMinAmount || 0.10);
+
+  useEffect(() => {
+    if (typeof realTimeMinAmount === 'number' && realTimeMinAmount >= 0) {
+      setMinWithdrawalAmount(realTimeMinAmount);
+    }
+  }, [realTimeMinAmount]);
   const [withdrawals, setWithdrawals] = useState<WithdrawalItem[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [submitting, setSubmitting] = useState<boolean>(false);

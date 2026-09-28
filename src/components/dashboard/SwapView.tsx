@@ -23,6 +23,7 @@ import { UserProfile } from '../../context/AuthContext';
 import { PHIVONEX_TOKEN_CONFIG } from '../../server/config/tokenConfig';
 import { PhivoCoinIcon, UsdtIcon } from '../brand/CryptoIcons';
 import { SecurityCaptcha } from '../common/SecurityCaptcha';
+import { useSystemConfig } from '../../context/SystemConfigContext';
 import { TokenPriceTrendChart } from './TokenPriceTrendChart';
 
 interface SwapViewProps {
@@ -56,6 +57,7 @@ export interface SwapQuoteData {
 }
 
 export const SwapView: React.FC<SwapViewProps> = ({ user, onNavigateTab }) => {
+  const { coinPriceUsdt } = useSystemConfig();
   // Mode: 'COIN_TO_USDT' (Sell PHIVO, Receive USDT) vs 'USDT_TO_COIN' (Spend USDT, Buy PHIVO)
   const [swapDirection, setSwapDirection] = useState<'COIN_TO_USDT' | 'USDT_TO_COIN'>('COIN_TO_USDT');
 
@@ -129,7 +131,7 @@ export const SwapView: React.FC<SwapViewProps> = ({ user, onNavigateTab }) => {
   }, [fetchData]);
 
   // Active conversion rate (e.g. 1 PHIVO = $0.10 USDT)
-  const activeRate = quote?.rate || 0.10;
+  const activeRate = quote?.rate || coinPriceUsdt || 0.10;
   const isSwapDisabled = quote?.swapEnabled === false;
 
   // Handle Quick Percent Selection

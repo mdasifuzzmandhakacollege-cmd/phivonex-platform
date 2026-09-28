@@ -1,6 +1,7 @@
 import { getDb } from '../db/db';
 import { v4 as uuidv4 } from 'uuid';
 import { GENESIS_NODE_CAP } from '../../config/nodeConfig';
+import { broadcastSystemConfigChange } from './systemConfigBroadcaster';
 
 export interface EconomicConfigRecord {
   id: string;
@@ -208,6 +209,13 @@ export async function updateEconomicConfig(params: {
   );
 
   const auditLog = mapRowToAuditRecord(auditRes.rows[0]);
+
+  // Real-time broadcast and Firestore sync
+  try {
+    await broadcastSystemConfigChange(keyUpper, updatedConfig.configValue, current.category);
+  } catch (bcErr) {
+    console.warn('[EconomicService] Config broadcast warning:', bcErr);
+  }
 
   return { config: updatedConfig, auditLog };
 }
