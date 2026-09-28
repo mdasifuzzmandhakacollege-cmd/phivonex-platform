@@ -20,3 +20,5 @@ env:
     value: "0x55d398326f99059ff775485246999027b3197955"
   - variable: DEPOSIT_CONFIRMATIONS
     value: "3"
+  - variable: DATABASE_URL
+    secret: DATABASE_URL
