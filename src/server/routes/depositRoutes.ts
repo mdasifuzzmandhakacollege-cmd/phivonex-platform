@@ -222,7 +222,17 @@ depositRouter.post('/submit-txhash', requireAuth, depositLimiter, async (req: Au
       console.warn('[Deposit API] Firestore transaction hash uniqueness check warning:', fsErr);
     }
 
-    // 2. Query BNB Smart Chain node for transaction receipt using resilient multi-RPC fallback
+    // 2. Explicitly verify BSC Mainnet Chain ID = 56
+    if (BSC_CONFIG.CHAIN_ID !== 56) {
+      res.status(400).json({
+        success: false,
+        error: 'INVALID_CHAIN_ID',
+        message: 'Configured chain ID is not BSC Mainnet (56).',
+      });
+      return;
+    }
+
+    // 3. Query BNB Smart Chain node for transaction receipt using resilient multi-RPC fallback
     const rpcEndpoints = [
       'https://bsc-dataseed.binance.org',
       'https://bsc-rpc.publicnode.com',
@@ -240,19 +250,28 @@ depositRouter.post('/submit-txhash', requireAuth, depositLimiter, async (req: Au
 
     for (const rpc of uniqueRpcs) {
       try {
-        const network = ethers.Network.from(BSC_CONFIG.CHAIN_ID);
+        const network = ethers.Network.from(56);
         const p = new ethers.JsonRpcProvider(rpc, network, { staticNetwork: network });
         const [r, t] = await Promise.all([
           p.getTransactionReceipt(cleanTxHash),
           p.getTransaction(cleanTxHash),
         ]);
         if (r && t) {
+          // Verify transaction chain ID if present
+          if (t.chainId !== null && t.chainId !== undefined && Number(t.chainId) !== 56) {
+            res.status(400).json({
+              success: false,
+              error: 'INVALID_CHAIN_ID',
+              message: 'Transaction was not executed on BSC Mainnet (Chain ID 56).',
+            });
+            return;
+          }
           receipt = r;
           tx = t;
           try {
             currentBlock = await p.getBlockNumber();
           } catch {
-            currentBlock = receipt.blockNumber + 3;
+            currentBlock = 0;
           }
           console.log(`[Deposit API] Successfully resolved on-chain transaction from ${rpc}!`);
           break;
@@ -280,53 +299,71 @@ depositRouter.post('/submit-txhash', requireAuth, depositLimiter, async (req: Au
       return;
     }
 
+    // Fail safely if current block height cannot be obtained (DO NOT invent confirmations)
+    if (!currentBlock || currentBlock <= 0) {
+      res.status(503).json({
+        success: false,
+        error: 'RPC_BLOCK_HEIGHT_ERROR',
+        message: 'Unable to obtain current block height from BSC RPC. Confirmations cannot be verified safely. Please retry.',
+      });
+      return;
+    }
+
     const blockNumber = receipt.blockNumber;
-    const confirmations = Math.max(1, (currentBlock || (blockNumber + 3)) - blockNumber + 1);
+    const confirmations = currentBlock - blockNumber + 1;
+    const requiredConfs = BSC_CONFIG.REQUIRED_CONFIRMATIONS || 3;
 
-    // 3. Resolve destination & verify recipient is our Treasury wallet or user assigned address
-    const officialFallback = '0x39F47C356d45eA49826a76C252794c4C83572D76'.toLowerCase();
-    const treasury = (BSC_CONFIG.TREASURY_WALLET_ADDRESS || process.env.TREASURY_WALLET_ADDRESS || officialFallback).toLowerCase();
+    if (confirmations < requiredConfs) {
+      res.status(200).json({
+        success: false,
+        error: 'INSUFFICIENT_CONFIRMATIONS',
+        message: `Transaction has ${confirmations} confirmation(s). Required: ${requiredConfs}. Deposit pending maturation.`,
+        data: {
+          publicDepositId: '',
+          confirmations,
+          requiredConfirmations: requiredConfs,
+          status: 'PENDING',
+        },
+      });
+      return;
+    }
 
-    const userAddrRes = await db.query(
-      `SELECT deposit_address FROM user_deposit_addresses WHERE user_id = $1`,
-      [userId]
-    ).catch(() => ({ rows: [] }));
-    const validRecipients = new Set<string>([
-      treasury,
-      officialFallback,
-      ...userAddrRes.rows.map((r: any) => (r.deposit_address || '').toLowerCase()).filter(Boolean)
-    ]);
+    // 4. Accept ONLY the currently configured TREASURY_WALLET_ADDRESS as destination. No fallback, no XPUB.
+    const treasury = (BSC_CONFIG.TREASURY_WALLET_ADDRESS || '').toLowerCase();
+    if (!treasury || !ethers.isAddress(treasury)) {
+      res.status(500).json({
+        success: false,
+        error: 'TREASURY_NOT_CONFIGURED',
+        message: 'Official PHIVONEX treasury wallet address is not configured.',
+      });
+      return;
+    }
 
     let detectedAmount = 0;
-    let detectedAsset = requestedAsset;
     let fromAddress = tx.from.toLowerCase();
     let toAddress = '';
+    let realLogIndex = 0;
 
-    // Check for USDT BEP-20 transfer
+    // USDT BEP-20 ONLY. Remove native BNB deposit acceptance.
     const transferEventSignature = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
     const usdtContractLower = BSC_CONFIG.USDT_CONTRACT_ADDRESS.toLowerCase();
 
-    for (const log of receipt.logs) {
+    for (let i = 0; i < receipt.logs.length; i++) {
+      const log = receipt.logs[i];
       if (log.topics[0] === transferEventSignature && log.topics.length >= 3) {
         const logContract = log.address.toLowerCase();
         const recipientTopic = '0x' + log.topics[2].slice(26);
         const recipientAddress = recipientTopic.toLowerCase();
 
-        // Check if recipient matches Treasury address or user assigned address
-        const isRecipientValid =
-          validRecipients.has(recipientAddress) ||
-          recipientAddress === treasury ||
-          recipientAddress === officialFallback;
-
-        if (logContract === usdtContractLower && isRecipientValid) {
+        if (logContract === usdtContractLower && recipientAddress === treasury) {
           try {
             const rawAmount = BigInt(log.data);
             const formatted = Number(ethers.formatUnits(rawAmount, 18));
             if (formatted > 0) {
               detectedAmount = formatted;
-              detectedAsset = 'USDT';
               toAddress = recipientAddress;
               fromAddress = ('0x' + log.topics[1].slice(26)).toLowerCase();
+              realLogIndex = (log as any).index ?? (log as any).logIndex ?? i;
               break;
             }
           } catch (parseErr) {
@@ -336,31 +373,30 @@ depositRouter.post('/submit-txhash', requireAuth, depositLimiter, async (req: Au
       }
     }
 
-    // Check for Native BNB transfer
-    if (detectedAmount === 0 && tx.value > 0n) {
-      const recipientAddress = (tx.to || '').toLowerCase();
-      const isRecipientValid =
-        validRecipients.has(recipientAddress) ||
-        recipientAddress === treasury ||
-        recipientAddress === officialFallback;
-
-      if (isRecipientValid) {
-        detectedAmount = Number(ethers.formatEther(tx.value));
-        detectedAsset = 'BNB';
-        toAddress = recipientAddress;
-      }
-    }
-
     if (detectedAmount <= 0) {
       res.status(400).json({
         success: false,
-        error: 'NO_VALID_TRANSFER',
-        message: `No qualifying ${requestedAsset} transfer to the platform treasury was found in this transaction. Please ensure you sent to the correct address.`,
+        error: 'NO_VALID_USDT_TRANSFER',
+        message: `No qualifying USDT BEP-20 transfer to the official treasury address was found in this transaction. Native BNB or wrong destination/contract transfers are rejected.`,
       });
       return;
     }
 
-    // 4. Record deposit in blockchain_deposits
+    // Check duplicate credit protection with real log index
+    const duplicateCheck = await db.query(
+      `SELECT id FROM blockchain_deposits WHERE chain_id = $1 AND LOWER(tx_hash) = $2 AND log_index = $3`,
+      [BSC_CONFIG.CHAIN_ID, cleanTxHash, realLogIndex]
+    );
+    if (duplicateCheck.rows.length > 0) {
+      res.status(409).json({
+        success: false,
+        error: 'TX_ALREADY_USED',
+        message: 'This transaction hash and log index have already been credited.',
+      });
+      return;
+    }
+
+    // 5. Record deposit in blockchain_deposits
     const depositId = uuidv4();
     const publicDepositId = generateDepositPublicId();
     const now = new Date();
@@ -372,7 +408,7 @@ depositRouter.post('/submit-txhash', requireAuth, depositLimiter, async (req: Au
         tx_hash, log_index, from_address, to_address, amount, block_number,
         confirmations, status, detected_at, confirmed_at, credited_at, created_at, updated_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'CREDITED', $13, $13, $13, $13, $13)
+      VALUES ($1, $2, $3, $4, 'USDT', $5, $6, $7, $8, $9, $10, $11, 'CREDITED', $12, $12, $12, $12, $12)
       ON CONFLICT (chain_id, tx_hash, log_index, to_address) DO UPDATE
         SET status = 'CREDITED',
             credited_at = COALESCE(blockchain_deposits.credited_at, EXCLUDED.credited_at),
@@ -384,11 +420,10 @@ depositRouter.post('/submit-txhash', requireAuth, depositLimiter, async (req: Au
         publicDepositId,
         userId,
         BSC_CONFIG.CHAIN_ID,
-        detectedAsset,
         cleanTxHash,
-        0,
+        realLogIndex,
         fromAddress,
-        toAddress || treasury,
+        toAddress,
         detectedAmount,
         blockNumber,
         confirmations,
@@ -399,18 +434,18 @@ depositRouter.post('/submit-txhash', requireAuth, depositLimiter, async (req: Au
     const actualDepositId = insertRes.rows[0]?.id || depositId;
     const actualPublicDepositId = insertRes.rows[0]?.public_deposit_id || publicDepositId;
 
-    // 5. Post financial ledger credit (idempotent via unique constraint on source_type, source_id, entry_type)
+    // 6. Post financial ledger credit atomically
     await postLedgerCredit({
       userId,
       sourceType: 'BLOCKCHAIN_DEPOSIT',
       sourceId: actualDepositId,
       sourceRef: actualPublicDepositId,
       amount: detectedAmount,
-      description: `On-chain ${detectedAsset} deposit verified via TxHash ${cleanTxHash.slice(0, 10)}...`,
-      currency: detectedAsset,
+      description: `On-chain USDT BEP-20 deposit verified via TxHash ${cleanTxHash.slice(0, 10)}...`,
+      currency: 'USDT',
     });
 
-    // 6. Sync to Firestore for cloud persistence
+    // 7. Sync to Firestore for cloud persistence
     try {
       const { adminFirestore } = await import('../../lib/firebase-admin');
       await adminFirestore.collection('blockchain_deposits').doc(depositId).set({
@@ -419,7 +454,7 @@ depositRouter.post('/submit-txhash', requireAuth, depositLimiter, async (req: Au
         userId,
         txHash: cleanTxHash,
         amount: detectedAmount,
-        asset: detectedAsset,
+        asset: 'USDT',
         status: 'CREDITED',
         createdAt: now.toISOString(),
       }, { merge: true });
@@ -427,7 +462,7 @@ depositRouter.post('/submit-txhash', requireAuth, depositLimiter, async (req: Au
       console.warn('[Deposit API] Firestore deposit backup notice:', fsErr);
     }
 
-    // 7. Notify user
+    // 8. Notify user
     try {
       await notifyUsdtDepositConfirmed({
         userId,
@@ -441,14 +476,14 @@ depositRouter.post('/submit-txhash', requireAuth, depositLimiter, async (req: Au
 
     res.status(200).json({
       success: true,
-      message: `Deposit verified successfully! Credited ${detectedAmount} ${detectedAsset} to your account.`,
+      message: `Deposit verified successfully! Credited ${detectedAmount} USDT to your account.`,
       data: {
         publicDepositId,
         amount: detectedAmount,
-        asset: detectedAsset,
+        asset: 'USDT',
         txHash: cleanTxHash,
         confirmations,
-        status: 'CREDITED',
+        logIndex: realLogIndex,
       },
     });
   } catch (err: any) {
