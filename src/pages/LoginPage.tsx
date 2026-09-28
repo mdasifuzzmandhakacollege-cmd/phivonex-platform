@@ -78,6 +78,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
         identifier: identifier.trim(),
         password,
         rememberMe,
+        captchaToken: captchaToken || undefined,
       });
 
       setLoginSuccessNotice(true);
@@ -102,7 +103,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
     setForgotError(null);
 
     try {
-      const res = await forgotPassword(forgotEmail.trim().toLowerCase());
+      const res = await forgotPassword(forgotEmail.trim().toLowerCase(), forgotCaptchaToken || undefined);
       setForgotSubmitted(true);
       setForgotMessage(res.message || 'If an account exists, reset instructions have been sent.');
     } catch (err: any) {

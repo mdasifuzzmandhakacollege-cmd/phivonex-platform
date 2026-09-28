@@ -66,7 +66,7 @@ export async function getClientCaptchaConfig(): Promise<CaptchaPublicConfig> {
     cachedConfig = {
       enabled: true,
       mode: 'HYBRID',
-      siteKey: '6Ld5EnterprisePhivonexProdKey',
+      siteKey: '6Ld5jNItAAAAAPas1Dlc5_iyihVbkxOEKQNqAsFn',
       projectId: 'phivonex-production',
       thresholdScore: 0.5,
       enforcedActions: {

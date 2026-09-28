@@ -50,10 +50,11 @@ interface AuthContextType {
     identifier: string;
     password: string;
     rememberMe?: boolean;
+    captchaToken?: string;
   }) => Promise<UserProfile>;
   loginWithGoogle: (referralCode?: string) => Promise<UserProfile>;
   logout: () => Promise<void>;
-  forgotPassword: (email: string) => Promise<{ message: string }>;
+  forgotPassword: (email: string, captchaToken?: string) => Promise<{ message: string }>;
   resetPassword: (token: string, newPassword: string) => Promise<{ message: string }>;
   verifyEmail: (token: string) => Promise<{ message: string }>;
   resendVerification: (email?: string) => Promise<{ message: string }>;
@@ -148,6 +149,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     identifier: string;
     password: string;
     rememberMe?: boolean;
+    captchaToken?: string;
   }): Promise<UserProfile> => {
     const res = await fetch('/api/auth/login', {
       method: 'POST',
@@ -271,12 +273,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   // 4. Forgot Password
-  const forgotPassword = async (email: string) => {
+  const forgotPassword = async (email: string, captchaToken?: string) => {
     const res = await fetch('/api/auth/forgot-password', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
-      body: JSON.stringify({ email }),
+      body: JSON.stringify({ email, captchaToken }),
     });
 
     const result = await res.json();

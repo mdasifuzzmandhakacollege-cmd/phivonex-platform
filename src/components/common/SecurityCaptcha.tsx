@@ -96,12 +96,14 @@ export const SecurityCaptcha: React.FC<SecurityCaptchaProps> = ({
   }, [loadChallenge]);
 
   // Handle User Solving Challenge
-  const handleSolve = async (e?: React.FormEvent) => {
+  const handleSolve = async (e?: React.FormEvent, overrideCode?: string) => {
     if (e) e.preventDefault();
     if (!challenge) return;
 
-    if (!userAnswer.trim() && !userVisualCode.trim()) {
-      setErrorMsg('Please complete the verification code or answer.');
+    const codeToVerify = (overrideCode !== undefined ? overrideCode : userVisualCode).trim().toUpperCase();
+
+    if (!userAnswer.trim() && !codeToVerify) {
+      setErrorMsg('Please enter the 4-character verification code.');
       return;
     }
 
@@ -113,7 +115,7 @@ export const SecurityCaptcha: React.FC<SecurityCaptchaProps> = ({
         challenge.token,
         action,
         userAnswer.trim(),
-        userVisualCode.trim().toUpperCase()
+        codeToVerify
       );
 
       if (res.success && res.verificationToken) {
@@ -121,10 +123,10 @@ export const SecurityCaptcha: React.FC<SecurityCaptchaProps> = ({
         setVerifiedToken(res.verificationToken);
         onVerify(res.verificationToken, {
           answer: userAnswer.trim(),
-          visualCode: userVisualCode.trim().toUpperCase(),
+          visualCode: codeToVerify,
         });
       } else {
-        setErrorMsg(res.message || 'Incorrect verification answer. Please try again.');
+        setErrorMsg(res.message || 'Incorrect verification code. Please try again.');
         // Refresh challenge on error
         const next = await fetchServerChallenge(action);
         if (next) setChallenge(next);
@@ -212,15 +214,15 @@ export const SecurityCaptcha: React.FC<SecurityCaptchaProps> = ({
           {/* Simple check button or math/visual solve */}
           <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
             {/* Visual Security Code Box */}
-            <div className="flex items-center gap-2 bg-[#05070B] border border-white/[0.1] rounded-lg px-2.5 py-1.5 select-none shrink-0">
-              <span className="text-xs font-mono font-bold tracking-widest text-[#00CFFF] bg-white/[0.04] px-2 py-0.5 rounded border border-[#00CFFF]/20">
+            <div className="flex items-center gap-2 bg-[#05070B] border border-[#00CFFF]/30 rounded-lg px-3 py-1.5 select-none shrink-0 shadow-inner">
+              <span className="text-sm font-mono font-extrabold tracking-[0.25em] text-[#00CFFF] bg-[#00CFFF]/10 px-2.5 py-1 rounded border border-[#00CFFF]/30">
                 {challenge.visualCode}
               </span>
               <button
                 type="button"
                 onClick={loadChallenge}
-                title="Refresh code"
-                className="p-1 rounded text-[#98A2B3] hover:text-white hover:bg-white/[0.06] transition-colors cursor-pointer"
+                title="Refresh verification code"
+                className="p-1 rounded text-[#98A2B3] hover:text-white hover:bg-white/[0.08] transition-colors cursor-pointer"
               >
                 <RefreshCw className="w-3.5 h-3.5" />
               </button>
@@ -229,17 +231,23 @@ export const SecurityCaptcha: React.FC<SecurityCaptchaProps> = ({
             {/* Input code */}
             <input
               type="text"
-              placeholder="Enter 4-char code"
+              placeholder="ENTER 4-CHAR CODE"
               maxLength={6}
               value={userVisualCode}
-              onChange={(e) => setUserVisualCode(e.target.value.toUpperCase())}
+              onChange={(e) => {
+                const val = e.target.value.toUpperCase();
+                setUserVisualCode(val);
+                if (val.length === (challenge?.visualCode?.length || 4) && !isVerifying) {
+                  setTimeout(() => handleSolve(undefined, val), 50);
+                }
+              }}
               onKeyDown={(e) => {
                 if (e.key === 'Enter') {
                   e.preventDefault();
                   handleSolve();
                 }
               }}
-              className="flex-1 bg-[#05070B] border border-white/[0.1] focus:border-[#00CFFF] rounded-lg px-2.5 py-1.5 text-xs text-white uppercase placeholder:text-white/20 focus:outline-none min-h-[36px]"
+              className="flex-1 bg-[#05070B] border border-white/[0.1] focus:border-[#00CFFF] rounded-lg px-3 py-1.5 text-xs text-white uppercase font-mono tracking-widest placeholder:text-white/30 placeholder:tracking-normal focus:outline-none min-h-[36px]"
             />
 
             {/* Verify Button */}
