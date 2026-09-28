@@ -296,8 +296,18 @@ export async function closeAndSettleEpoch(
       actualAmount = Number(existing.rows[0].amount);
     }
 
-    // 5. PHIVO rewards credit PHIVO balance only (node_rewards table) without touching USDT/USD ledger.
-    // (Ledger accounting remains strictly separated between PHIVO, USDT, and USD).
+    // 5. Post credit to financial ledger for node reward
+    await postLedgerCredit({
+      userId: node.owner_user_id,
+      sourceType: 'NODE_REWARD',
+      sourceId: actualRewardId,
+      sourceRef: actualPublicRewardId,
+      amount: actualAmount,
+      description: `Genesis Node Mining Reward (Epoch #${epochNumber}, Node ${node.public_node_id})`,
+      createdAt: now,
+    }).catch((ledgerErr) => {
+      console.warn('[NodeReward] Error posting ledger credit:', ledgerErr);
+    });
 
     // Task #20: Trigger in-app notification for node mining reward (idempotent via sourceId)
     try {
@@ -385,6 +395,18 @@ export async function reverseNodeReward(publicRewardId: string, reason?: string)
     `UPDATE node_rewards SET status = 'REVERSED', reversed_at = $1 WHERE id = $2`,
     [now, reward.id]
   );
+
+  await postLedgerReversal({
+    userId: reward.owner_user_id,
+    sourceType: 'NODE_REWARD',
+    sourceId: reward.id,
+    sourceRef: reward.public_reward_id,
+    amount: Number(reward.amount),
+    description: `Reversal of Node Reward ${reward.public_reward_id}: ${reason || 'Administrative correction'}`,
+    createdAt: now,
+  }).catch((ledgerErr) => {
+    console.warn('[NodeReward] Error posting ledger reversal:', ledgerErr);
+  });
 
   return {
     success: true,

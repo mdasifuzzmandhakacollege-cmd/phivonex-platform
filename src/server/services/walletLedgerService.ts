@@ -533,6 +533,51 @@ export async function syncUserLedger(userId: string, dbClient?: DatabaseClient):
     }
   }
 
+  // 4. Reconcile Node Rewards
+  const nodeRewRes = await db.query<{
+    id: string;
+    public_reward_id: string;
+    amount: string | number;
+    status: string;
+    accrued_at: Date;
+    reversed_at: Date | null;
+  }>(
+    `
+    SELECT id, public_reward_id, amount, status, accrued_at, reversed_at
+    FROM node_rewards
+    WHERE owner_user_id = $1
+    `,
+    [userId]
+  );
+
+  for (const nr of nodeRewRes.rows) {
+    // Post CREDIT
+    await postLedgerCredit({
+      userId,
+      sourceType: 'NODE_REWARD',
+      sourceId: nr.id,
+      sourceRef: nr.public_reward_id,
+      amount: Number(nr.amount),
+      description: 'Genesis Node Mining Reward',
+      createdAt: new Date(nr.accrued_at),
+      dbClient: db,
+    });
+
+    // If reversed, post REVERSAL
+    if (nr.status === 'REVERSED') {
+      await postLedgerReversal({
+        userId,
+        sourceType: 'NODE_REWARD',
+        sourceId: nr.id,
+        sourceRef: nr.public_reward_id,
+        amount: Number(nr.amount),
+        description: 'Genesis Node Mining Reward Reversal',
+        createdAt: nr.reversed_at ? new Date(nr.reversed_at) : new Date(),
+        dbClient: db,
+      });
+    }
+  }
+
   // 5. Reconcile Confirmed/Credited Blockchain Deposits into Financial Ledger
   const depRes = await db.query<{
     id: string;

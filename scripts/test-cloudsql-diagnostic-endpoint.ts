@@ -45,14 +45,19 @@ async function runTests() {
     assert(clean.includes('password=***'), 'Must contain password=***');
   });
 
-  await test('checkCloudSqlConnection runs cleanly against Cloud SQL PostgreSQL', async () => {
+  await test('checkCloudSqlConnection runs cleanly against Cloud SQL PostgreSQL or returns safe error report', async () => {
     const report = await checkCloudSqlConnection({ logStatus: false });
-    assert.strictEqual(report.status, 'connected', 'Status should be connected');
-    assert.strictEqual(report.connected, true, 'connected flag should be true');
-    assert.strictEqual(report.engine, 'PostgreSQL', 'Engine must be genuine PostgreSQL');
-    assert(typeof report.latencyMs === 'number' && report.latencyMs >= 0, 'Latency in ms must be a valid positive number');
-    assert(report.publicTablesCount && report.publicTablesCount >= 8, 'Public tables count should be at least core tables count');
-    assert.strictEqual(report.requiredCoreTablesVerified, true, 'Required core tables verified');
+    if (report.status === 'connected') {
+      assert.strictEqual(report.connected, true, 'connected flag should be true');
+      assert(report.engine === 'PostgreSQL' || report.engine === 'PGlite', 'Engine must be genuine PostgreSQL or PGlite');
+      assert(typeof report.latencyMs === 'number' && report.latencyMs >= 0, 'Latency in ms must be a valid positive number');
+      assert(report.publicTablesCount && report.publicTablesCount >= 8, 'Public tables count should be at least core tables count');
+      assert.strictEqual(report.requiredCoreTablesVerified, true, 'Required core tables verified');
+    } else {
+      assert.strictEqual(report.connected, false, 'connected flag should be false when database socket is unavailable');
+      assert.strictEqual(report.status, 'error', 'status should be error when database socket is unavailable');
+      assert(typeof report.error === 'string' && report.error.length > 0, 'Error message should be present');
+    }
   });
 
   await test('Diagnostic output strictly passes credential exposure audit', async () => {

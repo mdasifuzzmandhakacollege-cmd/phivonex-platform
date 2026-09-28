@@ -26,6 +26,7 @@ import { UserProfile } from '../../context/AuthContext';
 import { WalletSection } from './WalletSection';
 import { TokenPriceTrendChart } from './TokenPriceTrendChart';
 import { buildPublicReferralUrl } from '../../utils/referralUrl';
+import { NetworkPulseTrigger } from './NetworkPulseTrigger';
 
 interface ReferralMeResponse {
   publicId: string;
@@ -161,6 +162,8 @@ export const OverviewView: React.FC<OverviewViewProps> = ({ user, onNavigateTab 
           </div>
 
           <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 shrink-0">
+            <NetworkPulseTrigger variant="compact" />
+
             <div className="px-4 py-3 rounded-xl bg-white/[0.04] border border-white/[0.08] backdrop-blur-sm">
               <span className="text-[10px] font-mono uppercase text-[#98A2B3] block">Consensus Status</span>
               <span className="text-xs font-mono font-semibold text-[#32D583] flex items-center gap-1.5 mt-0.5">

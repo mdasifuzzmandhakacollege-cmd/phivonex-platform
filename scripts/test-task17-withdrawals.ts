@@ -57,7 +57,7 @@ async function runTask17WithdrawalTests() {
         userId: userAId,
         amount: 50.0,
         destinationType: 'USDT_TRC20',
-        destinationReference: 'TX983274982374982374',
+        destinationReference: 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t',
       });
     } catch (err: any) {
       errorThrown = true;
@@ -88,7 +88,7 @@ async function runTask17WithdrawalTests() {
       userId: userAId,
       amount: 200.0,
       destinationType: 'USDT_TRC20',
-      destinationReference: 'TTRC20Address001928374',
+      destinationReference: 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t',
       idempotencyKey: 'idemp-wdr-001',
     });
 
@@ -108,7 +108,7 @@ async function runTask17WithdrawalTests() {
       userId: userAId,
       amount: 200.0,
       destinationType: 'USDT_TRC20',
-      destinationReference: 'TTRC20Address001928374',
+      destinationReference: 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t',
       idempotencyKey: 'idemp-wdr-001',
     });
 
@@ -181,6 +181,7 @@ async function runTask17WithdrawalTests() {
     const completedWdr = await settleWithdrawalAction({
       withdrawalIdOrPublicId: activeWdr.publicWithdrawalId,
       action: 'COMPLETE',
+      txHash: '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef',
     });
     assert(completedWdr.status === 'COMPLETED', 'Admin COMPLETE transitions withdrawal state to COMPLETED');
 

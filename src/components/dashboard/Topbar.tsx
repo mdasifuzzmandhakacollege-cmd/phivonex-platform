@@ -26,6 +26,7 @@ import { useNotifications } from '../../context/NotificationContext';
 import { useSystemConfig } from '../../context/SystemConfigContext';
 import { DashboardTab } from './Sidebar';
 import { PWAInstallHeaderButton } from '../PWAInstallPrompt';
+import { NetworkPulseTrigger } from './NetworkPulseTrigger';
 
 interface TopbarProps {
   user: UserProfile | null;
@@ -242,6 +243,11 @@ export const Topbar: React.FC<TopbarProps> = ({
             <span className="text-[10px] text-[#00CFFF] font-semibold">USDT</span>
           </div>
         </button>
+
+        {/* Real-time Network Pulse & Manual Trigger */}
+        <div className="hidden md:flex items-center">
+          <NetworkPulseTrigger variant="compact" />
+        </div>
 
         <PWAInstallHeaderButton />
 

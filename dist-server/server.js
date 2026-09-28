@@ -3147,6 +3147,38 @@ async function syncUserLedger(userId, dbClient) {
       });
     }
   }
+  const nodeRewRes = await db.query(
+    `
+    SELECT id, public_reward_id, amount, status, accrued_at, reversed_at
+    FROM node_rewards
+    WHERE owner_user_id = $1
+    `,
+    [userId]
+  );
+  for (const nr of nodeRewRes.rows) {
+    await postLedgerCredit({
+      userId,
+      sourceType: "NODE_REWARD",
+      sourceId: nr.id,
+      sourceRef: nr.public_reward_id,
+      amount: Number(nr.amount),
+      description: "Genesis Node Mining Reward",
+      createdAt: new Date(nr.accrued_at),
+      dbClient: db
+    });
+    if (nr.status === "REVERSED") {
+      await postLedgerReversal({
+        userId,
+        sourceType: "NODE_REWARD",
+        sourceId: nr.id,
+        sourceRef: nr.public_reward_id,
+        amount: Number(nr.amount),
+        description: "Genesis Node Mining Reward Reversal",
+        createdAt: nr.reversed_at ? new Date(nr.reversed_at) : /* @__PURE__ */ new Date(),
+        dbClient: db
+      });
+    }
+  }
   const depRes = await db.query(
     `
     SELECT id, public_deposit_id, amount, asset, tx_hash, status, credited_at, confirmed_at, created_at
@@ -9534,6 +9566,7 @@ function getConfiguredRewardPerNode(override) {
 }
 
 // src/server/services/nodeRewardService.ts
+init_walletLedgerService();
 init_notificationService();
 async function createRewardEpoch(params) {
   const db = await getDb();
@@ -9685,6 +9718,17 @@ async function closeAndSettleEpoch(epochId, options) {
       actualPublicRewardId = existing.rows[0].public_reward_id;
       actualAmount = Number(existing.rows[0].amount);
     }
+    await postLedgerCredit({
+      userId: node.owner_user_id,
+      sourceType: "NODE_REWARD",
+      sourceId: actualRewardId,
+      sourceRef: actualPublicRewardId,
+      amount: actualAmount,
+      description: `Genesis Node Mining Reward (Epoch #${epochNumber}, Node ${node.public_node_id})`,
+      createdAt: now
+    }).catch((ledgerErr) => {
+      console.warn("[NodeReward] Error posting ledger credit:", ledgerErr);
+    });
     try {
       await notifyPhivoReward({
         userId: node.owner_user_id,

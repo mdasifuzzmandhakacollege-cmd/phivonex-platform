@@ -104,7 +104,7 @@ async function runTask18AdminTests() {
       userId: normalUserId,
       amount: 100.0,
       destinationType: 'USDT_TRC20',
-      destinationReference: 'TXAdminTestWalletAddress001',
+      destinationReference: 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t',
     });
 
     assert(wdr.status === 'PENDING', 'Created $100 withdrawal in PENDING state');
@@ -131,6 +131,7 @@ async function runTask18AdminTests() {
     const completedWdr = await settleWithdrawalAction({
       withdrawalIdOrPublicId: wdr.publicWithdrawalId,
       action: 'COMPLETE',
+      txHash: '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef',
     });
     assert(completedWdr.status === 'COMPLETED', 'Admin COMPLETE action transitioned withdrawal to COMPLETED');
 
