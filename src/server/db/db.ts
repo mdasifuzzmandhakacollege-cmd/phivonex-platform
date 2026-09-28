@@ -492,6 +492,28 @@ async function initSchema(client: DatabaseClient) {
         CONSTRAINT chk_withdrawal_status CHECK (status IN ('PENDING', 'APPROVED', 'REJECTED', 'PROCESSING', 'COMPLETED', 'FAILED', 'CANCELLED')),
         CONSTRAINT chk_withdrawal_amount CHECK (amount > 0)
       );
+
+      -- Task #17.2: Withdrawal State Transition Audit Logs
+      CREATE TABLE IF NOT EXISTS withdrawal_status_logs (
+        id UUID PRIMARY KEY,
+        withdrawal_id UUID NOT NULL REFERENCES withdrawals(id) ON DELETE CASCADE,
+        public_withdrawal_id VARCHAR(50) NOT NULL,
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        user_email VARCHAR(255) NULL,
+        user_name VARCHAR(255) NULL,
+        previous_status VARCHAR(20) NULL,
+        new_status VARCHAR(20) NOT NULL,
+        actor_type VARCHAR(20) NOT NULL DEFAULT 'SYSTEM',
+        actor_id VARCHAR(100) NULL,
+        actor_email VARCHAR(255) NULL,
+        reason TEXT NULL,
+        amount NUMERIC(12, 2) NOT NULL,
+        destination_type VARCHAR(50) NOT NULL,
+        destination_reference TEXT NOT NULL,
+        tx_hash VARCHAR(100) NULL,
+        transition_timestamp TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
     `);
 
     // Ensure public_id column exists on users (if created in previous version)
@@ -630,6 +652,12 @@ async function initSchema(client: DatabaseClient) {
       CREATE INDEX IF NOT EXISTS idx_withdrawals_status ON withdrawals (status);
       CREATE INDEX IF NOT EXISTS idx_withdrawals_created ON withdrawals (created_at DESC);
       CREATE UNIQUE INDEX IF NOT EXISTS idx_withdrawals_idempotency ON withdrawals (user_id, idempotency_key) WHERE idempotency_key IS NOT NULL AND idempotency_key != '';
+
+      CREATE INDEX IF NOT EXISTS idx_wsl_withdrawal_id ON withdrawal_status_logs (withdrawal_id);
+      CREATE INDEX IF NOT EXISTS idx_wsl_public_withdrawal_id ON withdrawal_status_logs (public_withdrawal_id);
+      CREATE INDEX IF NOT EXISTS idx_wsl_user_id ON withdrawal_status_logs (user_id);
+      CREATE INDEX IF NOT EXISTS idx_wsl_new_status ON withdrawal_status_logs (new_status);
+      CREATE INDEX IF NOT EXISTS idx_wsl_transition ON withdrawal_status_logs (transition_timestamp DESC);
     `);
 
     // Ensure financial_ledger_entries constraint supports NODE_REWARD and WITHDRAWAL
@@ -1567,6 +1595,12 @@ async function seedEconomicConfigs(client: DatabaseClient) {
         value: JSON.stringify(false),
         category: 'GATEWAY',
         description: 'Automated on-chain broadcast for approved withdrawals without manual admin signing',
+      },
+      {
+        key: 'MIN_WITHDRAWAL_AMOUNT',
+        value: JSON.stringify(0.10),
+        category: 'GATEWAY',
+        description: 'Minimum allowed withdrawal amount in USD / USDT for user requests',
       },
       {
         key: 'BNB_PRICE_USD',

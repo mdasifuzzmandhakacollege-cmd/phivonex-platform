@@ -8,6 +8,9 @@ import {
   getWithdrawalByPublicId,
   cancelWithdrawalRequest,
   settleWithdrawalAction,
+  getWithdrawalStateLogs,
+  getSingleWithdrawalStateTimeline,
+  getMinWithdrawalAmount,
 } from '../services/withdrawalService';
 import { broadcastBnbWithdrawal } from '../services/bscSignerService';
 import { verifyCaptcha } from '../services/captchaService';
@@ -293,11 +296,62 @@ withdrawalRouter.post('/admin/broadcast-bsc', requireAdmin, adminFinancialLimite
 });
 
 /**
- * GET /api/withdrawals/admin/mode
- * Check whether withdrawals are in FULL_AUTOMATIC or MANUAL_APPROVAL mode.
+ * GET /api/withdrawals/admin/transition-logs & /api/withdrawals/admin/state-logs
+ * Dedicated administrative audit endpoint for monitoring withdrawal request state transitions and timestamps.
  */
-withdrawalRouter.get('/admin/mode', requireAdmin, async (req: AuthRequest, res: Response) => {
+const handleGetStateLogs = async (req: AuthRequest, res: Response) => {
   try {
+    const page = parseInt(req.query.page as string, 10) || 1;
+    const limit = parseInt(req.query.limit as string, 10) || 20;
+    const status = (req.query.status as string) || undefined;
+    const actorType = (req.query.actorType as string) || undefined;
+    const search = (req.query.search as string) || undefined;
+
+    const data = await getWithdrawalStateLogs({
+      page,
+      limit,
+      status,
+      actorType,
+      search,
+    });
+
+    return res.status(200).json({
+      success: true,
+      logs: data.logs,
+      stats: data.stats,
+      pagination: data.pagination,
+    });
+  } catch (err: any) {
+    console.error('[Withdrawal API] Error fetching transition logs:', err);
+    return res.status(500).json({ error: 'SERVER_ERROR', message: 'Failed to fetch withdrawal state transition logs' });
+  }
+};
+
+withdrawalRouter.get('/admin/transition-logs', requireAdmin, handleGetStateLogs);
+withdrawalRouter.get('/admin/state-logs', requireAdmin, handleGetStateLogs);
+
+/**
+ * GET /api/withdrawals/admin/state-timeline/:publicId
+ * Fetch exact chronological state transition timeline for a single withdrawal request.
+ */
+withdrawalRouter.get('/admin/state-timeline/:publicId', requireAdmin, async (req: AuthRequest, res: Response) => {
+  try {
+    const { publicId } = req.params;
+    const timeline = await getSingleWithdrawalStateTimeline(publicId);
+    return res.status(200).json({ success: true, timeline });
+  } catch (err: any) {
+    console.error('[Withdrawal API] Error fetching state timeline:', err);
+    return res.status(500).json({ error: 'SERVER_ERROR', message: 'Failed to fetch withdrawal state timeline' });
+  }
+});
+
+/**
+ * GET /api/withdrawals/config
+ * Returns real-time public withdrawal configurations (minimum amount, mode, etc.).
+ */
+withdrawalRouter.get('/config', async (_req: AuthRequest, res: Response) => {
+  try {
+    const minAmount = await getMinWithdrawalAmount();
     const db = await getDb();
     const configRes = await db.query(
       `SELECT config_value FROM system_economic_configs WHERE config_key = 'AUTO_WITHDRAWAL_ENABLED' LIMIT 1`
@@ -315,12 +369,95 @@ withdrawalRouter.get('/admin/mode', requireAdmin, async (req: AuthRequest, res: 
 
     return res.status(200).json({
       success: true,
+      minWithdrawalAmount: minAmount,
+      autoWithdrawalEnabled: autoEnabled,
+      mode: autoEnabled ? 'FULL_AUTOMATIC' : 'MANUAL_APPROVAL',
+    });
+  } catch (err: any) {
+    console.error('[Withdrawal API] Error fetching config:', err);
+    return res.status(500).json({ error: 'SERVER_ERROR', message: 'Failed to retrieve withdrawal configuration' });
+  }
+});
+
+/**
+ * GET /api/withdrawals/admin/mode
+ * Check whether withdrawals are in FULL_AUTOMATIC or MANUAL_APPROVAL mode.
+ */
+withdrawalRouter.get('/admin/mode', requireAdmin, async (req: AuthRequest, res: Response) => {
+  try {
+    const db = await getDb();
+    const [modeRes, minRes] = await Promise.all([
+      db.query(`SELECT config_value FROM system_economic_configs WHERE config_key = 'AUTO_WITHDRAWAL_ENABLED' LIMIT 1`).catch(() => ({ rows: [] })),
+      getMinWithdrawalAmount(),
+    ]);
+
+    let autoEnabled = false;
+    if (modeRes.rows.length > 0) {
+      const rawVal = modeRes.rows[0].config_value;
+      try {
+        autoEnabled = typeof rawVal === 'string' ? JSON.parse(rawVal) === true : Boolean(rawVal);
+      } catch {
+        autoEnabled = String(rawVal).toLowerCase() === 'true';
+      }
+    }
+
+    return res.status(200).json({
+      success: true,
+      minWithdrawalAmount: minRes,
       autoWithdrawalEnabled: autoEnabled,
       mode: autoEnabled ? 'FULL_AUTOMATIC' : 'MANUAL_APPROVAL',
     });
   } catch (err: any) {
     console.error('[Withdrawal API] Error fetching mode:', err);
     return res.status(500).json({ error: 'SERVER_ERROR', message: 'Failed to retrieve mode' });
+  }
+});
+
+/**
+ * POST /api/withdrawals/admin/min-amount
+ * Admin endpoint to dynamically set the minimum withdrawal limit.
+ */
+withdrawalRouter.post('/admin/min-amount', requireAdmin, async (req: AuthRequest, res: Response) => {
+  try {
+    const { minAmount } = req.body;
+    const num = parseFloat(minAmount);
+    if (isNaN(num) || num < 0) {
+      return res.status(400).json({ error: 'BAD_REQUEST', message: 'Minimum withdrawal amount must be a number >= 0.' });
+    }
+
+    const db = await getDb();
+    const adminPublicId = (req.user as any)?.publicId || (req.user as any)?.public_id || 'ADMIN';
+
+    await db.query(`
+      INSERT INTO system_economic_configs (id, config_key, config_value, category, description, status, version, updated_by_admin_public_id, updated_at)
+      VALUES (gen_random_uuid(), 'MIN_WITHDRAWAL_AMOUNT', $1, 'GATEWAY', 'Minimum allowed withdrawal amount in USD / USDT', 'ACTIVE', 1, $2, CURRENT_TIMESTAMP)
+      ON CONFLICT (config_key) DO UPDATE
+      SET config_value = EXCLUDED.config_value,
+          updated_by_admin_public_id = EXCLUDED.updated_by_admin_public_id,
+          version = system_economic_configs.version + 1,
+          updated_at = CURRENT_TIMESTAMP
+    `, [JSON.stringify(num), adminPublicId]);
+
+    // Sync to Firestore for cloud persistence
+    try {
+      const { adminFirestore } = await import('../../lib/firebase-admin');
+      await adminFirestore.collection('system_settings').doc('withdrawals').set({
+        minWithdrawalAmount: num,
+        updatedAt: new Date().toISOString(),
+        updatedBy: adminPublicId,
+      }, { merge: true });
+    } catch (fsErr) {
+      console.warn('[Withdrawal API] Firestore min-amount sync warning:', fsErr);
+    }
+
+    return res.status(200).json({
+      success: true,
+      minWithdrawalAmount: num,
+      message: `Minimum withdrawal amount updated to $${num.toFixed(2)} USD (${num} USDT).`,
+    });
+  } catch (err: any) {
+    console.error('[Withdrawal API] Error setting min-amount:', err);
+    return res.status(500).json({ error: 'SERVER_ERROR', message: 'Failed to update minimum withdrawal amount' });
   }
 });
 

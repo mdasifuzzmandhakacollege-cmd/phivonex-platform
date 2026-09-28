@@ -189,22 +189,48 @@ depositRouter.post('/submit-txhash', requireAuth, depositLimiter, async (req: Au
     const requestedAsset = ((asset as string) || 'USDT').toUpperCase() === 'BNB' ? 'BNB' : 'USDT';
     const db = await getDb();
 
-    // 1. Check if this txHash has already been processed or credited
+    // 1. Check if this txHash has ALREADY been submitted, processed, or credited globally in DB, Ledger, or Firestore
     const existing = await db.query(
       `SELECT id, user_id, status, amount, asset FROM blockchain_deposits WHERE LOWER(tx_hash) = $1 LIMIT 1`,
       [cleanTxHash]
     );
 
     if (existing.rows.length > 0) {
-      const row = existing.rows[0];
-      if (row.status === 'CREDITED') {
+      res.status(409).json({
+        success: false,
+        error: 'TX_ALREADY_USED',
+        message: 'This transaction hash has already been submitted and credited on PHIVONEX. Re-submitting transaction hashes is strictly prohibited for life.',
+      });
+      return;
+    }
+
+    const existingLedger = await db.query(
+      `SELECT id FROM financial_ledger_entries WHERE description ILIKE $1 OR source_ref ILIKE $1 LIMIT 1`,
+      [`%${cleanTxHash}%`]
+    );
+
+    if (existingLedger.rows.length > 0) {
+      res.status(409).json({
+        success: false,
+        error: 'TX_ALREADY_CREDITED',
+        message: 'This transaction hash has already been credited in the financial ledger and cannot be reused.',
+      });
+      return;
+    }
+
+    try {
+      const { adminFirestore } = await import('../../lib/firebase-admin');
+      const fsSnap = await adminFirestore.collection('blockchain_deposits').where('txHash', '==', cleanTxHash).limit(1).get();
+      if (!fsSnap.empty) {
         res.status(409).json({
           success: false,
-          error: 'TX_ALREADY_CREDITED',
-          message: 'This transaction hash has already been credited to an account.',
+          error: 'TX_ALREADY_USED_FIRESTORE',
+          message: 'This transaction hash has already been processed and saved in real-time audit storage. Re-submitting is prohibited.',
         });
         return;
       }
+    } catch (fsErr) {
+      console.warn('[Deposit API] Firestore transaction hash uniqueness check warning:', fsErr);
     }
 
     // 2. Query BNB Smart Chain node for transaction receipt using resilient multi-RPC fallback
@@ -350,7 +376,7 @@ depositRouter.post('/submit-txhash', requireAuth, depositLimiter, async (req: Au
     const publicDepositId = generateDepositPublicId();
     const now = new Date();
 
-    await db.query(
+    const insertRes = await db.query(
       `
       INSERT INTO blockchain_deposits (
         id, public_deposit_id, user_id, chain_id, asset,
@@ -360,8 +386,9 @@ depositRouter.post('/submit-txhash', requireAuth, depositLimiter, async (req: Au
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'CREDITED', $13, $13, $13, $13, $13)
       ON CONFLICT (chain_id, tx_hash, log_index, to_address) DO UPDATE
         SET status = 'CREDITED',
-            credited_at = EXCLUDED.credited_at,
+            credited_at = COALESCE(blockchain_deposits.credited_at, EXCLUDED.credited_at),
             updated_at = CURRENT_TIMESTAMP
+      RETURNING id, public_deposit_id
       `,
       [
         depositId,
@@ -380,12 +407,15 @@ depositRouter.post('/submit-txhash', requireAuth, depositLimiter, async (req: Au
       ]
     );
 
-    // 5. Post financial ledger credit
+    const actualDepositId = insertRes.rows[0]?.id || depositId;
+    const actualPublicDepositId = insertRes.rows[0]?.public_deposit_id || publicDepositId;
+
+    // 5. Post financial ledger credit (idempotent via unique constraint on source_type, source_id, entry_type)
     await postLedgerCredit({
       userId,
       sourceType: 'BLOCKCHAIN_DEPOSIT',
-      sourceId: depositId,
-      sourceRef: publicDepositId,
+      sourceId: actualDepositId,
+      sourceRef: actualPublicDepositId,
       amount: detectedAmount,
       description: `On-chain ${detectedAsset} deposit verified via TxHash ${cleanTxHash.slice(0, 10)}...`,
       currency: detectedAsset,

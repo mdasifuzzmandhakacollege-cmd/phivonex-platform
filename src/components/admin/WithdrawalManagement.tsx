@@ -87,23 +87,60 @@ export const WithdrawalManagement: React.FC<WithdrawalManagementProps> = ({
   const [actionInProgress, setActionInProgress] = useState<boolean>(false);
   const [feedbackMessage, setFeedbackMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
-  // Automated Payout Switch State
+  // Automated Payout Switch & Min Withdrawal State
   const [autoWithdrawalEnabled, setAutoWithdrawalEnabled] = useState<boolean>(false);
+  const [minWithdrawalInput, setMinWithdrawalInput] = useState<string>('0.10');
+  const [savingMinAmount, setSavingMinAmount] = useState<boolean>(false);
   const [togglingMode, setTogglingMode] = useState<boolean>(false);
   const [instantPayoutLoadingId, setInstantPayoutLoadingId] = useState<string | null>(null);
 
-  // Fetch Auto-Withdrawal Mode
+  // Fetch Auto-Withdrawal Mode & Minimum Amount
   const fetchMode = useCallback(async () => {
     try {
       const res = await fetch('/api/withdrawals/admin/mode');
       if (res.ok) {
         const data = await res.json();
         setAutoWithdrawalEnabled(Boolean(data.autoWithdrawalEnabled));
+        if (typeof data.minWithdrawalAmount === 'number') {
+          setMinWithdrawalInput(String(data.minWithdrawalAmount));
+        }
       }
     } catch (e) {
-      console.warn('[WithdrawalManagement] Failed to read auto mode:', e);
+      console.warn('[WithdrawalManagement] Failed to read auto mode/min amount:', e);
     }
   }, []);
+
+  const handleSaveMinAmount = async () => {
+    try {
+      setSavingMinAmount(true);
+      const num = parseFloat(minWithdrawalInput);
+      if (isNaN(num) || num < 0) {
+        setFeedbackMessage({ type: 'error', text: 'Please enter a valid non-negative number for minimum withdrawal.' });
+        return;
+      }
+      const res = await fetch('/api/withdrawals/admin/min-amount', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ minAmount: num }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setFeedbackMessage({
+          type: 'success',
+          text: data.message || `Minimum withdrawal limit updated to $${num.toFixed(2)} USD (${num} USDT).`,
+        });
+      } else {
+        throw new Error(data.message || 'Failed to save minimum withdrawal limit');
+      }
+    } catch (err: any) {
+      setFeedbackMessage({
+        type: 'error',
+        text: err.message || 'Failed to update minimum withdrawal limit',
+      });
+    } finally {
+      setSavingMinAmount(false);
+    }
+  };
 
   const handleToggleMode = async () => {
     try {
@@ -416,6 +453,68 @@ export const WithdrawalManagement: React.FC<WithdrawalManagementProps> = ({
               <Power className="w-4 h-4" />
             )}
             <span>{autoWithdrawalEnabled ? 'Switch to Manual Approval' : 'Switch to Full Automatic'}</span>
+          </button>
+        </div>
+      </div>
+
+      {/* Minimum Withdrawal Amount Governance Card */}
+      <div className="p-5 rounded-2xl bg-[#07101D] border border-cyan-500/30 shadow-xl flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div className="flex items-center gap-3.5">
+          <div className="w-12 h-12 rounded-xl bg-cyan-500/20 text-cyan-400 border border-cyan-500/30 flex items-center justify-center shrink-0">
+            <DollarSign className="w-6 h-6" />
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <h3 className="text-base font-bold text-white">Minimum Withdrawal Limit Setting</h3>
+              <span className="px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold bg-cyan-500/20 text-cyan-300 border border-cyan-500/40">
+                DYNAMIC RULE
+              </span>
+            </div>
+            <p className="text-xs text-[#98A2B3] mt-1 max-w-xl">
+              Set the minimum threshold required for user withdrawal requests. Instantly displayed and enforced across both User &amp; Admin Panels.
+            </p>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-3 shrink-0">
+          <div className="flex items-center gap-2 bg-[#05070B] p-1.5 rounded-xl border border-white/[0.12]">
+            <span className="text-xs font-mono font-bold text-[#98A2B3] pl-2">$</span>
+            <input
+              type="number"
+              step="0.01"
+              min="0"
+              placeholder="0.10"
+              value={minWithdrawalInput}
+              onChange={(e) => setMinWithdrawalInput(e.target.value)}
+              className="w-28 bg-transparent text-white font-mono font-bold text-sm outline-none"
+            />
+            <span className="text-xs font-mono text-cyan-400 pr-2">USDT</span>
+          </div>
+
+          <div className="flex items-center gap-1">
+            {['0.10', '1.00', '10.00', '50.00'].map((val) => (
+              <button
+                key={val}
+                type="button"
+                onClick={() => setMinWithdrawalInput(val)}
+                className="px-2 py-1 rounded bg-white/[0.05] hover:bg-white/[0.1] text-white/80 hover:text-white text-[11px] font-mono font-bold border border-white/[0.08] transition-colors cursor-pointer"
+              >
+                ${val}
+              </button>
+            ))}
+          </div>
+
+          <button
+            onClick={handleSaveMinAmount}
+            disabled={savingMinAmount}
+            className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 hover:brightness-110 text-white font-bold text-xs flex items-center gap-2 transition-all cursor-pointer shadow-lg active:scale-95 whitespace-nowrap"
+          >
+            {savingMinAmount ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <CheckCircle2 className="w-4 h-4" />
+            )}
+            <span>Save Minimum Limit</span>
           </button>
         </div>
       </div>

@@ -51,6 +51,7 @@ export const WithdrawalsView: React.FC<WithdrawalsViewProps> = ({ user, onNaviga
   const [availableBalance, setAvailableBalance] = useState<number>(0);
   const [totalWithdrawn, setTotalWithdrawn] = useState<number>(0);
   const [pendingTotal, setPendingTotal] = useState<number>(0);
+  const [minWithdrawalAmount, setMinWithdrawalAmount] = useState<number>(0.10);
   const [withdrawals, setWithdrawals] = useState<WithdrawalItem[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [submitting, setSubmitting] = useState<boolean>(false);
@@ -71,19 +72,27 @@ export const WithdrawalsView: React.FC<WithdrawalsViewProps> = ({ user, onNaviga
   // Selected Detail Modal
   const [selectedItem, setSelectedItem] = useState<WithdrawalItem | null>(null);
 
-  // Fetch Wallet Balance & Withdrawal History
+  // Fetch Wallet Balance & Withdrawal History & Config
   const fetchData = useCallback(async () => {
     try {
       setLoading(true);
-      const [walletRes, historyRes] = await Promise.all([
+      const [walletRes, historyRes, configRes] = await Promise.all([
         fetch('/api/wallet/me', { credentials: 'include' }).catch(() => null),
         fetch('/api/withdrawals/me?limit=50').catch(() => null),
+        fetch('/api/withdrawals/config').catch(() => null),
       ]);
 
       if (walletRes && walletRes.ok) {
         const walletData = await walletRes.json();
         setAvailableBalance(walletData.availableBalance ?? walletData.ledgerBalance ?? 0);
         setTotalWithdrawn(walletData.totalWithdrawn ?? 0);
+      }
+
+      if (configRes && configRes.ok) {
+        const configData = await configRes.json();
+        if (typeof configData.minWithdrawalAmount === 'number') {
+          setMinWithdrawalAmount(configData.minWithdrawalAmount);
+        }
       }
 
       if (historyRes && historyRes.ok) {
@@ -121,8 +130,8 @@ export const WithdrawalsView: React.FC<WithdrawalsViewProps> = ({ user, onNaviga
       return;
     }
 
-    if (numAmount < 10.00) {
-      setFormError('Minimum withdrawal amount is $10.00 USD.');
+    if (numAmount < minWithdrawalAmount) {
+      setFormError(`Minimum withdrawal amount is $${minWithdrawalAmount.toFixed(2)} USD (${minWithdrawalAmount} USDT).`);
       return;
     }
 
@@ -438,7 +447,7 @@ export const WithdrawalsView: React.FC<WithdrawalsViewProps> = ({ user, onNaviga
                 <input
                   type="number"
                   step="0.01"
-                  min="10"
+                  min={minWithdrawalAmount}
                   max={availableBalance > 0 ? availableBalance : 0}
                   placeholder="0.00"
                   value={amountInput}
@@ -455,7 +464,7 @@ export const WithdrawalsView: React.FC<WithdrawalsViewProps> = ({ user, onNaviga
                 </button>
               </div>
               <p className="text-[11px] text-[#98A2B3] flex items-center justify-between">
-                <span>Minimum limit: $10.00 USD</span>
+                <span>Minimum limit: ${minWithdrawalAmount.toFixed(2)} USD ({minWithdrawalAmount} USDT)</span>
                 <span className="text-[#32D583]">Ultra-low network gas fee</span>
               </p>
             </div>
@@ -537,7 +546,7 @@ export const WithdrawalsView: React.FC<WithdrawalsViewProps> = ({ user, onNaviga
             {/* Submit Button */}
             <button
               type="submit"
-              disabled={submitting || availableBalance < 10}
+              disabled={submitting || availableBalance < minWithdrawalAmount}
               className="w-full py-3.5 px-4 rounded-xl bg-gradient-to-r from-[#F0B90B] to-[#F5D061] hover:brightness-110 disabled:opacity-50 disabled:cursor-not-allowed text-slate-950 font-extrabold text-sm flex items-center justify-center gap-2 transition-all cursor-pointer min-h-[48px] shadow-lg shadow-[#F0B90B]/20"
             >
               {submitting ? (

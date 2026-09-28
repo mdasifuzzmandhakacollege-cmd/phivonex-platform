@@ -67,6 +67,69 @@ function mapRowToWithdrawalRecord(row: any): WithdrawalRecord {
   };
 }
 
+export async function logWithdrawalStateTransition(params: {
+  withdrawalId: string;
+  publicWithdrawalId: string;
+  userId: string;
+  previousStatus: string | null;
+  newStatus: string;
+  actorType: 'USER' | 'ADMIN' | 'SYSTEM';
+  actorId?: string;
+  actorEmail?: string;
+  reason?: string;
+  amount: number;
+  destinationType: string;
+  destinationReference: string;
+  txHash?: string;
+}): Promise<void> {
+  try {
+    const db = await getDb();
+    const id = uuidv4();
+    const now = new Date();
+
+    const userRes = await db.query(
+      `SELECT email, full_name FROM users WHERE id = $1 LIMIT 1`,
+      [params.userId]
+    ).catch(() => ({ rows: [] }));
+
+    const userEmail = userRes.rows[0]?.email || null;
+    const userName = userRes.rows[0]?.full_name || null;
+
+    await db.query(
+      `
+      INSERT INTO withdrawal_status_logs (
+        id, withdrawal_id, public_withdrawal_id, user_id, user_email, user_name,
+        previous_status, new_status, actor_type, actor_id, actor_email,
+        reason, amount, destination_type, destination_reference, tx_hash,
+        transition_timestamp, created_at
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $17)
+      `,
+      [
+        id,
+        params.withdrawalId,
+        params.publicWithdrawalId,
+        params.userId,
+        userEmail,
+        userName,
+        params.previousStatus,
+        params.newStatus,
+        params.actorType,
+        params.actorId || null,
+        params.actorEmail || null,
+        params.reason || null,
+        params.amount,
+        params.destinationType,
+        params.destinationReference,
+        params.txHash || null,
+        now,
+      ]
+    );
+  } catch (err) {
+    console.warn('[WithdrawalStateLog] Failed to insert state transition log:', err);
+  }
+}
+
 const userLocks = new Map<string, Promise<any>>();
 
 function withUserLock<T>(userId: string, fn: () => Promise<T>): Promise<T> {
@@ -77,6 +140,26 @@ function withUserLock<T>(userId: string, fn: () => Promise<T>): Promise<T> {
   );
   userLocks.set(userId, res.catch(() => {}));
   return res;
+}
+
+export async function getMinWithdrawalAmount(): Promise<number> {
+  try {
+    const db = await getDb();
+    const res = await db.query(
+      `SELECT config_value FROM system_economic_configs WHERE config_key = 'MIN_WITHDRAWAL_AMOUNT' LIMIT 1`
+    ).catch(() => ({ rows: [] }));
+
+    if (res.rows.length > 0) {
+      const val = res.rows[0].config_value;
+      const num = typeof val === 'number' ? val : parseFloat(typeof val === 'string' ? JSON.parse(val) : val);
+      if (!isNaN(num) && num >= 0) {
+        return num;
+      }
+    }
+  } catch (err) {
+    console.warn('[Withdrawal Service] Failed to read MIN_WITHDRAWAL_AMOUNT config, defaulting to 0.10:', err);
+  }
+  return 0.10;
 }
 
 /**
@@ -97,9 +180,10 @@ export async function createWithdrawalRequest(params: {
       throw new Error('INVALID_AMOUNT: Withdrawal amount must be a positive number greater than 0.');
     }
 
+    const minAmount = await getMinWithdrawalAmount();
     const cleanAmount = Math.round(amount * 100) / 100;
-    if (cleanAmount < 10.00) {
-      throw new Error('MINIMUM_AMOUNT_LIMIT: Minimum withdrawal amount is $10.00.');
+    if (cleanAmount < minAmount) {
+      throw new Error(`MINIMUM_AMOUNT_LIMIT: Minimum withdrawal amount is $${minAmount.toFixed(2)} USD (or ${minAmount} USDT).`);
     }
 
     if (!destinationType || !destinationType.trim()) {
@@ -180,6 +264,20 @@ export async function createWithdrawalRequest(params: {
     );
 
     const withdrawal = mapRowToWithdrawalRecord(insertRes.rows[0]);
+
+    // Log State Transition: NULL -> PENDING
+    await logWithdrawalStateTransition({
+      withdrawalId: withdrawal.id,
+      publicWithdrawalId: withdrawal.publicWithdrawalId,
+      userId: withdrawal.userId,
+      previousStatus: null,
+      newStatus: 'PENDING',
+      actorType: 'USER',
+      amount: withdrawal.amount,
+      destinationType: withdrawal.destinationType,
+      destinationReference: withdrawal.destinationReference,
+      reason: 'Withdrawal request created by user',
+    });
 
     // 5. Reserve balance immediately by posting a DEBIT entry in the financial ledger
     await postLedgerDebit({
@@ -348,6 +446,20 @@ export async function cancelWithdrawalRequest(
 
   const updatedWithdrawal = mapRowToWithdrawalRecord(updateRes.rows[0]);
 
+  // Log State Transition: PENDING -> CANCELLED
+  await logWithdrawalStateTransition({
+    withdrawalId: updatedWithdrawal.id,
+    publicWithdrawalId: updatedWithdrawal.publicWithdrawalId,
+    userId: updatedWithdrawal.userId,
+    previousStatus: withdrawal.status,
+    newStatus: 'CANCELLED',
+    actorType: 'USER',
+    amount: updatedWithdrawal.amount,
+    destinationType: updatedWithdrawal.destinationType,
+    destinationReference: updatedWithdrawal.destinationReference,
+    reason: 'Cancelled by user account',
+  });
+
   // Release reserved funds back to available ledger balance
   await postLedgerReversal({
     userId,
@@ -371,6 +483,8 @@ export async function settleWithdrawalAction(params: {
   withdrawalIdOrPublicId: string;
   action: 'APPROVE' | 'COMPLETE' | 'REJECT' | 'FAIL' | 'MARK_PROCESSING' | 'PROCESSING';
   rejectionReason?: string;
+  actorEmail?: string;
+  txHash?: string;
 }): Promise<WithdrawalRecord> {
   const { withdrawalIdOrPublicId, action, rejectionReason } = params;
 
@@ -400,6 +514,22 @@ export async function settleWithdrawalAction(params: {
 
     if (res.rows.length === 0) throw new Error('CONCURRENCY_ERROR: Status changed concurrently.');
     const approvedRec = mapRowToWithdrawalRecord(res.rows[0]);
+
+    // Log State Transition: PENDING -> APPROVED
+    await logWithdrawalStateTransition({
+      withdrawalId: approvedRec.id,
+      publicWithdrawalId: approvedRec.publicWithdrawalId,
+      userId: approvedRec.userId,
+      previousStatus: withdrawal.status,
+      newStatus: 'APPROVED',
+      actorType: params.actorEmail ? 'ADMIN' : 'SYSTEM',
+      actorEmail: params.actorEmail,
+      amount: approvedRec.amount,
+      destinationType: approvedRec.destinationType,
+      destinationReference: approvedRec.destinationReference,
+      reason: 'Approved for disbursement',
+    });
+
     try {
       await notifyWithdrawalStatus({
         userId: approvedRec.userId,
@@ -429,7 +559,24 @@ export async function settleWithdrawalAction(params: {
     );
 
     if (res.rows.length === 0) throw new Error('CONCURRENCY_ERROR: Status changed concurrently.');
-    return mapRowToWithdrawalRecord(res.rows[0]);
+    const processingRec = mapRowToWithdrawalRecord(res.rows[0]);
+
+    // Log State Transition: APPROVED/PENDING -> PROCESSING
+    await logWithdrawalStateTransition({
+      withdrawalId: processingRec.id,
+      publicWithdrawalId: processingRec.publicWithdrawalId,
+      userId: processingRec.userId,
+      previousStatus: withdrawal.status,
+      newStatus: 'PROCESSING',
+      actorType: params.actorEmail ? 'ADMIN' : 'SYSTEM',
+      actorEmail: params.actorEmail,
+      amount: processingRec.amount,
+      destinationType: processingRec.destinationType,
+      destinationReference: processingRec.destinationReference,
+      reason: 'On-chain broadcast / settlement in progress',
+    });
+
+    return processingRec;
   }
 
   if (normalizedAction === 'COMPLETE') {
@@ -449,6 +596,23 @@ export async function settleWithdrawalAction(params: {
 
     if (res.rows.length === 0) throw new Error('CONCURRENCY_ERROR: Withdrawal was already processed or cancelled.');
     const completedRec = mapRowToWithdrawalRecord(res.rows[0]);
+
+    // Log State Transition: APPROVED/PROCESSING -> COMPLETED
+    await logWithdrawalStateTransition({
+      withdrawalId: completedRec.id,
+      publicWithdrawalId: completedRec.publicWithdrawalId,
+      userId: completedRec.userId,
+      previousStatus: withdrawal.status,
+      newStatus: 'COMPLETED',
+      actorType: params.actorEmail ? 'ADMIN' : 'SYSTEM',
+      actorEmail: params.actorEmail,
+      amount: completedRec.amount,
+      destinationType: completedRec.destinationType,
+      destinationReference: completedRec.destinationReference,
+      reason: 'Disbursement completed successfully on-chain',
+      txHash: params.txHash,
+    });
+
     try {
       await notifyWithdrawalStatus({
         userId: completedRec.userId,
@@ -503,6 +667,21 @@ export async function settleWithdrawalAction(params: {
 
     if (res.rows.length === 0) throw new Error('CONCURRENCY_ERROR: Status changed concurrently.');
     const updated = mapRowToWithdrawalRecord(res.rows[0]);
+
+    // Log State Transition: ANY -> REJECTED
+    await logWithdrawalStateTransition({
+      withdrawalId: updated.id,
+      publicWithdrawalId: updated.publicWithdrawalId,
+      userId: updated.userId,
+      previousStatus: withdrawal.status,
+      newStatus: 'REJECTED',
+      actorType: params.actorEmail ? 'ADMIN' : 'SYSTEM',
+      actorEmail: params.actorEmail,
+      amount: updated.amount,
+      destinationType: updated.destinationType,
+      destinationReference: updated.destinationReference,
+      reason,
+    });
 
     // Release reserved funds
     await postLedgerReversal({
@@ -572,6 +751,21 @@ export async function settleWithdrawalAction(params: {
     if (res.rows.length === 0) throw new Error('CONCURRENCY_ERROR: Status changed concurrently.');
     const updated = mapRowToWithdrawalRecord(res.rows[0]);
 
+    // Log State Transition: ANY -> FAILED
+    await logWithdrawalStateTransition({
+      withdrawalId: updated.id,
+      publicWithdrawalId: updated.publicWithdrawalId,
+      userId: updated.userId,
+      previousStatus: withdrawal.status,
+      newStatus: 'FAILED',
+      actorType: params.actorEmail ? 'ADMIN' : 'SYSTEM',
+      actorEmail: params.actorEmail,
+      amount: updated.amount,
+      destinationType: updated.destinationType,
+      destinationReference: updated.destinationReference,
+      reason,
+    });
+
     // Release reserved funds
     await postLedgerReversal({
       userId: updated.userId,
@@ -609,4 +803,261 @@ export async function settleWithdrawalAction(params: {
   }
 
   throw new Error(`INVALID_ACTION: Unknown settlement action ${action}`);
+}
+
+export async function getWithdrawalStateLogs(params: {
+  page?: number;
+  limit?: number;
+  status?: string;
+  actorType?: string;
+  search?: string;
+}): Promise<{
+  logs: any[];
+  pagination: { page: number; limit: number; totalCount: number; totalPages: number };
+  stats: {
+    totalTransitions: number;
+    pendingCount: number;
+    approvedCount: number;
+    completedCount: number;
+    rejectedCount: number;
+    failedCount: number;
+    cancelledCount: number;
+  };
+}> {
+  const db = await getDb();
+  const safePage = Math.max(1, params.page || 1);
+  const safeLimit = Math.min(100, Math.max(1, params.limit || 20));
+  const offset = (safePage - 1) * safeLimit;
+
+  await backfillMissingWithdrawalStateLogs();
+
+  let whereClauses: string[] = ['1=1'];
+  let queryParams: any[] = [];
+  let paramIdx = 1;
+
+  if (params.status && params.status !== 'ALL' && params.status !== 'all') {
+    whereClauses.push(`l.new_status = $${paramIdx}`);
+    queryParams.push(params.status.toUpperCase());
+    paramIdx++;
+  }
+
+  if (params.actorType && params.actorType !== 'ALL' && params.actorType !== 'all') {
+    whereClauses.push(`l.actor_type = $${paramIdx}`);
+    queryParams.push(params.actorType.toUpperCase());
+    paramIdx++;
+  }
+
+  if (params.search && params.search.trim()) {
+    const s = `%${params.search.trim()}%`;
+    whereClauses.push(`(
+      l.public_withdrawal_id ILIKE $${paramIdx} OR
+      l.user_email ILIKE $${paramIdx} OR
+      l.user_name ILIKE $${paramIdx} OR
+      l.reason ILIKE $${paramIdx} OR
+      l.tx_hash ILIKE $${paramIdx} OR
+      l.destination_reference ILIKE $${paramIdx}
+    )`);
+    queryParams.push(s);
+    paramIdx++;
+  }
+
+  const whereSql = whereClauses.join(' AND ');
+
+  const countRes = await db.query(
+    `SELECT COUNT(*)::int AS count FROM withdrawal_status_logs l WHERE ${whereSql}`,
+    queryParams
+  );
+  const totalCount = Number(countRes.rows[0]?.count || 0);
+
+  const txQueryParams = [...queryParams, safeLimit, offset];
+  const listRes = await db.query(
+    `
+    SELECT 
+      l.id,
+      l.withdrawal_id AS "withdrawalId",
+      l.public_withdrawal_id AS "publicWithdrawalId",
+      l.user_id AS "userId",
+      COALESCE(l.user_email, u.email) AS "userEmail",
+      COALESCE(l.user_name, u.full_name) AS "userName",
+      l.previous_status AS "previousStatus",
+      l.new_status AS "newStatus",
+      l.actor_type AS "actorType",
+      l.actor_id AS "actorId",
+      l.actor_email AS "actorEmail",
+      l.reason,
+      l.amount::float AS amount,
+      l.destination_type AS "destinationType",
+      l.destination_reference AS "destinationReference",
+      l.tx_hash AS "txHash",
+      l.transition_timestamp AS "transitionTimestamp",
+      l.created_at AS "createdAt"
+    FROM withdrawal_status_logs l
+    LEFT JOIN users u ON u.id = l.user_id
+    WHERE ${whereSql}
+    ORDER BY l.transition_timestamp DESC
+    LIMIT $${paramIdx} OFFSET $${paramIdx + 1}
+    `,
+    txQueryParams
+  );
+
+  const statsRes = await db.query(`
+    SELECT
+      COUNT(*)::int AS "totalTransitions",
+      COUNT(CASE WHEN new_status = 'PENDING' THEN 1 END)::int AS "pendingCount",
+      COUNT(CASE WHEN new_status = 'APPROVED' THEN 1 END)::int AS "approvedCount",
+      COUNT(CASE WHEN new_status = 'COMPLETED' THEN 1 END)::int AS "completedCount",
+      COUNT(CASE WHEN new_status = 'REJECTED' THEN 1 END)::int AS "rejectedCount",
+      COUNT(CASE WHEN new_status = 'FAILED' THEN 1 END)::int AS "failedCount",
+      COUNT(CASE WHEN new_status = 'CANCELLED' THEN 1 END)::int AS "cancelledCount"
+    FROM withdrawal_status_logs
+  `);
+
+  const stats = statsRes.rows[0] || {
+    totalTransitions: 0,
+    pendingCount: 0,
+    approvedCount: 0,
+    completedCount: 0,
+    rejectedCount: 0,
+    failedCount: 0,
+    cancelledCount: 0,
+  };
+
+  const totalPages = Math.ceil(totalCount / safeLimit) || 1;
+
+  return {
+    logs: listRes.rows,
+    pagination: {
+      page: safePage,
+      limit: safeLimit,
+      totalCount,
+      totalPages,
+    },
+    stats,
+  };
+}
+
+export async function getSingleWithdrawalStateTimeline(publicId: string): Promise<any[]> {
+  const db = await getDb();
+  await backfillMissingWithdrawalStateLogs();
+
+  const res = await db.query(
+    `
+    SELECT 
+      l.id,
+      l.withdrawal_id AS "withdrawalId",
+      l.public_withdrawal_id AS "publicWithdrawalId",
+      l.user_id AS "userId",
+      COALESCE(l.user_email, u.email) AS "userEmail",
+      COALESCE(l.user_name, u.full_name) AS "userName",
+      l.previous_status AS "previousStatus",
+      l.new_status AS "newStatus",
+      l.actor_type AS "actorType",
+      l.actor_id AS "actorId",
+      l.actor_email AS "actorEmail",
+      l.reason,
+      l.amount::float AS amount,
+      l.destination_type AS "destinationType",
+      l.destination_reference AS "destinationReference",
+      l.tx_hash AS "txHash",
+      l.transition_timestamp AS "transitionTimestamp",
+      l.created_at AS "createdAt"
+    FROM withdrawal_status_logs l
+    LEFT JOIN users u ON u.id = l.user_id
+    WHERE l.public_withdrawal_id = $1 OR l.withdrawal_id::text = $1
+    ORDER BY l.transition_timestamp ASC
+    `,
+    [publicId]
+  );
+
+  return res.rows;
+}
+
+export async function backfillMissingWithdrawalStateLogs(): Promise<void> {
+  try {
+    const db = await getDb();
+    const unlogged = await db.query(`
+      SELECT w.*, u.email AS user_email, u.full_name AS user_name
+      FROM withdrawals w
+      LEFT JOIN users u ON u.id = w.user_id
+      WHERE NOT EXISTS (
+        SELECT 1 FROM withdrawal_status_logs l WHERE l.withdrawal_id = w.id
+      )
+    `);
+
+    for (const w of unlogged.rows) {
+      const reqTime = w.requested_at || w.created_at || new Date();
+      await db.query(`
+        INSERT INTO withdrawal_status_logs (
+          id, withdrawal_id, public_withdrawal_id, user_id, user_email, user_name,
+          previous_status, new_status, actor_type, reason, amount, destination_type, destination_reference,
+          transition_timestamp, created_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, NULL, 'PENDING', 'USER', 'Withdrawal requested by user', $7, $8, $9, $10, $10)
+      `, [
+        uuidv4(), w.id, w.public_withdrawal_id, w.user_id, w.user_email, w.user_name,
+        w.amount, w.destination_type, w.destination_reference, reqTime
+      ]);
+
+      if (w.approved_at) {
+        await db.query(`
+          INSERT INTO withdrawal_status_logs (
+            id, withdrawal_id, public_withdrawal_id, user_id, user_email, user_name,
+            previous_status, new_status, actor_type, reason, amount, destination_type, destination_reference,
+            transition_timestamp, created_at
+          ) VALUES ($1, $2, $3, $4, $5, $6, 'PENDING', 'APPROVED', 'ADMIN', 'Withdrawal request approved', $7, $8, $9, $10, $10)
+        `, [
+          uuidv4(), w.id, w.public_withdrawal_id, w.user_id, w.user_email, w.user_name,
+          w.amount, w.destination_type, w.destination_reference, w.approved_at
+        ]);
+      }
+
+      if (w.status === 'COMPLETED' && w.completed_at) {
+        const prev = w.approved_at ? 'APPROVED' : 'PENDING';
+        await db.query(`
+          INSERT INTO withdrawal_status_logs (
+            id, withdrawal_id, public_withdrawal_id, user_id, user_email, user_name,
+            previous_status, new_status, actor_type, reason, amount, destination_type, destination_reference,
+            transition_timestamp, created_at
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'COMPLETED', 'SYSTEM', 'Payout disbursement completed on-chain', $8, $9, $10, $11, $11)
+        `, [
+          uuidv4(), w.id, w.public_withdrawal_id, w.user_id, w.user_email, w.user_name, prev,
+          w.amount, w.destination_type, w.destination_reference, w.completed_at
+        ]);
+      } else if (w.status === 'REJECTED' && w.rejected_at) {
+        await db.query(`
+          INSERT INTO withdrawal_status_logs (
+            id, withdrawal_id, public_withdrawal_id, user_id, user_email, user_name,
+            previous_status, new_status, actor_type, reason, amount, destination_type, destination_reference,
+            transition_timestamp, created_at
+          ) VALUES ($1, $2, $3, $4, $5, $6, 'PENDING', 'REJECTED', 'ADMIN', $7, $8, $9, $10, $11, $11)
+        `, [
+          uuidv4(), w.id, w.public_withdrawal_id, w.user_id, w.user_email, w.user_name,
+          w.rejection_reason || 'Administrative rejection', w.amount, w.destination_type, w.destination_reference, w.rejected_at
+        ]);
+      } else if (w.status === 'CANCELLED' && w.cancelled_at) {
+        await db.query(`
+          INSERT INTO withdrawal_status_logs (
+            id, withdrawal_id, public_withdrawal_id, user_id, user_email, user_name,
+            previous_status, new_status, actor_type, reason, amount, destination_type, destination_reference,
+            transition_timestamp, created_at
+          ) VALUES ($1, $2, $3, $4, $5, $6, 'PENDING', 'CANCELLED', 'USER', 'Withdrawal request cancelled by user', $7, $8, $9, $10, $10)
+        `, [
+          uuidv4(), w.id, w.public_withdrawal_id, w.user_id, w.user_email, w.user_name,
+          w.amount, w.destination_type, w.destination_reference, w.cancelled_at
+        ]);
+      } else if (w.status === 'FAILED' && w.failed_at) {
+        await db.query(`
+          INSERT INTO withdrawal_status_logs (
+            id, withdrawal_id, public_withdrawal_id, user_id, user_email, user_name,
+            previous_status, new_status, actor_type, reason, amount, destination_type, destination_reference,
+            transition_timestamp, created_at
+          ) VALUES ($1, $2, $3, $4, $5, $6, 'PENDING', 'FAILED', 'SYSTEM', $7, $8, $9, $10, $11, $11)
+        `, [
+          uuidv4(), w.id, w.public_withdrawal_id, w.user_id, w.user_email, w.user_name,
+          w.rejection_reason || 'Settlement broadcast failed', w.amount, w.destination_type, w.destination_reference, w.failed_at
+        ]);
+      }
+    }
+  } catch (err) {
+    console.warn('[WithdrawalStateLog] Error backfilling state logs:', err);
+  }
 }

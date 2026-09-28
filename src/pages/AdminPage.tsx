@@ -48,6 +48,7 @@ import { TreasuryMovementChart } from '../components/admin/TreasuryMovementChart
 import { CloudSqlDiagnosticCard } from '../components/admin/CloudSqlDiagnosticCard';
 import { OffersManagement } from '../components/admin/OffersManagement';
 import { CaptchaManagement } from '../components/admin/CaptchaManagement';
+import { WithdrawalStateLogsView } from '../components/admin/WithdrawalStateLogsView';
 import { AuditLogger, logAction, exportAuditLogsToCsv } from '../services/auditLogger';
 
 interface AdminPageProps {
@@ -66,6 +67,7 @@ export type AdminTab =
   | 'nodes'
   | 'orders'
   | 'withdrawals'
+  | 'withdrawal-logs'
   | 'transactions'
   | 'network'
   | 'audit';
@@ -97,6 +99,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onNavigate, currentPath = 
     if (clean.includes('/users')) return 'users';
     if (clean.includes('/nodes')) return 'nodes';
     if (clean.includes('/orders')) return 'orders';
+    if (clean.includes('/withdrawal-logs') || clean.includes('/withdrawallogs')) return 'withdrawal-logs';
     if (clean.includes('/withdrawals')) return 'withdrawals';
     if (clean.includes('/transactions')) return 'transactions';
     if (clean.includes('/network')) return 'network';
@@ -593,6 +596,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onNavigate, currentPath = 
     { id: 'nodes' as AdminTab, label: 'Nodes Inventory', icon: Server },
     { id: 'orders' as AdminTab, label: 'Node Orders', icon: ShoppingBag },
     { id: 'withdrawals' as AdminTab, label: 'Withdrawals & Payouts', icon: ArrowUpRight, badge: summary?.pendingWithdrawalsCount },
+    { id: 'withdrawal-logs' as AdminTab, label: 'Withdrawal State Logs', icon: Clock },
     { id: 'transactions' as AdminTab, label: 'Ledger Explorer', icon: ArrowLeftRight },
     { id: 'network' as AdminTab, label: 'Network Telemetry', icon: GitFork },
     { id: 'audit' as AdminTab, label: 'Admin Audit Logs', icon: FileText },
@@ -1415,6 +1419,11 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onNavigate, currentPath = 
               summaryMetrics={summary}
               onRefreshSummary={fetchAdminData}
             />
+          )}
+
+          {/* TAB 3.5: DEDICATED WITHDRAWAL STATE TRANSITION LOGS */}
+          {activeTab === 'withdrawal-logs' && (
+            <WithdrawalStateLogsView />
           )}
 
           {/* TAB 4: TRANSACTIONS (LEDGER EXPLORER) */}
