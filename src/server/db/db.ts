@@ -80,12 +80,34 @@ export async function getDb(): Promise<DatabaseClient> {
             safeHost = 'custom-connection';
           }
           console.log(`[DB Identity] Engine: PostgreSQL (Cloud SQL) | Host: ${safeHost} | Database: ${safeDbName}`);
-          const isUnixSocket = databaseUrl.includes('host=/') || databaseUrl.includes('host=%2F') || Boolean(process.env.SQL_HOST?.startsWith('/'));
-          const pool = new Pool({
-            connectionString: databaseUrl,
-            ssl: isUnixSocket ? false : { rejectUnauthorized: false },
-            connectionTimeoutMillis: 5000,
-          });
+          const isUnixSocket = databaseUrl.includes('host=/') || databaseUrl.includes('host=%2F') || databaseUrl.startsWith('/');
+          let pool: Pool;
+          if (isUnixSocket) {
+            pool = new Pool({
+              connectionString: databaseUrl,
+              ssl: false,
+              connectionTimeoutMillis: 10000,
+            });
+          } else {
+            try {
+              const url = new URL(databaseUrl);
+              pool = new Pool({
+                host: url.hostname,
+                port: parseInt(url.port || '5432', 10),
+                user: decodeURIComponent(url.username),
+                password: decodeURIComponent(url.password),
+                database: (url.pathname ? url.pathname.replace(/^\//, '') : 'postgres') || 'postgres',
+                ssl: { rejectUnauthorized: false },
+                connectionTimeoutMillis: 10000,
+              });
+            } catch {
+              pool = new Pool({
+                connectionString: databaseUrl,
+                ssl: { rejectUnauthorized: false },
+                connectionTimeoutMillis: 10000,
+              });
+            }
+          }
           globalThis.__phivonexPool = pool;
 
           // Test connection
