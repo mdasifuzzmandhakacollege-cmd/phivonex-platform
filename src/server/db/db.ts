@@ -1390,6 +1390,14 @@ async function initSchema(client: DatabaseClient) {
  * Ensures user accounts and credentials persist seamlessly across all container restarts.
  */
 async function restoreUsersFromFirestore(client: DatabaseClient) {
+  // Regression/E2E suites use isolated PGlite databases and must never reach
+  // external Google Cloud services. Keeping the dynamic Firebase import below
+  // this guard prevents ADC lookup and makes tests hermetic/reproducible.
+  if ((process.env.NODE_ENV || '').toLowerCase() === 'test') {
+    console.log('[DB Hydration] Skipped in test environment (isolated database).');
+    return;
+  }
+
   try {
     const { adminFirestore } = await import('../../lib/firebase-admin');
     console.log('[DB Hydration] Checking Firestore for persistent users across rollouts...');
