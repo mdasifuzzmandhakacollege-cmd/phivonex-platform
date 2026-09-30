@@ -564,7 +564,7 @@ async function getWalletSummary(userId) {
     grossBreakdown: grossCredits
   };
 }
-async function getWalletTransactions(userId, page = 1, limit = 20, typeFilter, searchQuery) {
+async function getWalletTransactions(userId, page = 1, limit = 20, typeFilter, searchQuery, entryTypeFilter) {
   await syncUserLedger(userId);
   const db = await getDb();
   const safePage = Math.max(1, page);
@@ -581,11 +581,24 @@ async function getWalletTransactions(userId, page = 1, limit = 20, typeFilter, s
       types = ["MATCHING_BONUS"];
     } else if (u === "PROMOTION_BONUS" || u === "PROMOTION") {
       types = ["PROMOTION_BONUS"];
+    } else if (u === "BLOCKCHAIN_DEPOSIT" || u === "DEPOSIT") {
+      types = ["BLOCKCHAIN_DEPOSIT"];
+    } else if (u === "WITHDRAWAL") {
+      types = ["WITHDRAWAL"];
+    } else if (u === "COIN_SWAP" || u === "SWAP") {
+      types = ["COIN_SWAP"];
     } else {
       types = [u];
     }
   }
-  const cleanSearch = searchQuery ? searchQuery.trim() : "";
+  let normalizedEntryType = null;
+  if (entryTypeFilter && entryTypeFilter !== "all" && entryTypeFilter !== "ALL") {
+    const et = entryTypeFilter.toUpperCase();
+    if (et === "CREDIT" || et === "DEBIT" || et === "REVERSAL") {
+      normalizedEntryType = et;
+    }
+  }
+  const cleanSearch = searchQuery ? searchQuery.trim().slice(0, 100) : "";
   let whereClauses = ["user_id = $1"];
   let queryParams = [userId];
   let paramIdx = 2;
@@ -594,8 +607,13 @@ async function getWalletTransactions(userId, page = 1, limit = 20, typeFilter, s
     queryParams.push(types);
     paramIdx++;
   }
+  if (normalizedEntryType) {
+    whereClauses.push(`entry_type = $${paramIdx}`);
+    queryParams.push(normalizedEntryType);
+    paramIdx++;
+  }
   if (cleanSearch) {
-    whereClauses.push(`(public_txn_id ILIKE $${paramIdx} OR description ILIKE $${paramIdx} OR source_ref ILIKE $${paramIdx} OR id ILIKE $${paramIdx})`);
+    whereClauses.push(`(public_txn_id ILIKE $${paramIdx} OR description ILIKE $${paramIdx} OR source_ref ILIKE $${paramIdx} OR id::text ILIKE $${paramIdx})`);
     queryParams.push(`%${cleanSearch}%`);
     paramIdx++;
   }
@@ -613,7 +631,7 @@ async function getWalletTransactions(userId, page = 1, limit = 20, typeFilter, s
     SELECT *
     FROM financial_ledger_entries
     WHERE ${whereSql}
-    ORDER BY created_at DESC
+    ORDER BY created_at DESC, id DESC
     LIMIT $${limitParamIdx} OFFSET $${offsetParamIdx}
     `,
     txQueryParams
@@ -867,6 +885,27 @@ var init_webPushServerService = __esm({
 });
 
 // src/server/services/notificationService.ts
+var notificationService_exports = {};
+__export(notificationService_exports, {
+  createNotification: () => createNotification,
+  deleteAllNotifications: () => deleteAllNotifications,
+  deleteNotification: () => deleteNotification,
+  getUnreadNotificationCount: () => getUnreadNotificationCount,
+  getUserNotifications: () => getUserNotifications,
+  markAllNotificationsAsRead: () => markAllNotificationsAsRead,
+  markNotificationAsRead: () => markNotificationAsRead,
+  notificationEmitter: () => notificationEmitter,
+  notifyMatchingEarned: () => notifyMatchingEarned,
+  notifyNodeActivated: () => notifyNodeActivated,
+  notifyPhivoReward: () => notifyPhivoReward,
+  notifyPhivoSwapCompleted: () => notifyPhivoSwapCompleted,
+  notifyPromotionEarned: () => notifyPromotionEarned,
+  notifyReferralEarned: () => notifyReferralEarned,
+  notifySecurityAlert: () => notifySecurityAlert,
+  notifyUsdtDepositConfirmed: () => notifyUsdtDepositConfirmed,
+  notifyWithdrawalStatus: () => notifyWithdrawalStatus
+});
+import { EventEmitter } from "events";
 import { v4 as uuidv43 } from "uuid";
 async function createNotification(params) {
   const { userId, type, title, message, sourceType, sourceId } = params;
@@ -919,7 +958,7 @@ async function createNotification(params) {
       });
     } catch {
     }
-    return {
+    const createdNotification = {
       id: row.public_notification_id,
       type: row.type,
       title: row.title,
@@ -927,6 +966,11 @@ async function createNotification(params) {
       readAt: row.read_at ? new Date(row.read_at).toISOString() : null,
       createdAt: new Date(row.created_at).toISOString()
     };
+    try {
+      notificationEmitter.emit(`notification:${userId}`, createdNotification);
+    } catch {
+    }
+    return createdNotification;
   } catch (err) {
     console.error("[NotificationService] Error creating notification:", err);
     return null;
@@ -1134,10 +1178,23 @@ async function notifyWithdrawalStatus(params) {
     sourceId: `${params.withdrawalId}_${params.status}`
   });
 }
+async function notifySecurityAlert(params) {
+  return createNotification({
+    userId: params.userId,
+    type: "SECURITY_ALERT",
+    title: params.title || "Security Alert",
+    message: params.message,
+    sourceType: "SECURITY",
+    sourceId: params.sourceId
+  });
+}
+var notificationEmitter;
 var init_notificationService = __esm({
   "src/server/services/notificationService.ts"() {
     init_db();
     init_idGenerator();
+    notificationEmitter = new EventEmitter();
+    notificationEmitter.setMaxListeners(1e3);
   }
 });
 
@@ -2154,12 +2211,34 @@ async function getDb() {
             safeHost = "custom-connection";
           }
           console.log(`[DB Identity] Engine: PostgreSQL (Cloud SQL) | Host: ${safeHost} | Database: ${safeDbName}`);
-          const isUnixSocket = databaseUrl.includes("host=/") || databaseUrl.includes("host=%2F") || Boolean(process.env.SQL_HOST?.startsWith("/"));
-          const pool = new Pool({
-            connectionString: databaseUrl,
-            ssl: isUnixSocket ? false : { rejectUnauthorized: false },
-            connectionTimeoutMillis: 5e3
-          });
+          const isUnixSocket = databaseUrl.includes("host=/") || databaseUrl.includes("host=%2F") || databaseUrl.startsWith("/");
+          let pool;
+          if (isUnixSocket) {
+            pool = new Pool({
+              connectionString: databaseUrl,
+              ssl: false,
+              connectionTimeoutMillis: 1e4
+            });
+          } else {
+            try {
+              const url = new URL(databaseUrl);
+              pool = new Pool({
+                host: url.hostname,
+                port: parseInt(url.port || "5432", 10),
+                user: decodeURIComponent(url.username),
+                password: decodeURIComponent(url.password),
+                database: (url.pathname ? url.pathname.replace(/^\//, "") : "postgres") || "postgres",
+                ssl: { rejectUnauthorized: false },
+                connectionTimeoutMillis: 1e4
+              });
+            } catch {
+              pool = new Pool({
+                connectionString: databaseUrl,
+                ssl: { rejectUnauthorized: false },
+                connectionTimeoutMillis: 1e4
+              });
+            }
+          }
           globalThis.__phivonexPool = pool;
           await pool.query("SELECT 1");
           client = {
@@ -4368,10 +4447,13 @@ __export(emailService_exports, {
   deleteAutomationRule: () => deleteAutomationRule,
   getAutomationRules: () => getAutomationRules,
   getEmailProvider: () => getEmailProvider,
+  getEmailQueue: () => getEmailQueue,
+  getEmailQueueStats: () => getEmailQueueStats,
   getEmailTemplates: () => getEmailTemplates,
   handleProviderEmailWebhook: () => handleProviderEmailWebhook,
   processEmailQueue: () => processEmailQueue,
   queueEventEmail: () => queueEventEmail,
+  retryQueueItem: () => retryQueueItem,
   sendBroadcastCampaign: () => sendBroadcastCampaign,
   sendVerificationCodeEmail: () => sendVerificationCodeEmail,
   triggerAutomationRule: () => triggerAutomationRule,
@@ -4561,12 +4643,12 @@ async function updateEmailTemplate(adminUserId, adminPublicId, id, template) {
 }
 async function sendBroadcastCampaign(adminUserId, adminPublicId, campaign) {
   const db = await getDb();
-  let userQuery = `SELECT email, full_name, public_id FROM users WHERE status = 'ACTIVE'`;
+  let userQuery = `SELECT id, email, full_name, public_id FROM users WHERE status = 'ACTIVE'`;
   if (campaign.audience === "ACTIVE_USERS") {
-    userQuery = `SELECT email, full_name, public_id FROM users WHERE status = 'ACTIVE'`;
+    userQuery = `SELECT id, email, full_name, public_id FROM users WHERE status = 'ACTIVE'`;
   } else if (campaign.audience === "NODE_HOLDERS") {
     userQuery = `
-      SELECT DISTINCT u.email, u.full_name, u.public_id 
+      SELECT DISTINCT u.id, u.email, u.full_name, u.public_id 
       FROM users u
       INNER JOIN node_orders o ON u.id = o.user_id
       WHERE o.status = 'COMPLETED'
@@ -4587,6 +4669,18 @@ async function sendBroadcastCampaign(adminUserId, adminPublicId, campaign) {
       `,
       [queueId, user.email, subject, bodyHtml]
     );
+    if (user.id) {
+      createNotification({
+        userId: user.id,
+        type: "SECURITY_ALERT",
+        title: subject,
+        message: subject,
+        sourceType: "BROADCAST_CAMPAIGN",
+        sourceId: `camp-${campaign.subject.slice(0, 30)}-${user.id}`
+      }).catch((notifErr) => {
+        console.warn("[EmailEngine] In-app notification delivery warning:", notifErr?.message);
+      });
+    }
     queuedCount++;
   }
   processEmailQueue().catch((err) => {
@@ -4601,6 +4695,80 @@ async function sendBroadcastCampaign(adminUserId, adminPublicId, campaign) {
     details: `Broadcast campaign "${campaign.subject}" sent to ${queuedCount} users of audience: "${campaign.audience}"`
   });
   return { queuedCount };
+}
+async function getEmailQueue(filters = {}) {
+  const db = await getDb();
+  const limit = Math.min(Math.max(Number(filters.limit) || 20, 1), 100);
+  const offset = Math.max(Number(filters.offset) || 0, 0);
+  const conditions = [];
+  const params = [];
+  let paramIdx = 1;
+  if (filters.status && filters.status !== "ALL") {
+    conditions.push(`status = $${paramIdx++}`);
+    params.push(filters.status.toUpperCase());
+  }
+  if (filters.search && filters.search.trim()) {
+    conditions.push(`(to_email ILIKE $${paramIdx} OR subject ILIKE $${paramIdx})`);
+    params.push(`%${filters.search.trim()}%`);
+    paramIdx++;
+  }
+  const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+  const countRes = await db.query(
+    `SELECT COUNT(*) as count FROM email_queue ${whereClause}`,
+    params
+  );
+  const total = parseInt(countRes.rows[0]?.count || "0", 10);
+  const queryParams = [...params, limit, offset];
+  const itemsRes = await db.query(
+    `SELECT * FROM email_queue ${whereClause} ORDER BY created_at DESC LIMIT $${paramIdx++} OFFSET $${paramIdx}`,
+    queryParams
+  );
+  return {
+    items: itemsRes.rows.map((r) => ({
+      id: r.id,
+      toEmail: r.to_email,
+      subject: r.subject,
+      bodyHtml: r.body_html,
+      status: r.status,
+      providerMessageId: r.provider_message_id,
+      errorMessage: r.error_message,
+      sentAt: r.sent_at,
+      createdAt: r.created_at
+    })),
+    total
+  };
+}
+async function getEmailQueueStats() {
+  const db = await getDb();
+  const res = await db.query(`
+    SELECT
+      COUNT(CASE WHEN status = 'QUEUED' THEN 1 END) as queued,
+      COUNT(CASE WHEN status = 'SENT' THEN 1 END) as sent,
+      COUNT(CASE WHEN status = 'DELIVERED' THEN 1 END) as delivered,
+      COUNT(CASE WHEN status = 'FAILED' THEN 1 END) as failed,
+      COUNT(*) as total
+    FROM email_queue
+  `);
+  const row = res.rows[0] || {};
+  return {
+    totalQueued: parseInt(row.queued || "0", 10),
+    totalSent: parseInt(row.sent || "0", 10),
+    totalDelivered: parseInt(row.delivered || "0", 10),
+    totalFailed: parseInt(row.failed || "0", 10),
+    totalAll: parseInt(row.total || "0", 10)
+  };
+}
+async function retryQueueItem(id) {
+  const db = await getDb();
+  const res = await db.query(
+    `UPDATE email_queue SET status = 'QUEUED', error_message = NULL, sent_at = NULL WHERE id = $1 RETURNING id`,
+    [id]
+  );
+  if (res.rowCount > 0) {
+    processEmailQueue().catch((err) => console.error("[EmailService] Retry process error:", err));
+    return true;
+  }
+  return false;
 }
 async function getAutomationRules() {
   const db = await getDb();
@@ -4752,6 +4920,7 @@ var init_emailService = __esm({
   "src/server/services/emailService.ts"() {
     init_db();
     init_adminService();
+    init_notificationService();
     MockEmailProvider = class {
       async sendEmail(to, subject, html) {
         console.log(`[MockEmailProvider] Sending email to ${to}: "${subject}"`);
@@ -7899,6 +8068,16 @@ router.post("/change-password", requireAuth, async (req, res) => {
       description: "Account password updated. All other active sessions terminated.",
       userAgent: req.headers["user-agent"]
     });
+    try {
+      const { notifySecurityAlert: notifySecurityAlert2 } = await Promise.resolve().then(() => (init_notificationService(), notificationService_exports));
+      await notifySecurityAlert2({
+        userId: user.id,
+        title: "Security Alert: Password Changed",
+        message: "Your account password was updated. All other active sessions have been terminated.",
+        sourceId: `pwd-rot-${uuidv49()}`
+      });
+    } catch {
+    }
     res.status(200).json({
       message: "Password changed successfully. All other active sessions have been terminated."
     });
@@ -8646,8 +8825,8 @@ init_firebase_admin();
 // src/server/services/publicNetworkService.ts
 init_db();
 init_nodeConfig();
-import { EventEmitter } from "events";
-var publicNetworkEventEmitter = new EventEmitter();
+import { EventEmitter as EventEmitter2 } from "events";
+var publicNetworkEventEmitter = new EventEmitter2();
 publicNetworkEventEmitter.setMaxListeners(100);
 async function getPublicNetworkSummary() {
   const db = await getDb();
@@ -12022,14 +12201,14 @@ async function getActiveMatchingConfig(dbClient) {
     const defaultTiers = [
       { units: 2, bonusUsd: 500 },
       { units: 4, bonusUsd: 1e3 },
-      { units: 8, bonusUsd: 1500 },
-      { units: 12, bonusUsd: 2e3 },
-      { units: 16, bonusUsd: 2500 },
-      { units: 20, bonusUsd: 3e3 },
-      { units: 24, bonusUsd: 3500 },
-      { units: 28, bonusUsd: 4e3 },
-      { units: 32, bonusUsd: 4500 },
-      { units: 36, bonusUsd: 5e3 }
+      { units: 6, bonusUsd: 1500 },
+      { units: 8, bonusUsd: 2e3 },
+      { units: 10, bonusUsd: 2500 },
+      { units: 12, bonusUsd: 3e3 },
+      { units: 14, bonusUsd: 3500 },
+      { units: 16, bonusUsd: 4e3 },
+      { units: 18, bonusUsd: 4500 },
+      { units: 20, bonusUsd: 5e3 }
     ];
     if (res.rows.length === 0) {
       return {
@@ -12073,14 +12252,14 @@ async function getActiveMatchingConfig(dbClient) {
       tiers: [
         { units: 2, bonusUsd: 500 },
         { units: 4, bonusUsd: 1e3 },
-        { units: 8, bonusUsd: 1500 },
-        { units: 12, bonusUsd: 2e3 },
-        { units: 16, bonusUsd: 2500 },
-        { units: 20, bonusUsd: 3e3 },
-        { units: 24, bonusUsd: 3500 },
-        { units: 28, bonusUsd: 4e3 },
-        { units: 32, bonusUsd: 4500 },
-        { units: 36, bonusUsd: 5e3 }
+        { units: 6, bonusUsd: 1500 },
+        { units: 8, bonusUsd: 2e3 },
+        { units: 10, bonusUsd: 2500 },
+        { units: 12, bonusUsd: 3e3 },
+        { units: 14, bonusUsd: 3500 },
+        { units: 16, bonusUsd: 4e3 },
+        { units: 18, bonusUsd: 4500 },
+        { units: 20, bonusUsd: 5e3 }
       ]
     };
   }
@@ -13213,6 +13392,7 @@ promotionRouter.post("/admin/offers", requireAuth, requireAdmin, async (req, res
       targetAudience,
       priorityOrder
     });
+    broadcastSystemConfigChange("PROMOTIONAL_OFFERS_UPDATED", { timestamp: (/* @__PURE__ */ new Date()).toISOString() });
     return res.status(201).json({ success: true, offer: created });
   } catch (err) {
     console.error("[Admin Promotion API] Error creating offer:", err);
@@ -13256,6 +13436,7 @@ promotionRouter.put("/admin/offers/:id", requireAuth, requireAdmin, async (req, 
       targetAudience,
       priorityOrder
     });
+    broadcastSystemConfigChange("PROMOTIONAL_OFFERS_UPDATED", { timestamp: (/* @__PURE__ */ new Date()).toISOString() });
     return res.status(200).json({ success: true, offer: updated });
   } catch (err) {
     console.error("[Admin Promotion API] Error updating offer:", err);
@@ -13270,6 +13451,7 @@ promotionRouter.delete("/admin/offers/:id", requireAuth, requireAdmin, async (re
     if (!deleted) {
       return res.status(404).json({ error: "NOT_FOUND", message: "Promotional offer not found." });
     }
+    broadcastSystemConfigChange("PROMOTIONAL_OFFERS_UPDATED", { timestamp: (/* @__PURE__ */ new Date()).toISOString() });
     return res.status(200).json({ success: true, id });
   } catch (err) {
     console.error("[Admin Promotion API] Error deleting offer:", err);
@@ -13302,6 +13484,7 @@ promotionRouter.post("/admin/banners", requireAuth, requireAdmin, async (req, re
       startDate,
       endDate
     });
+    broadcastSystemConfigChange("PROMOTIONAL_BANNERS_UPDATED", { timestamp: (/* @__PURE__ */ new Date()).toISOString() });
     return res.status(201).json({ success: true, banner: created });
   } catch (err) {
     console.error("[Admin Promotion API] Error creating banner:", err);
@@ -13326,6 +13509,7 @@ promotionRouter.put("/admin/banners/:id", requireAuth, requireAdmin, async (req,
       startDate,
       endDate
     });
+    broadcastSystemConfigChange("PROMOTIONAL_BANNERS_UPDATED", { timestamp: (/* @__PURE__ */ new Date()).toISOString() });
     return res.status(200).json({ success: true, banner: updated });
   } catch (err) {
     console.error("[Admin Promotion API] Error updating banner:", err);
@@ -13340,6 +13524,7 @@ promotionRouter.delete("/admin/banners/:id", requireAuth, requireAdmin, async (r
     if (!deleted) {
       return res.status(404).json({ error: "NOT_FOUND", message: "Promotional banner not found." });
     }
+    broadcastSystemConfigChange("PROMOTIONAL_BANNERS_UPDATED", { timestamp: (/* @__PURE__ */ new Date()).toISOString() });
     return res.status(200).json({ success: true, id });
   } catch (err) {
     console.error("[Admin Promotion API] Error deleting banner:", err);
@@ -13420,9 +13605,10 @@ walletRouter.get("/transactions", requireAuth, async (req, res) => {
     const userId = req.user.id;
     const page = parseInt(req.query.page, 10) || 1;
     const limit = parseInt(req.query.limit, 10) || 20;
-    const typeFilter = req.query.type || req.query.sourceType || void 0;
+    const typeFilter = req.query.type || req.query.sourceType || req.query.category || void 0;
+    const entryTypeFilter = req.query.entryType || void 0;
     const search = req.query.search || req.query.q || void 0;
-    const result = await getWalletTransactions(userId, page, limit, typeFilter, search);
+    const result = await getWalletTransactions(userId, page, limit, typeFilter, search, entryTypeFilter);
     return res.status(200).json(result);
   } catch (err) {
     console.error("[Wallet API] Error in GET /api/wallet/transactions:", err);
@@ -13462,6 +13648,24 @@ rewardRouter.get("/summary", requireAuth, async (req, res) => {
     res.status(500).json({
       error: "SERVER_ERROR",
       message: "Failed to retrieve reward summary."
+    });
+  }
+});
+rewardRouter.get("/history", requireAuth, async (req, res) => {
+  try {
+    const user = req.user;
+    const rewardsData = await getUserRewards(user.id);
+    res.status(200).json({
+      success: true,
+      history: rewardsData.history,
+      total: rewardsData.history.length,
+      latestEpoch: rewardsData.latestEpoch
+    });
+  } catch (err) {
+    console.error("[Reward API] Error in GET /api/rewards/history:", err);
+    res.status(500).json({
+      error: "SERVER_ERROR",
+      message: "Failed to retrieve reward history."
     });
   }
 });
@@ -15935,6 +16139,61 @@ adminRouter.delete("/email/automation/:id", async (req, res) => {
     return res.status(500).json({ error: "SERVER_ERROR", message: "Failed to delete automation rule." });
   }
 });
+adminRouter.get("/email/queue", async (req, res) => {
+  try {
+    const status = req.query.status;
+    const search = req.query.search;
+    const limit = parseInt(req.query.limit, 10) || 20;
+    const offset = parseInt(req.query.offset, 10) || 0;
+    const data = await getEmailQueue({ status, search, limit, offset });
+    const stats = await getEmailQueueStats();
+    return res.status(200).json({
+      success: true,
+      items: data.items,
+      total: data.total,
+      stats
+    });
+  } catch (err) {
+    console.error("[Admin API] Error retrieving email queue:", err);
+    return res.status(500).json({ error: "SERVER_ERROR", message: "Failed to retrieve email queue." });
+  }
+});
+adminRouter.get("/email/stats", async (req, res) => {
+  try {
+    const stats = await getEmailQueueStats();
+    return res.status(200).json({ success: true, stats });
+  } catch (err) {
+    console.error("[Admin API] Error retrieving email stats:", err);
+    return res.status(500).json({ error: "SERVER_ERROR", message: "Failed to retrieve email stats." });
+  }
+});
+adminRouter.post("/email/queue/process", async (req, res) => {
+  try {
+    await processEmailQueue();
+    const stats = await getEmailQueueStats();
+    return res.status(200).json({
+      success: true,
+      message: "Email queue processing completed successfully.",
+      stats
+    });
+  } catch (err) {
+    console.error("[Admin API] Error processing email queue:", err);
+    return res.status(500).json({ error: "SERVER_ERROR", message: "Failed to process email queue." });
+  }
+});
+adminRouter.post("/email/queue/retry/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const retried = await retryQueueItem(id);
+    if (!retried) {
+      return res.status(404).json({ error: "NOT_FOUND", message: "Queue item not found or could not be retried." });
+    }
+    return res.status(200).json({ success: true, message: "Email re-queued for processing.", id });
+  } catch (err) {
+    console.error("[Admin API] Error retrying email queue item:", err);
+    return res.status(500).json({ error: "SERVER_ERROR", message: "Failed to retry email queue item." });
+  }
+});
 
 // src/server/routes/depositRoutes.ts
 import { Router as Router15 } from "express";
@@ -16792,6 +17051,48 @@ publicEconomicRouter.get("/token-price", async (_req, res) => {
     });
   }
 });
+publicEconomicRouter.get("/platform-settings", async (_req, res) => {
+  try {
+    const configs = await getAllEconomicConfigs();
+    const configMap = {};
+    for (const c of configs) {
+      configMap[c.configKey] = c.configValue;
+    }
+    const coinPrice = configMap["INTERNAL_COIN_PRICE_USDT"]?.priceUsdt ?? 0.1;
+    const coinSymbol = configMap["INTERNAL_COIN_PRICE_USDT"]?.coinSymbol ?? "PHIVO";
+    const swapEnabled = configMap["INTERNAL_COIN_SWAP_ENABLED"] !== false && configMap["INTERNAL_COIN_PRICE_USDT"]?.swapEnabled !== false;
+    const cryptoDepositsEnabled = configMap["CRYPTO_DEPOSITS_ENABLED"] !== false;
+    const cryptoWithdrawalsEnabled = configMap["CRYPTO_WITHDRAWALS_ENABLED"] !== false;
+    const nodeRewardsEnabled = configMap["NODE_REWARDS_ENABLED"] !== false;
+    const minWithdrawalAmount = typeof configMap["MIN_WITHDRAWAL_AMOUNT"] === "number" ? configMap["MIN_WITHDRAWAL_AMOUNT"] : 0.1;
+    const autoWithdrawalEnabled = Boolean(configMap["AUTO_WITHDRAWAL_ENABLED"]);
+    const nodeBasePriceUsd = typeof configMap["NODE_BASE_PRICE_USD"] === "number" ? configMap["NODE_BASE_PRICE_USD"] : 50;
+    const directReferralCommissionRate = typeof configMap["REFERRAL_COMMISSION_RATE"] === "number" ? configMap["REFERRAL_COMMISSION_RATE"] : 10;
+    res.setHeader("Cache-Control", "public, max-age=5");
+    return res.status(200).json({
+      success: true,
+      settings: {
+        coinPriceUsdt: coinPrice,
+        coinSymbol,
+        internalCoinSwapEnabled: swapEnabled,
+        cryptoDepositsEnabled,
+        cryptoWithdrawalsEnabled,
+        nodeRewardsEnabled,
+        minWithdrawalAmount,
+        autoWithdrawalEnabled,
+        nodeBasePriceUsd,
+        directReferralCommissionRate,
+        updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+      }
+    });
+  } catch (err) {
+    console.error("[Economic API] Error fetching platform settings:", err);
+    return res.status(500).json({
+      error: "SERVER_ERROR",
+      message: "Failed to retrieve platform settings"
+    });
+  }
+});
 var economicRouter = Router16();
 economicRouter.use(requireAdmin);
 economicRouter.get("/configs", async (req, res) => {
@@ -17476,6 +17777,41 @@ swapRouter.post("/usdt-to-coin", requireAuth, swapLimiter, async (req, res) => {
 import { Router as Router18 } from "express";
 init_notificationService();
 var notificationRouter = Router18();
+var testPushTimestamps = /* @__PURE__ */ new Map();
+notificationRouter.get("/events", requireAuth, (req, res) => {
+  const userId = req.user.id;
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache, no-transform");
+  res.setHeader("Connection", "keep-alive");
+  res.setHeader("X-Accel-Buffering", "no");
+  res.flushHeaders();
+  res.write(`data: ${JSON.stringify({ type: "CONNECTED", userId, timestamp: Date.now() })}
+
+`);
+  const onNotification = (notif) => {
+    try {
+      res.write(`data: ${JSON.stringify({ type: "NEW_NOTIFICATION", notification: notif })}
+
+`);
+    } catch {
+    }
+  };
+  notificationEmitter.on(`notification:${userId}`, onNotification);
+  const heartbeat = setInterval(() => {
+    try {
+      res.write(`: heartbeat ${Date.now()}
+
+`);
+    } catch {
+      clearInterval(heartbeat);
+    }
+  }, 15e3);
+  req.on("close", () => {
+    clearInterval(heartbeat);
+    notificationEmitter.off(`notification:${userId}`, onNotification);
+    res.end();
+  });
+});
 notificationRouter.get("/", requireAuth, async (req, res) => {
   try {
     const userId = req.user.id;
@@ -17632,6 +17968,17 @@ notificationRouter.delete("/push-token", requireAuth, async (req, res) => {
 notificationRouter.post("/test-push", requireAuth, async (req, res) => {
   try {
     const userId = req.user.id;
+    const now = Date.now();
+    const timestamps = (testPushTimestamps.get(userId) || []).filter((t) => now - t < 6e4);
+    if (timestamps.length >= 5) {
+      return res.status(429).json({
+        success: false,
+        error: "RATE_LIMITED",
+        message: "Too many test push requests. Please wait a minute before trying again."
+      });
+    }
+    timestamps.push(now);
+    testPushTimestamps.set(userId, timestamps);
     const { sendPushNotificationToUser: sendPushNotificationToUser2 } = await Promise.resolve().then(() => (init_webPushServerService(), webPushServerService_exports));
     const result = await sendPushNotificationToUser2(userId, {
       title: "\u{1F514} PHIVONEX Web Push Active!",

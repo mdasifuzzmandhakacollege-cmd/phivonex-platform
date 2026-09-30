@@ -48,14 +48,14 @@ export async function getActiveMatchingConfig(dbClient?: DatabaseClient): Promis
     const defaultTiers: MatchingTier[] = [
       { units: 2, bonusUsd: 500 },
       { units: 4, bonusUsd: 1000 },
-      { units: 8, bonusUsd: 1500 },
-      { units: 12, bonusUsd: 2000 },
-      { units: 16, bonusUsd: 2500 },
-      { units: 20, bonusUsd: 3000 },
-      { units: 24, bonusUsd: 3500 },
-      { units: 28, bonusUsd: 4000 },
-      { units: 32, bonusUsd: 4500 },
-      { units: 36, bonusUsd: 5000 },
+      { units: 6, bonusUsd: 1500 },
+      { units: 8, bonusUsd: 2000 },
+      { units: 10, bonusUsd: 2500 },
+      { units: 12, bonusUsd: 3000 },
+      { units: 14, bonusUsd: 3500 },
+      { units: 16, bonusUsd: 4000 },
+      { units: 18, bonusUsd: 4500 },
+      { units: 20, bonusUsd: 5000 },
     ];
 
     if (res.rows.length === 0) {
@@ -104,14 +104,14 @@ export async function getActiveMatchingConfig(dbClient?: DatabaseClient): Promis
       tiers: [
         { units: 2, bonusUsd: 500 },
         { units: 4, bonusUsd: 1000 },
-        { units: 8, bonusUsd: 1500 },
-        { units: 12, bonusUsd: 2000 },
-        { units: 16, bonusUsd: 2500 },
-        { units: 20, bonusUsd: 3000 },
-        { units: 24, bonusUsd: 3500 },
-        { units: 28, bonusUsd: 4000 },
-        { units: 32, bonusUsd: 4500 },
-        { units: 36, bonusUsd: 5000 }
+        { units: 6, bonusUsd: 1500 },
+        { units: 8, bonusUsd: 2000 },
+        { units: 10, bonusUsd: 2500 },
+        { units: 12, bonusUsd: 3000 },
+        { units: 14, bonusUsd: 3500 },
+        { units: 16, bonusUsd: 4000 },
+        { units: 18, bonusUsd: 4500 },
+        { units: 20, bonusUsd: 5000 }
       ]
     };
   }

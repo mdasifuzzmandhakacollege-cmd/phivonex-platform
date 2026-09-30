@@ -5,60 +5,13 @@ import {
   Lock,
   ArrowRight,
   TrendingUp,
-  Award,
-  Sparkles,
   ShieldCheck,
   Zap,
   RefreshCw,
   Users,
   ChevronRight,
   Check,
-  AlertCircle,
 } from 'lucide-react';
-
-export interface AchievedMilestone {
-  id: string;
-  publicBonusId: string;
-  milestone: '20/20' | '50/50' | '100/100';
-  leftUnits: number;
-  rightUnits: number;
-  amountUsd: number;
-  status: 'EARNED' | 'REVERSED';
-  qualifiedAt: string;
-  createdAt: string;
-}
-
-export interface NextMilestoneProgress {
-  milestone: '20/20' | '50/50' | '100/100';
-  unitsRequired: number;
-  bonusUsd: number;
-  leftNeeded: number;
-  rightNeeded: number;
-  progressPct: number;
-}
-
-export interface MilestoneDisplayItem {
-  milestone: '20/20' | '50/50' | '100/100';
-  unitsRequired: number;
-  bonusUsd: number;
-  achieved: boolean;
-  achievedAt: string | null;
-  publicBonusId: string | null;
-  leftNeeded: number;
-  rightNeeded: number;
-  progressPct: number;
-}
-
-export interface PromotionSummaryResponse {
-  currentProgress: {
-    leftUnits: number;
-    rightUnits: number;
-  };
-  achievedMilestones: AchievedMilestone[];
-  nextMilestone: NextMilestoneProgress | null;
-  totalPromotionBonusEarned: number;
-  milestones: MilestoneDisplayItem[];
-}
 
 export interface PromotionRule {
   id: string;
@@ -135,44 +88,144 @@ export interface UserRankState {
 }
 
 interface PromotionSectionProps {
-  data?: PromotionSummaryResponse | null;
+  data?: any;
   loading?: boolean;
 }
 
-export const PromotionSection: React.FC<PromotionSectionProps> = ({ data: legacyData, loading: legacyLoading }) => {
+const DEFAULT_LADDER: PromotionRule[] = [
+  {
+    id: '1',
+    rankKey: 'STANDARD',
+    rankName: 'Standard Member',
+    rankOrder: 0,
+    qualificationType: 'NONE',
+    requiredLeft: 0,
+    requiredRight: 0,
+    requiredLeaderRank: null,
+    legBalanceRule: 'FLEXIBLE',
+    rewardUsd: 0,
+    flushRule: 'NONE',
+    status: 'ACTIVE',
+    version: 1,
+  },
+  {
+    id: '2',
+    rankKey: 'NODE_BUILDER',
+    rankName: 'Node Builder',
+    rankOrder: 1,
+    qualificationType: 'MATCHING',
+    requiredLeft: 20,
+    requiredRight: 20,
+    requiredLeaderRank: null,
+    legBalanceRule: 'STRICT',
+    rewardUsd: 0,
+    flushRule: 'CONSUME_STAGE_REQUIREMENT',
+    status: 'ACTIVE',
+    version: 1,
+  },
+  {
+    id: '3',
+    rankKey: 'NODE_MASTER',
+    rankName: 'Node Master',
+    rankOrder: 2,
+    qualificationType: 'MATCHING',
+    requiredLeft: 50,
+    requiredRight: 50,
+    requiredLeaderRank: null,
+    legBalanceRule: 'STRICT',
+    rewardUsd: 0,
+    flushRule: 'CONSUME_STAGE_REQUIREMENT',
+    status: 'ACTIVE',
+    version: 1,
+  },
+  {
+    id: '4',
+    rankKey: 'NODE_CAPTAIN',
+    rankName: 'Node Captain',
+    rankOrder: 3,
+    qualificationType: 'MATCHING',
+    requiredLeft: 100,
+    requiredRight: 100,
+    requiredLeaderRank: null,
+    legBalanceRule: 'STRICT',
+    rewardUsd: 0,
+    flushRule: 'CONSUME_STAGE_REQUIREMENT',
+    status: 'ACTIVE',
+    version: 1,
+  },
+  {
+    id: '5',
+    rankKey: 'NODE_COMMANDER',
+    rankName: 'Node Commander',
+    rankOrder: 4,
+    qualificationType: 'LEADERSHIP',
+    requiredLeft: 2,
+    requiredRight: 3,
+    requiredLeaderRank: 'NODE_CAPTAIN',
+    legBalanceRule: 'FLEXIBLE',
+    rewardUsd: 0,
+    flushRule: 'NONE',
+    status: 'ACTIVE',
+    version: 1,
+  },
+  {
+    id: '6',
+    rankKey: 'NODE_AMBASSADOR',
+    rankName: 'Node Ambassador',
+    rankOrder: 5,
+    qualificationType: 'LEADERSHIP',
+    requiredLeft: 3,
+    requiredRight: 4,
+    requiredLeaderRank: 'NODE_COMMANDER',
+    legBalanceRule: 'FLEXIBLE',
+    rewardUsd: 0,
+    flushRule: 'NONE',
+    status: 'ACTIVE',
+    version: 1,
+  },
+  {
+    id: '7',
+    rankKey: 'NODE_TITAN',
+    rankName: 'Node Titan',
+    rankOrder: 6,
+    qualificationType: 'LEADERSHIP',
+    requiredLeft: 4,
+    requiredRight: 5,
+    requiredLeaderRank: 'NODE_AMBASSADOR',
+    legBalanceRule: 'FLEXIBLE',
+    rewardUsd: 0,
+    flushRule: 'NONE',
+    status: 'ACTIVE',
+    version: 1,
+  },
+];
+
+export const PromotionSection: React.FC<PromotionSectionProps> = () => {
   const [rankState, setRankState] = useState<UserRankState | null>(null);
   const [loadingRank, setLoadingRank] = useState(false);
-  const [evaluating, setEvaluating] = useState(false);
-  const [evalMessage, setEvalMessage] = useState<string | null>(null);
-
-  const formatUsd = (amount: number): string => {
-    return new Intl.NumberFormat('en-US', {
-      style: 'currency',
-      currency: 'USD',
-      minimumFractionDigits: 0,
-      maximumFractionDigits: 0,
-    }).format(amount);
-  };
+  const [refreshing, setRefreshing] = useState(false);
 
   const formatDate = (dateStr: string | null): string => {
-    if (!dateStr) return '';
+    if (!dateStr) return 'Not Available';
     try {
       const d = new Date(dateStr);
+      if (isNaN(d.getTime())) return 'Not Available';
       return d.toLocaleDateString('en-GB', {
         day: 'numeric',
         month: 'short',
         year: 'numeric',
       });
     } catch {
-      return dateStr;
+      return 'Not Available';
     }
   };
 
   // Fetch Authoritative Rank State
-  const fetchRankState = useCallback(async () => {
-    setLoadingRank(true);
+  const fetchRankState = useCallback(async (isManual = false) => {
+    if (isManual) setRefreshing(true);
+    else setLoadingRank(true);
     try {
-      const res = await fetch('/api/promotions/ranks/me');
+      const res = await fetch('/api/promotions/ranks/me', { credentials: 'include' });
       const data = await res.json();
       if (res.ok && data.success) {
         setRankState(data.state);
@@ -181,6 +234,7 @@ export const PromotionSection: React.FC<PromotionSectionProps> = ({ data: legacy
       console.warn('[PromotionSection] Error fetching rank state:', err);
     } finally {
       setLoadingRank(false);
+      if (isManual) setRefreshing(false);
     }
   }, []);
 
@@ -188,185 +242,128 @@ export const PromotionSection: React.FC<PromotionSectionProps> = ({ data: legacy
     fetchRankState();
   }, [fetchRankState]);
 
-  // Handle User Evaluation Request
-  const handleEvaluate = async () => {
-    setEvaluating(true);
-    setEvalMessage(null);
-    try {
-      const res = await fetch('/api/promotions/ranks/evaluate', {
-        method: 'POST',
-      });
-      const data = await res.json();
-      if (res.ok && data.success) {
-        setRankState(data.result.state);
-        if (data.result.promoted) {
-          setEvalMessage(`🎉 Congratulations! You have been promoted to ${data.result.currentRank}!`);
-        } else {
-          setEvalMessage(`Evaluation complete: ${data.result.reason}`);
-        }
-      } else {
-        setEvalMessage(data.message || 'Evaluation could not be completed.');
-      }
-    } catch (err: any) {
-      setEvalMessage(err.message || 'Network error evaluating promotion.');
-    } finally {
-      setEvaluating(false);
-    }
-  };
-
   const currentRankName = rankState?.currentRankName || 'Standard Member';
   const currentRankOrder = rankState?.currentRankOrder ?? 0;
   const nextRankName = rankState?.nextRankName;
   const matchingStage = rankState?.stageProgress.matching;
   const leadershipStage = rankState?.stageProgress.leadership;
 
-  const totalRewardsEarned =
-    rankState?.completedEvents.reduce((acc, evt) => acc + (evt.rewardUsd || 0), 0) ||
-    legacyData?.totalPromotionBonusEarned ||
-    0;
+  const ladder = rankState?.ladder && rankState.ladder.length > 0
+    ? rankState.ladder
+    : DEFAULT_LADDER;
 
   return (
-    <div className="p-6 rounded-2xl bg-[#0B1528]/80 border border-white/[0.08] backdrop-blur-sm space-y-6">
+    <div className="p-5 sm:p-6 rounded-2xl bg-[#07101D] border border-white/[0.08] shadow-xl space-y-6">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-white/5 pb-4">
-        <div className="flex items-center space-x-3.5">
-          <div className="p-3 rounded-xl bg-gradient-to-br from-amber-500/20 to-orange-500/20 border border-amber-500/30 text-amber-400">
-            <Trophy className="w-6 h-6" />
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-white/[0.06] pb-4">
+        <div className="flex items-center gap-3">
+          <div className="w-9 h-9 rounded-xl bg-[#F59E0B]/10 border border-[#F59E0B]/20 flex items-center justify-center text-[#F59E0B] shrink-0">
+            <Trophy className="w-5 h-5" />
           </div>
           <div>
             <div className="flex items-center gap-2">
-              <h2 className="text-lg font-bold text-white tracking-wide">Sequential Promotion &amp; Leadership Ladder</h2>
-              <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20 font-bold">
+              <h2 className="text-base font-bold text-white tracking-wide">Promotion &amp; Rank Ladder</h2>
+              <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-[#F59E0B]/10 text-[#F59E0B] border border-[#F59E0B]/20 font-bold">
                 Sequential Progression
               </span>
             </div>
-            <p className="text-xs text-slate-400">
-              Authoritative rank ladder evaluated step-by-step. Matching units flush per stage; leadership requires qualified downline leaders.
+            <p className="text-xs text-[#98A2B3]">
+              Advance through PHIVONEX promotion ranks step-by-step.
             </p>
           </div>
         </div>
 
-        {/* Current Rank & Rewards Badge */}
-        <div className="flex items-center gap-3">
-          <div className="flex items-center space-x-2.5 px-3.5 py-2 rounded-xl bg-[#07101D] border border-white/10 text-white">
-            <ShieldCheck className="w-5 h-5 text-[#00CFFF]" />
+        {/* Current Rank Badge & Refresh Button */}
+        <div className="flex items-center gap-2.5 self-start sm:self-auto">
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-[#05070B] border border-white/[0.06] text-white">
+            <ShieldCheck className="w-4 h-4 text-[#00CFFF]" />
             <div>
-              <div className="text-[10px] uppercase font-mono tracking-wider text-slate-400">Current Rank</div>
-              <div className="text-sm font-bold font-mono text-[#00CFFF]">
-                {currentRankName} <span className="text-xs text-slate-500">#{currentRankOrder}</span>
+              <div className="text-[9px] uppercase font-mono text-[#98A2B3]">Current Rank</div>
+              <div className="text-xs font-bold font-mono text-[#00CFFF]">
+                {currentRankName}
               </div>
             </div>
           </div>
 
-          {totalRewardsEarned > 0 && (
-            <div className="flex items-center space-x-2.5 px-3.5 py-2 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-300">
-              <Award className="w-5 h-5 text-amber-400" />
-              <div>
-                <div className="text-[10px] uppercase font-mono tracking-wider text-slate-400">Milestone Rewards</div>
-                <div className="text-sm font-bold font-mono text-amber-300">{formatUsd(totalRewardsEarned)}</div>
-              </div>
-            </div>
-          )}
+          <button
+            type="button"
+            onClick={() => fetchRankState(true)}
+            disabled={refreshing || loadingRank}
+            className="px-3 py-2 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.08] text-xs font-semibold text-white flex items-center gap-1.5 transition-all cursor-pointer min-h-[44px] disabled:opacity-50"
+            title="Refresh Rank Status"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 text-[#00CFFF] ${refreshing ? 'animate-spin' : ''}`} />
+            <span>{refreshing ? 'Updating...' : 'Refresh Rank Status'}</span>
+          </button>
         </div>
       </div>
 
-      {evalMessage && (
-        <div className="p-3.5 rounded-xl bg-[#07101D] border border-amber-500/30 text-xs font-mono text-amber-300 flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2">
-            <Sparkles className="w-4 h-4 text-amber-400 shrink-0" />
-            <span>{evalMessage}</span>
-          </div>
-          <button
-            onClick={() => setEvalMessage(null)}
-            className="text-slate-400 hover:text-white text-xs cursor-pointer"
-          >
-            ✕
-          </button>
-        </div>
-      )}
-
-      {/* Current Active Target Stage Spotlight */}
+      {/* Target Stage Spotlight */}
       {nextRankName ? (
-        <div className="p-5 rounded-xl bg-gradient-to-br from-[#07101D] to-[#121626] border border-white/10 space-y-4">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-white/5 pb-3">
+        <div className="p-4 sm:p-5 rounded-xl bg-[#05070B] border border-white/[0.06] space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-white/[0.04] pb-3">
             <div className="flex items-center gap-2">
-              <Zap className="w-4 h-4 text-amber-400" />
-              <span className="text-xs font-mono uppercase tracking-wider text-slate-300 font-bold">
-                Next Promotion Stage Target:
+              <Zap className="w-4 h-4 text-[#F59E0B]" />
+              <span className="text-xs font-mono uppercase text-[#98A2B3]">
+                Target Rank:
               </span>
-              <span className="text-xs font-mono px-2.5 py-0.5 rounded bg-amber-500/10 text-amber-300 border border-amber-500/20 font-bold">
+              <span className="text-xs font-mono px-2 py-0.5 rounded bg-[#F59E0B]/10 text-[#F59E0B] border border-[#F59E0B]/20 font-bold">
                 {nextRankName}
-              </span>
-              <span className="text-xs font-mono text-slate-500">
-                ({rankState?.qualificationType === 'MATCHING' ? 'Volume Matching' : 'Leadership Downline'})
               </span>
             </div>
 
-            <button
-              onClick={handleEvaluate}
-              disabled={evaluating || loadingRank}
-              className="px-3.5 py-1.5 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/30 text-xs font-mono font-bold flex items-center gap-1.5 cursor-pointer disabled:opacity-50 transition"
-            >
-              <RefreshCw className={`w-3.5 h-3.5 ${evaluating ? 'animate-spin' : ''}`} />
-              <span>{evaluating ? 'Evaluating...' : 'Check & Evaluate Rank'}</span>
-            </button>
+            <span className="text-xs font-mono text-[#98A2B3]">
+              Qualification: {rankState?.qualificationType === 'MATCHING' ? 'Volume Matching' : 'Leadership Downline'}
+            </span>
           </div>
 
           {/* If Target is MATCHING based (Node Builder, Node Master, Node Captain) */}
           {matchingStage && (
             <div className="space-y-3">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 {/* Left Leg Progress */}
-                <div className="p-3.5 rounded-lg bg-[#07101D] border border-white/5 space-y-2">
+                <div className="p-3.5 rounded-lg bg-[#07101D] border border-white/[0.04] space-y-2">
                   <div className="flex items-center justify-between text-xs font-mono">
-                    <span className="text-slate-400">LEFT Matching Progress</span>
-                    <span className="text-cyan-400 font-bold">
+                    <span className="text-[#98A2B3]">Left Team Requirement</span>
+                    <span className="text-[#00CFFF] font-bold tabular-nums">
                       {matchingStage.leftProgress} / {matchingStage.requiredLeft} Units
                     </span>
                   </div>
-                  <div className="w-full h-2 rounded-full bg-white/5 overflow-hidden">
+                  <div className="w-full h-2 rounded-full bg-white/[0.06] overflow-hidden">
                     <div
-                      className="h-full bg-gradient-to-r from-cyan-500 to-blue-500 rounded-full"
+                      className="h-full bg-gradient-to-r from-[#00CFFF] to-[#168BFF] rounded-full transition-all duration-500"
                       style={{
                         width: `${Math.min(100, (matchingStage.leftProgress / matchingStage.requiredLeft) * 100)}%`,
                       }}
                     />
                   </div>
-                  <div className="flex justify-between text-[10px] font-mono text-slate-500">
-                    <span>Active Volume: {matchingStage.totalActiveVolumeLeft}</span>
-                    <span>Consumed Prior: {matchingStage.cumulativeConsumedLeft}</span>
-                  </div>
                 </div>
 
                 {/* Right Leg Progress */}
-                <div className="p-3.5 rounded-lg bg-[#07101D] border border-white/5 space-y-2">
+                <div className="p-3.5 rounded-lg bg-[#07101D] border border-white/[0.04] space-y-2">
                   <div className="flex items-center justify-between text-xs font-mono">
-                    <span className="text-slate-400">RIGHT Matching Progress</span>
-                    <span className="text-emerald-400 font-bold">
+                    <span className="text-[#98A2B3]">Right Team Requirement</span>
+                    <span className="text-[#32D583] font-bold tabular-nums">
                       {matchingStage.rightProgress} / {matchingStage.requiredRight} Units
                     </span>
                   </div>
-                  <div className="w-full h-2 rounded-full bg-white/5 overflow-hidden">
+                  <div className="w-full h-2 rounded-full bg-white/[0.06] overflow-hidden">
                     <div
-                      className="h-full bg-gradient-to-r from-emerald-500 to-teal-500 rounded-full"
+                      className="h-full bg-gradient-to-r from-[#32D583] to-[#12B76A] rounded-full transition-all duration-500"
                       style={{
                         width: `${Math.min(100, (matchingStage.rightProgress / matchingStage.requiredRight) * 100)}%`,
                       }}
                     />
                   </div>
-                  <div className="flex justify-between text-[10px] font-mono text-slate-500">
-                    <span>Active Volume: {matchingStage.totalActiveVolumeRight}</span>
-                    <span>Consumed Prior: {matchingStage.cumulativeConsumedRight}</span>
-                  </div>
                 </div>
               </div>
 
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between text-xs font-mono text-slate-400 pt-1">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between text-xs font-mono text-[#98A2B3] pt-1">
                 <span>
                   Stage Requirement: <strong>{matchingStage.requiredLeft} Left / {matchingStage.requiredRight} Right</strong> matching units.
                 </span>
-                <span className="text-amber-300 font-bold">
-                  Overall Stage Completion: {matchingStage.progressPct}%
+                <span className="text-[#F59E0B] font-bold">
+                  Overall Completion: {matchingStage.progressPct}%
                 </span>
               </div>
             </div>
@@ -375,54 +372,36 @@ export const PromotionSection: React.FC<PromotionSectionProps> = ({ data: legacy
           {/* If Target is LEADERSHIP based (Node Commander, Node Ambassador, Node Titan) */}
           {leadershipStage && (
             <div className="space-y-3">
-              <div className="p-3.5 rounded-lg bg-[#07101D] border border-purple-500/20 space-y-3">
+              <div className="p-3.5 rounded-lg bg-[#07101D] border border-white/[0.04] space-y-3">
                 <div className="flex items-center justify-between text-xs font-mono">
-                  <span className="text-purple-400 font-bold flex items-center gap-1.5">
+                  <span className="text-[#F59E0B] font-bold flex items-center gap-1.5">
                     <Users className="w-3.5 h-3.5" />
-                    Downline Leadership Requirement: {leadershipStage.requiredLeft} / {leadershipStage.requiredRight} Qualified {leadershipStage.requiredLeaderRankName} Leaders
+                    Leadership Requirement: {leadershipStage.requiredLeft} / {leadershipStage.requiredRight} Qualified {leadershipStage.requiredLeaderRankName}
                   </span>
-                  <span className="text-purple-300 font-bold">
+                  <span className="text-[#F59E0B] font-bold">
                     {leadershipStage.progressPct}% Qualified
                   </span>
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs font-mono">
-                  <div className="p-3 rounded-lg bg-[#0B1528] border border-white/5">
-                    <div className="text-slate-400">LEFT Binary Leg Leaders</div>
-                    <div className="text-xl font-bold font-mono text-purple-300 mt-1">
-                      {leadershipStage.leftLeaders} <span className="text-xs text-slate-500">Qualified</span>
+                  <div className="p-3 rounded-lg bg-[#05070B] border border-white/[0.04]">
+                    <div className="text-[#98A2B3]">Left Leg Leaders</div>
+                    <div className="text-lg font-bold font-mono text-white mt-1 tabular-nums">
+                      {leadershipStage.leftLeaders} / {leadershipStage.requiredLeft}
                     </div>
-                    {leadershipStage.leftLeaderDetails.length > 0 ? (
-                      <div className="text-[10px] text-slate-400 mt-1 truncate">
-                        Leaders: {leadershipStage.leftLeaderDetails.map((l) => l.publicId).join(', ')}
-                      </div>
-                    ) : (
-                      <div className="text-[10px] text-slate-500 mt-1">
-                        Awaiting downline {leadershipStage.requiredLeaderRankName} completion.
-                      </div>
-                    )}
                   </div>
 
-                  <div className="p-3 rounded-lg bg-[#0B1528] border border-white/5">
-                    <div className="text-slate-400">RIGHT Binary Leg Leaders</div>
-                    <div className="text-xl font-bold font-mono text-purple-300 mt-1">
-                      {leadershipStage.rightLeaders} <span className="text-xs text-slate-500">Qualified</span>
+                  <div className="p-3 rounded-lg bg-[#05070B] border border-white/[0.04]">
+                    <div className="text-[#98A2B3]">Right Leg Leaders</div>
+                    <div className="text-lg font-bold font-mono text-white mt-1 tabular-nums">
+                      {leadershipStage.rightLeaders} / {leadershipStage.requiredRight}
                     </div>
-                    {leadershipStage.rightLeaderDetails.length > 0 ? (
-                      <div className="text-[10px] text-slate-400 mt-1 truncate">
-                        Leaders: {leadershipStage.rightLeaderDetails.map((l) => l.publicId).join(', ')}
-                      </div>
-                    ) : (
-                      <div className="text-[10px] text-slate-500 mt-1">
-                        Awaiting downline {leadershipStage.requiredLeaderRankName} completion.
-                      </div>
-                    )}
                   </div>
                 </div>
 
-                <div className="w-full h-2 rounded-full bg-white/5 overflow-hidden">
+                <div className="w-full h-2 rounded-full bg-white/[0.06] overflow-hidden">
                   <div
-                    className="h-full bg-gradient-to-r from-purple-500 to-indigo-500 rounded-full"
+                    className="h-full bg-gradient-to-r from-[#F59E0B] to-[#D97706] rounded-full transition-all duration-500"
                     style={{ width: `${leadershipStage.progressPct}%` }}
                   />
                 </div>
@@ -431,12 +410,12 @@ export const PromotionSection: React.FC<PromotionSectionProps> = ({ data: legacy
           )}
         </div>
       ) : (
-        <div className="p-5 rounded-xl bg-gradient-to-br from-emerald-500/10 to-[#07101D] border border-emerald-500/30 flex items-center gap-3">
-          <ShieldCheck className="w-8 h-8 text-emerald-400 shrink-0" />
+        <div className="p-5 rounded-xl bg-[#05070B] border border-[#32D583]/30 flex items-center gap-3">
+          <ShieldCheck className="w-8 h-8 text-[#32D583] shrink-0" />
           <div>
-            <div className="text-base font-bold font-mono text-white">Supreme Node Titan Achieved</div>
-            <div className="text-xs text-slate-400">
-              You have completed all sequential promotion ranks up to Rank 6 (Node Titan).
+            <div className="text-sm font-bold font-mono text-white">Top Rank Achieved</div>
+            <div className="text-xs text-[#98A2B3]">
+              You have completed all promotion ranks up to Rank 6 (Node Titan).
             </div>
           </div>
         </div>
@@ -444,64 +423,58 @@ export const PromotionSection: React.FC<PromotionSectionProps> = ({ data: legacy
 
       {/* The 7-Rank Progression Ladder */}
       <div className="space-y-3">
-        <div className="flex items-center justify-between text-xs font-mono text-slate-400 uppercase tracking-wider">
-          <span className="flex items-center gap-2">
-            <TrendingUp className="w-3.5 h-3.5 text-amber-400" />
+        <div className="flex items-center justify-between text-xs font-mono text-[#98A2B3] uppercase tracking-wider">
+          <span className="flex items-center gap-1.5">
+            <TrendingUp className="w-3.5 h-3.5 text-[#00CFFF]" />
             Official Promotion Ladder Sequence
           </span>
-          <span className="text-slate-500 lowercase">Rank 0 through Rank 6</span>
+          <span className="text-[#667085]">Rank 0 through Rank 6</span>
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-          {(rankState?.ladder || []).map((rule) => {
+          {ladder.map((rule) => {
             const isCompleted = currentRankOrder >= rule.rankOrder;
             const isCurrentTarget = nextRankName === rule.rankKey;
-            const isLocked = currentRankOrder < rule.rankOrder && !isCurrentTarget;
 
             return (
               <div
                 key={rule.rankKey}
-                className={`p-3.5 rounded-xl border transition-all ${
+                className={`p-3.5 rounded-xl border transition-all text-xs font-mono space-y-2 ${
                   isCompleted
-                    ? 'bg-gradient-to-br from-emerald-500/10 to-[#07101D] border-emerald-500/30'
+                    ? 'bg-[#32D583]/5 border-[#32D583]/30'
                     : isCurrentTarget
-                    ? 'bg-gradient-to-br from-amber-500/10 to-[#07101D] border-amber-500/40 shadow-lg shadow-amber-500/5'
-                    : 'bg-[#07101D] border-white/5 opacity-60'
+                    ? 'bg-[#F59E0B]/5 border-[#F59E0B]/40 shadow-sm'
+                    : 'bg-[#05070B] border-white/[0.04] opacity-70'
                 }`}
               >
-                <div className="flex items-center justify-between pb-2 border-b border-white/5">
-                  <span className="text-xs font-mono font-bold text-white">#{rule.rankOrder} {rule.rankName}</span>
+                <div className="flex items-center justify-between pb-2 border-b border-white/[0.04]">
+                  <span className="font-bold text-white">#{rule.rankOrder} {rule.rankName}</span>
                   {isCompleted ? (
-                    <span className="flex items-center gap-1 text-[10px] font-mono text-emerald-400 font-bold">
+                    <span className="flex items-center gap-1 text-[10px] text-[#32D583] font-bold">
                       <Check className="w-3 h-3" /> COMPLETED
                     </span>
                   ) : isCurrentTarget ? (
-                    <span className="flex items-center gap-1 text-[10px] font-mono text-amber-400 font-bold animate-pulse">
-                      <Zap className="w-3 h-3" /> PENDING TARGET
+                    <span className="flex items-center gap-1 text-[10px] text-[#F59E0B] font-bold">
+                      <Zap className="w-3 h-3" /> TARGET
                     </span>
                   ) : (
-                    <span className="flex items-center gap-1 text-[10px] font-mono text-slate-500">
+                    <span className="flex items-center gap-1 text-[10px] text-[#667085]">
                       <Lock className="w-3 h-3" /> LOCKED
                     </span>
                   )}
                 </div>
 
-                <div className="pt-2.5 pb-2 text-xs font-mono space-y-1">
-                  <div className="text-[11px] text-slate-400">
-                    Type: <strong className="text-slate-200">{rule.qualificationType}</strong>
+                <div className="space-y-1 text-[11px]">
+                  <div className="text-[#98A2B3]">
+                    Type: <strong className="text-white">{rule.qualificationType}</strong>
                   </div>
-                  <div className="text-[11px] text-slate-300">
+                  <div className="text-white">
                     {rule.qualificationType === 'MATCHING'
                       ? `${rule.requiredLeft}L / ${rule.requiredRight}R Matching Units`
                       : rule.qualificationType === 'LEADERSHIP'
                       ? `${rule.requiredLeft} / ${rule.requiredRight} ${rule.requiredLeaderRank} Leaders`
                       : 'Default Tier'}
                   </div>
-                  {rule.rewardUsd > 0 && (
-                    <div className="text-[11px] font-bold text-amber-300">
-                      Bonus: {formatUsd(rule.rewardUsd)}
-                    </div>
-                  )}
                 </div>
               </div>
             );
@@ -511,23 +484,20 @@ export const PromotionSection: React.FC<PromotionSectionProps> = ({ data: legacy
 
       {/* Completed Rank Achievements History */}
       {rankState && rankState.completedEvents.length > 0 && (
-        <div className="p-4 rounded-xl bg-[#07101D] border border-white/10 space-y-3">
-          <div className="text-xs font-mono uppercase text-slate-400 tracking-wider border-b border-white/5 pb-2 flex items-center justify-between">
-            <span>Authoritative Rank History</span>
-            <span className="text-[10px] text-slate-500">{rankState.completedEvents.length} Achieved</span>
+        <div className="p-4 rounded-xl bg-[#05070B] border border-white/[0.06] space-y-3">
+          <div className="text-xs font-mono uppercase text-[#98A2B3] tracking-wider border-b border-white/[0.04] pb-2 flex items-center justify-between">
+            <span>Rank History</span>
+            <span className="text-[10px] text-[#667085]">{rankState.completedEvents.length} Achieved</span>
           </div>
 
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs font-mono">
               <thead>
-                <tr className="text-slate-500 border-b border-white/5 text-[10px]">
+                <tr className="text-[#667085] border-b border-white/[0.04] text-[10px]">
                   <th className="py-2 px-2">Promotion ID</th>
                   <th className="py-2 px-2">Rank Achieved</th>
                   <th className="py-2 px-2">Order</th>
                   <th className="py-2 px-2">Type</th>
-                  <th className="py-2 px-2">Consumed Matching Units</th>
-                  <th className="py-2 px-2">Milestone Reward</th>
-                  <th className="py-2 px-2">Rule Version</th>
                   <th className="py-2 px-2">Date Completed</th>
                 </tr>
               </thead>
@@ -536,12 +506,9 @@ export const PromotionSection: React.FC<PromotionSectionProps> = ({ data: legacy
                   <tr key={evt.id} className="hover:bg-white/[0.02]">
                     <td className="py-2.5 px-2 text-[#00CFFF]">{evt.publicPromotionId}</td>
                     <td className="py-2.5 px-2 font-bold text-white">{evt.rankName}</td>
-                    <td className="py-2.5 px-2 text-slate-400">#{evt.rankOrder}</td>
-                    <td className="py-2.5 px-2 text-slate-300">{evt.qualificationType}</td>
-                    <td className="py-2.5 px-2 text-slate-300">{evt.consumedLeft} Left / {evt.consumedRight} Right</td>
-                    <td className="py-2.5 px-2 text-amber-300 font-bold">{evt.rewardUsd > 0 ? formatUsd(evt.rewardUsd) : '—'}</td>
-                    <td className="py-2.5 px-2 text-slate-400">v{evt.ruleVersion}</td>
-                    <td className="py-2.5 px-2 text-slate-400">{formatDate(evt.completedAt)}</td>
+                    <td className="py-2.5 px-2 text-[#98A2B3]">#{evt.rankOrder}</td>
+                    <td className="py-2.5 px-2 text-[#98A2B3]">{evt.qualificationType}</td>
+                    <td className="py-2.5 px-2 text-[#98A2B3]">{formatDate(evt.completedAt)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -549,14 +516,6 @@ export const PromotionSection: React.FC<PromotionSectionProps> = ({ data: legacy
           </div>
         </div>
       )}
-
-      {/* Regulatory & Compliance Notice */}
-      <div className="p-3.5 rounded-xl bg-white/[0.02] border border-white/5 text-[11px] text-slate-400 flex items-start gap-2.5">
-        <ShieldCheck className="w-4 h-4 text-slate-500 shrink-0 mt-0.5" />
-        <p>
-          PHIVONEX promotion ranks are awarded sequentially based on verified network binary matching volume and downline validator leadership qualification. Promotion progression does not represent an investment, yield, or guarantee of financial returns.
-        </p>
-      </div>
     </div>
   );
 };

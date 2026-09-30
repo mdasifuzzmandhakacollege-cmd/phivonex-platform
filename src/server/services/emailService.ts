@@ -1,6 +1,7 @@
 import { v4 as uuidv4 } from 'uuid';
 import { getDb } from '../db/db';
 import { logAdminAction } from './adminService';
+import { createNotification } from './notificationService';
 
 // Provider Interface
 export interface EmailProvider {
@@ -369,12 +370,12 @@ export async function sendBroadcastCampaign(
 ): Promise<{ queuedCount: number }> {
   const db = await getDb();
 
-  let userQuery = `SELECT email, full_name, public_id FROM users WHERE status = 'ACTIVE'`;
+  let userQuery = `SELECT id, email, full_name, public_id FROM users WHERE status = 'ACTIVE'`;
   if (campaign.audience === 'ACTIVE_USERS') {
-    userQuery = `SELECT email, full_name, public_id FROM users WHERE status = 'ACTIVE'`;
+    userQuery = `SELECT id, email, full_name, public_id FROM users WHERE status = 'ACTIVE'`;
   } else if (campaign.audience === 'NODE_HOLDERS') {
     userQuery = `
-      SELECT DISTINCT u.email, u.full_name, u.public_id 
+      SELECT DISTINCT u.id, u.email, u.full_name, u.public_id 
       FROM users u
       INNER JOIN node_orders o ON u.id = o.user_id
       WHERE o.status = 'COMPLETED'
@@ -400,6 +401,21 @@ export async function sendBroadcastCampaign(
       `,
       [queueId, user.email, subject, bodyHtml]
     );
+
+    // Deliver in-app notification to targeted user with strict idempotency
+    if (user.id) {
+      createNotification({
+        userId: user.id,
+        type: 'SECURITY_ALERT',
+        title: subject,
+        message: subject,
+        sourceType: 'BROADCAST_CAMPAIGN',
+        sourceId: `camp-${campaign.subject.slice(0, 30)}-${user.id}`,
+      }).catch((notifErr) => {
+        console.warn('[EmailEngine] In-app notification delivery warning:', notifErr?.message);
+      });
+    }
+
     queuedCount++;
   }
 
@@ -418,6 +434,108 @@ export async function sendBroadcastCampaign(
   });
 
   return { queuedCount };
+}
+
+// ----------------------------------------------------------------------------
+// EMAIL QUEUE QUERIES & RETRY OPERATIONS
+// ----------------------------------------------------------------------------
+
+export interface EmailQueueFilters {
+  status?: string;
+  search?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export async function getEmailQueue(filters: EmailQueueFilters = {}): Promise<{ items: EmailQueueItem[]; total: number }> {
+  const db = await getDb();
+  const limit = Math.min(Math.max(Number(filters.limit) || 20, 1), 100);
+  const offset = Math.max(Number(filters.offset) || 0, 0);
+
+  const conditions: string[] = [];
+  const params: any[] = [];
+  let paramIdx = 1;
+
+  if (filters.status && filters.status !== 'ALL') {
+    conditions.push(`status = $${paramIdx++}`);
+    params.push(filters.status.toUpperCase());
+  }
+
+  if (filters.search && filters.search.trim()) {
+    conditions.push(`(to_email ILIKE $${paramIdx} OR subject ILIKE $${paramIdx})`);
+    params.push(`%${filters.search.trim()}%`);
+    paramIdx++;
+  }
+
+  const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+
+  const countRes = await db.query<{ count: string }>(
+    `SELECT COUNT(*) as count FROM email_queue ${whereClause}`,
+    params
+  );
+  const total = parseInt(countRes.rows[0]?.count || '0', 10);
+
+  const queryParams = [...params, limit, offset];
+  const itemsRes = await db.query(
+    `SELECT * FROM email_queue ${whereClause} ORDER BY created_at DESC LIMIT $${paramIdx++} OFFSET $${paramIdx}`,
+    queryParams
+  );
+
+  return {
+    items: itemsRes.rows.map((r: any) => ({
+      id: r.id,
+      toEmail: r.to_email,
+      subject: r.subject,
+      bodyHtml: r.body_html,
+      status: r.status,
+      providerMessageId: r.provider_message_id,
+      errorMessage: r.error_message,
+      sentAt: r.sent_at,
+      createdAt: r.created_at,
+    })),
+    total,
+  };
+}
+
+export async function getEmailQueueStats(): Promise<{
+  totalQueued: number;
+  totalSent: number;
+  totalDelivered: number;
+  totalFailed: number;
+  totalAll: number;
+}> {
+  const db = await getDb();
+  const res = await db.query(`
+    SELECT
+      COUNT(CASE WHEN status = 'QUEUED' THEN 1 END) as queued,
+      COUNT(CASE WHEN status = 'SENT' THEN 1 END) as sent,
+      COUNT(CASE WHEN status = 'DELIVERED' THEN 1 END) as delivered,
+      COUNT(CASE WHEN status = 'FAILED' THEN 1 END) as failed,
+      COUNT(*) as total
+    FROM email_queue
+  `);
+
+  const row = res.rows[0] || {};
+  return {
+    totalQueued: parseInt(row.queued || '0', 10),
+    totalSent: parseInt(row.sent || '0', 10),
+    totalDelivered: parseInt(row.delivered || '0', 10),
+    totalFailed: parseInt(row.failed || '0', 10),
+    totalAll: parseInt(row.total || '0', 10),
+  };
+}
+
+export async function retryQueueItem(id: string): Promise<boolean> {
+  const db = await getDb();
+  const res = await db.query(
+    `UPDATE email_queue SET status = 'QUEUED', error_message = NULL, sent_at = NULL WHERE id = $1 RETURNING id`,
+    [id]
+  );
+  if (res.rowCount > 0) {
+    processEmailQueue().catch(err => console.error('[EmailService] Retry process error:', err));
+    return true;
+  }
+  return false;
 }
 
 // ----------------------------------------------------------------------------

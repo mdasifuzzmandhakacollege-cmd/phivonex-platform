@@ -59,6 +59,30 @@ rewardRouter.get('/summary', requireAuth, async (req: AuthRequest, res: Response
 });
 
 /**
+ * GET /api/rewards/history
+ * Authenticated user endpoint returning reward history records with sorting and epoch details.
+ */
+rewardRouter.get('/history', requireAuth, async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const user = req.user!;
+    const rewardsData = await getUserRewards(user.id);
+
+    res.status(200).json({
+      success: true,
+      history: rewardsData.history,
+      total: rewardsData.history.length,
+      latestEpoch: rewardsData.latestEpoch,
+    });
+  } catch (err: any) {
+    console.error('[Reward API] Error in GET /api/rewards/history:', err);
+    res.status(500).json({
+      error: 'SERVER_ERROR',
+      message: 'Failed to retrieve reward history.',
+    });
+  }
+});
+
+/**
  * POST /api/rewards/claim
  * Safe claim foundation: Transitions ACCRUED → CLAIMED.
  *

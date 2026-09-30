@@ -7,10 +7,10 @@ interface WalletViewProps {
   onNavigateTab?: (tab: string) => void;
 }
 
-export const WalletView: React.FC<WalletViewProps> = () => {
+export const WalletView: React.FC<WalletViewProps> = ({ onNavigateTab }) => {
   return (
     <div className="space-y-6">
-      <WalletSection />
+      <WalletSection onNavigateTab={onNavigateTab} />
     </div>
   );
 };

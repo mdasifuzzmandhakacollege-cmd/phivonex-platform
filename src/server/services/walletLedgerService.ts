@@ -739,7 +739,8 @@ export async function getWalletTransactions(
   page = 1,
   limit = 20,
   typeFilter?: string,
-  searchQuery?: string
+  searchQuery?: string,
+  entryTypeFilter?: string
 ): Promise<WalletTransactionsResponse> {
   await syncUserLedger(userId);
 
@@ -760,12 +761,27 @@ export async function getWalletTransactions(
       types = ['MATCHING_BONUS'];
     } else if (u === 'PROMOTION_BONUS' || u === 'PROMOTION') {
       types = ['PROMOTION_BONUS'];
+    } else if (u === 'BLOCKCHAIN_DEPOSIT' || u === 'DEPOSIT') {
+      types = ['BLOCKCHAIN_DEPOSIT'];
+    } else if (u === 'WITHDRAWAL') {
+      types = ['WITHDRAWAL'];
+    } else if (u === 'COIN_SWAP' || u === 'SWAP') {
+      types = ['COIN_SWAP'];
     } else {
       types = [u];
     }
   }
 
-  const cleanSearch = searchQuery ? searchQuery.trim() : '';
+  // Determine normalized entry type (CREDIT, DEBIT, REVERSAL)
+  let normalizedEntryType: LedgerEntryType | null = null;
+  if (entryTypeFilter && entryTypeFilter !== 'all' && entryTypeFilter !== 'ALL') {
+    const et = entryTypeFilter.toUpperCase();
+    if (et === 'CREDIT' || et === 'DEBIT' || et === 'REVERSAL') {
+      normalizedEntryType = et as LedgerEntryType;
+    }
+  }
+
+  const cleanSearch = searchQuery ? searchQuery.trim().slice(0, 100) : '';
 
   let whereClauses = ['user_id = $1'];
   let queryParams: any[] = [userId];
@@ -777,8 +793,14 @@ export async function getWalletTransactions(
     paramIdx++;
   }
 
+  if (normalizedEntryType) {
+    whereClauses.push(`entry_type = $${paramIdx}`);
+    queryParams.push(normalizedEntryType);
+    paramIdx++;
+  }
+
   if (cleanSearch) {
-    whereClauses.push(`(public_txn_id ILIKE $${paramIdx} OR description ILIKE $${paramIdx} OR source_ref ILIKE $${paramIdx} OR id ILIKE $${paramIdx})`);
+    whereClauses.push(`(public_txn_id ILIKE $${paramIdx} OR description ILIKE $${paramIdx} OR source_ref ILIKE $${paramIdx} OR id::text ILIKE $${paramIdx})`);
     queryParams.push(`%${cleanSearch}%`);
     paramIdx++;
   }
@@ -800,7 +822,7 @@ export async function getWalletTransactions(
     SELECT *
     FROM financial_ledger_entries
     WHERE ${whereSql}
-    ORDER BY created_at DESC
+    ORDER BY created_at DESC, id DESC
     LIMIT $${limitParamIdx} OFFSET $${offsetParamIdx}
     `,
     txQueryParams

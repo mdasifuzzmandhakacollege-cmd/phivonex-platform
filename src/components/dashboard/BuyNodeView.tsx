@@ -58,7 +58,7 @@ interface NodeOrder {
 }
 
 export const BuyNodeView: React.FC<BuyNodeViewProps> = ({ user, onNavigateTab }) => {
-  const { nodeBasePriceUsd: realTimeNodePrice } = useSystemConfig();
+  const { nodeBasePriceUsd: realTimeNodePrice, lastUpdated } = useSystemConfig();
   const [stats, setStats] = useState<NodeStats | null>(null);
   const [activeOrder, setActiveOrder] = useState<NodeOrder | null>(null);
   const [pastOrders, setPastOrders] = useState<NodeOrder[]>([]);
@@ -178,6 +178,20 @@ export const BuyNodeView: React.FC<BuyNodeViewProps> = ({ user, onNavigateTab })
 
   useEffect(() => {
     loadData();
+  }, []);
+
+  // Real-time authoritative refetch on offers update or node price update
+  useEffect(() => {
+    loadData(true);
+  }, [realTimeNodePrice, lastUpdated]);
+
+  // Real-time synchronization on balance, transaction, or node order updates
+  useEffect(() => {
+    const handleUpdate = () => {
+      loadData(true);
+    };
+    window.addEventListener('phivonex:balance-or-tx-updated', handleUpdate);
+    return () => window.removeEventListener('phivonex:balance-or-tx-updated', handleUpdate);
   }, []);
 
   // Poll for settlement webhook verification when an order is pending

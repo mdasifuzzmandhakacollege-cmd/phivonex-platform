@@ -40,10 +40,29 @@ messaging.onBackgroundMessage((payload) => {
   self.registration.showNotification(title, notificationOptions);
 });
 
+// Allowed internal application routes for secure deep-linking
+const ALLOWED_ROUTES = [
+  '/app',
+  '/app/nodes',
+  '/app/node-health',
+  '/app/network',
+  '/app/referrals',
+  '/app/wallet',
+  '/app/swap',
+  '/app/deposit',
+  '/app/withdrawals',
+  '/app/notifications',
+  '/app/rewards',
+  '/app/transactions',
+  '/app/profile',
+  '/app/security'
+];
+
 // Handle notification click to focus or open the web app
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
-  const targetUrl = event.notification.data?.url || '/app';
+  const rawUrl = event.notification.data?.url || '/app/notifications';
+  const targetUrl = ALLOWED_ROUTES.includes(rawUrl) ? rawUrl : '/app/notifications';
 
   event.waitUntil(
     clients.matchAll({ type: 'window', includeUncontrolled: true }).then((windowClients) => {

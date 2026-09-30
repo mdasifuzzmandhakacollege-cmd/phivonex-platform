@@ -7,9 +7,57 @@ import {
   markAllNotificationsAsRead,
   deleteNotification,
   deleteAllNotifications,
+  notificationEmitter,
 } from '../services/notificationService';
 
 export const notificationRouter = Router();
+
+// In-memory rate limiting for test push (max 5 requests per 60s per user)
+const testPushTimestamps = new Map<string, number[]>();
+
+/**
+ * GET /api/notifications/events
+ * Authenticated Server-Sent Events (SSE) stream strictly scoped to req.user.id.
+ */
+notificationRouter.get('/events', requireAuth, (req: AuthRequest, res: Response) => {
+  const userId = req.user!.id;
+
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+  res.flushHeaders();
+
+  // Initial handshake event
+  res.write(`data: ${JSON.stringify({ type: 'CONNECTED', userId, timestamp: Date.now() })}\n\n`);
+
+  // User-scoped notification listener
+  const onNotification = (notif: any) => {
+    try {
+      res.write(`data: ${JSON.stringify({ type: 'NEW_NOTIFICATION', notification: notif })}\n\n`);
+    } catch {
+      // Stream error
+    }
+  };
+
+  notificationEmitter.on(`notification:${userId}`, onNotification);
+
+  // Keep-alive heartbeat every 15s to prevent connection timeouts
+  const heartbeat = setInterval(() => {
+    try {
+      res.write(`: heartbeat ${Date.now()}\n\n`);
+    } catch {
+      clearInterval(heartbeat);
+    }
+  }, 15000);
+
+  // Clean up on client disconnect
+  req.on('close', () => {
+    clearInterval(heartbeat);
+    notificationEmitter.off(`notification:${userId}`, onNotification);
+    res.end();
+  });
+});
 
 /**
  * GET /api/notifications
@@ -227,10 +275,25 @@ notificationRouter.delete('/push-token', requireAuth, async (req: AuthRequest, r
 /**
  * POST /api/notifications/test-push
  * Triggers an immediate test push notification to verify browser/device receipt.
+ * Enforces per-user rate limiting (max 5 per minute) to prevent abuse.
  */
 notificationRouter.post('/test-push', requireAuth, async (req: AuthRequest, res: Response) => {
   try {
     const userId = req.user!.id;
+    const now = Date.now();
+    const timestamps = (testPushTimestamps.get(userId) || []).filter((t) => now - t < 60000);
+
+    if (timestamps.length >= 5) {
+      return res.status(429).json({
+        success: false,
+        error: 'RATE_LIMITED',
+        message: 'Too many test push requests. Please wait a minute before trying again.',
+      });
+    }
+
+    timestamps.push(now);
+    testPushTimestamps.set(userId, timestamps);
+
     const { sendPushNotificationToUser } = await import('../services/webPushServerService');
 
     const result = await sendPushNotificationToUser(userId, {

@@ -112,6 +112,14 @@ function AppContent() {
     return <DashboardPage onNavigate={navigate} currentPath="/app/notifications" />;
   }
 
+  // ROUTE: /rewards (Alias for /app/rewards)
+  if (currentPath === '/rewards' || currentPath.startsWith('/rewards/')) {
+    if (!loading && !user) {
+      return <LoginPage onNavigate={navigate} />;
+    }
+    return <DashboardPage onNavigate={navigate} currentPath="/app/rewards" />;
+  }
+
   // ROUTE: /admin (Protected Admin Control Plane)
   if (currentPath === '/admin' || currentPath.startsWith('/admin/')) {
     if (!loading && !user) {

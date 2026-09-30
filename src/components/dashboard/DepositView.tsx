@@ -15,11 +15,15 @@ import {
   Layers,
   Search,
   Send,
-  Loader2
+  Loader2,
+  Wallet,
+  Clock,
+  Sparkles,
 } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 import { UserProfile } from '../../context/AuthContext';
-import { UsdtIcon, BnbIcon, PhivoCoinIcon } from '../brand/CryptoIcons';
+import { UsdtIcon, BnbIcon } from '../brand/CryptoIcons';
+import { useSystemConfig } from '../../context/SystemConfigContext';
 
 export type DepositAsset = 'BNB' | 'USDT';
 
@@ -30,8 +34,8 @@ interface DepositAddressInfo {
   networkName: string;
   requiredConfirmations: number;
   explorerUrl: string;
-  derivationReference: string;
-  warning: string;
+  derivationReference?: string;
+  warning?: string;
   note?: string;
 }
 
@@ -55,8 +59,10 @@ interface BlockchainDeposit {
 }
 
 interface DepositSummary {
-  totalCreditedBnb: number;
-  totalPendingBnb: number;
+  totalCreditedBnb?: number;
+  totalPendingBnb?: number;
+  totalCreditedUsdt?: number;
+  totalPendingUsdt?: number;
   depositCount: number;
   requiredConfirmations: number;
   chainId: number;
@@ -70,9 +76,10 @@ interface DepositViewProps {
   onNavigateTab?: (tab: string) => void;
 }
 
-export const DepositView: React.FC<DepositViewProps> = ({ user, onNavigateTab }) => {
-  // Asset Selector State: 'BNB' or 'USDT'
-  const [selectedAsset, setSelectedAsset] = useState<DepositAsset>('BNB');
+export const DepositView: React.FC<DepositViewProps> = ({ user: _user, onNavigateTab }) => {
+  const { cryptoDepositsEnabled } = useSystemConfig();
+  // Asset Selector State: 'USDT' or 'BNB'
+  const [selectedAsset, setSelectedAsset] = useState<DepositAsset>('USDT');
 
   const [addressInfo, setAddressInfo] = useState<DepositAddressInfo | null>(null);
   const [deposits, setDeposits] = useState<BlockchainDeposit[]>([]);
@@ -97,9 +104,10 @@ export const DepositView: React.FC<DepositViewProps> = ({ user, onNavigateTab })
     try {
       setErrorMessage(null);
 
-      // 1. Fetch Unique Deposit Address for Selected Asset
+      // 1. Fetch Deposit Address
       const addrRes = await fetch(`/api/deposits/address?asset=${selectedAsset}`, {
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
       });
       const addrData = await addrRes.json();
 
@@ -113,6 +121,7 @@ export const DepositView: React.FC<DepositViewProps> = ({ user, onNavigateTab })
       const filterParam = statusFilter !== 'ALL' ? `&status=${statusFilter}` : '';
       const depRes = await fetch(`/api/deposits/me?page=1&limit=50${filterParam}`, {
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
       });
       const depData = await depRes.json();
 
@@ -121,7 +130,7 @@ export const DepositView: React.FC<DepositViewProps> = ({ user, onNavigateTab })
         setSummary(depData.data.summary || null);
       }
     } catch (err: any) {
-      console.error('[DepositView] Error fetching data:', err);
+      console.warn('[DepositView] Error fetching data:', err);
       setErrorMessage(err?.message || 'Unable to communicate with the BNB Smart Chain service.');
     } finally {
       setLoading(false);
@@ -139,6 +148,8 @@ export const DepositView: React.FC<DepositViewProps> = ({ user, onNavigateTab })
     setSelectedAsset(asset);
     setLoading(true);
     setCopied(false);
+    setTxVerifyError(null);
+    setTxVerifySuccess(null);
   };
 
   const activeAddress = addressInfo?.address || DEFAULT_DEPOSIT_ADDRESS;
@@ -158,6 +169,7 @@ export const DepositView: React.FC<DepositViewProps> = ({ user, onNavigateTab })
       const res = await fetch('/api/deposits/rescan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
       });
       const data = await res.json();
 
@@ -197,6 +209,7 @@ export const DepositView: React.FC<DepositViewProps> = ({ user, onNavigateTab })
       const res = await fetch('/api/deposits/submit-txhash', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({
           txHash: cleanHash,
           asset: selectedAsset,
@@ -206,7 +219,7 @@ export const DepositView: React.FC<DepositViewProps> = ({ user, onNavigateTab })
       const data = await res.json();
 
       if (res.ok && data.success) {
-        setTxVerifySuccess(data.message || `Deposit verified and credited successfully!`);
+        setTxVerifySuccess(data.message || 'Deposit verified and credited successfully!');
         setInputTxHash('');
         await fetchData();
       } else {
@@ -230,14 +243,14 @@ export const DepositView: React.FC<DepositViewProps> = ({ user, onNavigateTab })
     }
   };
 
-  // Filter deposits by search & asset
+  // Filter deposits by search
   const filteredDeposits = deposits.filter((dep) => {
-    const matchesSearch = !searchQuery.trim() || (
+    const matchesSearch =
+      !searchQuery.trim() ||
       dep.publicDepositId.toLowerCase().includes(searchQuery.toLowerCase()) ||
       dep.txHash.toLowerCase().includes(searchQuery.toLowerCase()) ||
       dep.fromAddress.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      dep.amount.toString().includes(searchQuery)
-    );
+      dep.amount.toString().includes(searchQuery);
     return matchesSearch;
   });
 
@@ -253,249 +266,276 @@ export const DepositView: React.FC<DepositViewProps> = ({ user, onNavigateTab })
 
   const isBnbSelected = selectedAsset === 'BNB';
 
+  // Calculate total credited funds
+  const totalCreditedUsdtAmount = deposits
+    .filter((d) => d.status === 'CREDITED')
+    .reduce((acc, d) => acc + (d.amount || 0), 0);
+
   return (
-    <div className="space-y-8 animate-in fade-in duration-300">
-      {/* Hero Header */}
-      <div className="relative overflow-hidden rounded-2xl border border-white/[0.08] bg-gradient-to-b from-[#0A192F] to-[#07101D] p-6 lg:p-8">
-        <div className={`absolute top-0 right-0 w-96 h-96 rounded-full blur-3xl pointer-events-none -mr-20 -mt-20 transition-all duration-500 ${isBnbSelected ? 'bg-amber-500/10' : 'bg-emerald-500/10'}`} />
-        
-        <div className="relative z-10 flex flex-col md:flex-row md:items-center md:justify-between gap-6">
-          <div>
-            <div className="flex items-center gap-3 mb-2">
-              <div className={`p-2.5 rounded-xl border transition-all ${isBnbSelected ? 'bg-amber-500/10 border-amber-500/20 text-amber-400' : 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'}`}>
-                <ArrowDownLeft className="w-6 h-6" />
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="px-2.5 py-0.5 rounded-full text-xs font-mono font-semibold bg-[#F0B90B]/10 border border-[#F0B90B]/30 text-[#F0B90B]">
-                  BNB SMART CHAIN (BEP-20 / Native)
-                </span>
-                <span className="px-2.5 py-0.5 rounded-full text-xs font-mono bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 flex items-center gap-1.5">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                  Real-Time Listener Active
-                </span>
-              </div>
+    <div className="space-y-6 sm:space-y-8 animate-fadeIn pb-12">
+      {/* ========================================================
+          1. COMPACT PAGE HERO
+         ======================================================== */}
+      <div className="relative overflow-hidden rounded-2xl bg-gradient-to-r from-[#07101D] via-[#0B1728] to-[#07101D] border border-white/[0.08] p-5 sm:p-7 shadow-xl">
+        <div className="absolute top-0 right-0 -mt-10 -mr-10 w-72 h-72 bg-[#00CFFF]/10 rounded-full blur-3xl pointer-events-none" />
+
+        <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-5">
+          <div className="space-y-2">
+            <div className="flex flex-wrap items-center gap-2 text-xs font-medium">
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md bg-[#F59E0B]/10 border border-[#F59E0B]/25 text-[#F59E0B] text-[11px] font-semibold">
+                <BnbIcon size={13} />
+                BNB Smart Chain (BEP-20)
+              </span>
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md bg-[#32D583]/10 border border-[#32D583]/25 text-[#32D583] text-[11px] font-semibold">
+                <span className="w-1.5 h-1.5 rounded-full bg-[#32D583] animate-pulse" />
+                Auto-Credit Listener
+              </span>
             </div>
-            <h1 className="text-2xl lg:text-3xl font-bold text-white tracking-tight">
-              Blockchain Deposit Portal
+
+            <h1 className="text-2xl sm:text-3xl font-bold text-white tracking-tight">
+              Deposit Funds
             </h1>
-            <p className="text-[#98A2B3] text-sm mt-1 max-w-xl">
-              Deposit native BNB or BEP-20 USDT directly to your assigned protocol address on BNB Smart Chain. Incoming on-chain transfers are automatically detected and credited to your financial ledger in real-time.
+
+            <p className="text-xs sm:text-sm text-[#98A2B3] max-w-2xl leading-relaxed">
+              Deposit BEP-20 USDT or native BNB to your assigned protocol address on BNB Smart Chain for instant automated ledger crediting.
             </p>
           </div>
 
-          {/* Action Buttons */}
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-2 self-start md:self-auto">
+            {onNavigateTab && (
+              <button
+                onClick={() => onNavigateTab('wallet')}
+                className="px-3.5 py-2 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] text-white border border-white/[0.08] text-xs font-medium flex items-center gap-1.5 transition-all cursor-pointer min-h-[44px]"
+              >
+                <Wallet className="w-3.5 h-3.5 text-[#00CFFF]" />
+                <span>Wallet</span>
+              </button>
+            )}
             <button
               onClick={() => {
                 setRefreshing(true);
                 fetchData();
               }}
               disabled={loading || refreshing}
-              className="px-4 py-2.5 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.08] text-white text-sm font-medium flex items-center gap-2 transition-all cursor-pointer disabled:opacity-50"
+              className="px-3 py-2 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] text-[#98A2B3] hover:text-white border border-white/[0.08] text-xs font-medium flex items-center gap-1.5 transition-all cursor-pointer disabled:opacity-50 min-h-[44px]"
+              title="Refresh deposits"
             >
-              <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
-              Refresh
+              <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin text-[#00CFFF]' : ''}`} />
+              <span className="hidden sm:inline">Refresh</span>
             </button>
-
             <button
               onClick={handleRescan}
               disabled={rescanning || loading}
-              className="px-4 py-2.5 rounded-xl bg-[#F0B90B]/10 hover:bg-[#F0B90B]/20 border border-[#F0B90B]/30 text-[#F0B90B] text-sm font-semibold flex items-center gap-2 transition-all cursor-pointer disabled:opacity-50"
+              className="px-3 py-2 rounded-xl bg-[#F59E0B]/10 hover:bg-[#F59E0B]/20 text-[#F59E0B] border border-[#F59E0B]/30 text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer disabled:opacity-50 min-h-[44px]"
             >
-              <Radio className={`w-4 h-4 ${rescanning ? 'animate-pulse text-[#F0B90B]' : ''}`} />
-              {rescanning ? 'Scanning BNB Chain...' : 'Sync BNB Chain'}
+              <Radio className={`w-3.5 h-3.5 ${rescanning ? 'animate-pulse' : ''}`} />
+              <span>{rescanning ? 'Scanning...' : 'Sync Chain'}</span>
             </button>
           </div>
         </div>
       </div>
 
       {/* Notifications */}
+      {!cryptoDepositsEnabled && (
+        <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-center gap-3 text-xs text-amber-300">
+          <AlertTriangle className="w-4 h-4 shrink-0 text-amber-400" />
+          <span>
+            Cryptocurrency deposits are temporarily paused by administration. Please refrain from sending funds to the protocol address until service resumes.
+          </span>
+        </div>
+      )}
+
       {errorMessage && (
-        <div className="p-4 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-300 flex items-start gap-3">
-          <AlertTriangle className="w-5 h-5 flex-shrink-0 mt-0.5 text-rose-400" />
-          <div className="text-sm">
-            <p className="font-semibold text-rose-200">Deposit Alert</p>
-            <p className="mt-0.5 text-rose-300/90">{errorMessage}</p>
-          </div>
+        <div className="p-4 rounded-xl bg-[#F04438]/10 border border-[#F04438]/30 flex items-center gap-3 text-xs text-[#FDA29B]">
+          <AlertTriangle className="w-4 h-4 shrink-0 text-[#F04438]" />
+          <span>{errorMessage}</span>
         </div>
       )}
 
       {successMessage && (
-        <div className="p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 flex items-start gap-3">
-          <CheckCircle2 className="w-5 h-5 flex-shrink-0 mt-0.5 text-emerald-400" />
-          <div className="text-sm">
-            <p className="font-semibold text-emerald-200">Sync Complete</p>
-            <p className="mt-0.5 text-emerald-300/90">{successMessage}</p>
-          </div>
+        <div className="p-4 rounded-xl bg-[#32D583]/10 border border-[#32D583]/30 flex items-center gap-3 text-xs text-[#32D583]">
+          <CheckCircle2 className="w-4 h-4 shrink-0" />
+          <span>{successMessage}</span>
         </div>
       )}
 
-      {/* 1. ASSET SELECTOR & NODE ACTIVATION INSTRUCTION BANNER */}
-      <div className="p-6 rounded-2xl border border-white/[0.08] bg-[#07101D] space-y-6">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-          <div>
-            <h2 className="text-base font-bold text-white flex items-center gap-2">
-              <Coins className="w-5 h-5 text-[#F0B90B]" />
-              Asset Selector (Deposit Currency)
-            </h2>
-            <p className="text-xs text-[#98A2B3] mt-0.5">
-              Select your preferred deposit currency on BNB Smart Chain.
-            </p>
+      {/* ========================================================
+          2. METRIC SUMMARY CARDS
+         ======================================================== */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+        {/* Card 1: Total Credited Deposits */}
+        <div className="p-4 sm:p-5 rounded-xl bg-[#07101D] border border-[#32D583]/20 space-y-2 relative overflow-hidden">
+          <div className="flex items-center justify-between text-xs text-[#98A2B3]">
+            <span className="font-medium">Total Credited</span>
+            <div className="w-7 h-7 rounded-lg bg-[#32D583]/10 border border-[#32D583]/20 flex items-center justify-center text-[#32D583]">
+              <ArrowDownLeft className="w-3.5 h-3.5" />
+            </div>
           </div>
-
-          {/* Dynamic Asset Selector Toggle */}
-          <div className="inline-flex p-1.5 rounded-xl bg-black/40 border border-white/[0.08] shrink-0">
-            <button
-              onClick={() => handleAssetChange('BNB')}
-              className={`flex items-center gap-2.5 px-5 py-2.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                isBnbSelected
-                  ? 'bg-gradient-to-r from-amber-500 to-amber-600 text-slate-950 shadow-md shadow-amber-500/25 scale-[1.02]'
-                  : 'text-[#98A2B3] hover:text-white hover:bg-white/[0.04]'
-              }`}
-            >
-              <BnbIcon size={18} />
-              <span>BNB Deposit</span>
-              <span className={`px-1.5 py-0.5 rounded text-[10px] font-mono ${isBnbSelected ? 'bg-slate-950/20 text-slate-950 font-bold' : 'bg-amber-500/20 text-amber-300'}`}>
-                Native BNB
-              </span>
-            </button>
-
-            <button
-              onClick={() => handleAssetChange('USDT')}
-              className={`flex items-center gap-2.5 px-5 py-2.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                !isBnbSelected
-                  ? 'bg-gradient-to-r from-emerald-400 to-emerald-500 text-slate-950 shadow-md shadow-emerald-500/25 scale-[1.02]'
-                  : 'text-[#98A2B3] hover:text-white hover:bg-white/[0.04]'
-              }`}
-            >
-              <UsdtIcon size={18} />
-              <span>USDT Deposit</span>
-              <span className={`px-1.5 py-0.5 rounded text-[10px] font-mono ${!isBnbSelected ? 'bg-slate-950/20 text-slate-950 font-bold' : 'bg-emerald-500/20 text-emerald-300'}`}>
-                BEP-20
-              </span>
-            </button>
+          <div className="text-2xl sm:text-3xl font-bold font-mono text-[#32D583] tabular-nums">
+            ${totalCreditedUsdtAmount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+          </div>
+          <div className="text-[11px] text-[#32D583]/80">
+            Confirmed on BSC &amp; credited
           </div>
         </div>
 
-        {/* Balance Separation & Node Activation Notice */}
-        <div className="p-4 rounded-xl bg-gradient-to-r from-[#F0B90B]/[0.08] via-[#00CFFF]/[0.05] to-transparent border border-[#F0B90B]/30 flex items-start gap-3.5">
-          <Info className="w-5 h-5 text-[#F0B90B] shrink-0 mt-0.5" />
-          <div className="text-xs space-y-1">
-            <p className="font-bold text-white">
-              BNB Smart Chain Integration &amp; Node Activation
-            </p>
-            <p className="text-[#98A2B3] leading-relaxed">
-              Your <strong className="text-amber-300">BNB</strong> and <strong className="text-emerald-300">USDT (BEP-20)</strong> deposits are automatically detected on the BNB Smart Chain network. Either balance can be used directly to purchase and activate Genesis Nodes from the <button onClick={() => onNavigateTab?.('nodes')} className="text-[#00CFFF] underline hover:text-[#80EAFF] font-semibold">Buy Node</button> section.
-            </p>
+        {/* Card 2: Total Deposit Count */}
+        <div className="p-4 sm:p-5 rounded-xl bg-[#07101D] border border-white/[0.08] space-y-2 relative overflow-hidden">
+          <div className="flex items-center justify-between text-xs text-[#98A2B3]">
+            <span className="font-medium">Deposits Count</span>
+            <div className="w-7 h-7 rounded-lg bg-[#00CFFF]/10 border border-[#00CFFF]/20 flex items-center justify-center text-[#00CFFF]">
+              <Coins className="w-3.5 h-3.5" />
+            </div>
+          </div>
+          <div className="text-2xl sm:text-3xl font-bold font-mono text-white tabular-nums">
+            {deposits.length}
+          </div>
+          <div className="text-[11px] text-[#667085]">
+            Total on-chain transfers
+          </div>
+        </div>
+
+        {/* Card 3: Network Chain */}
+        <div className="p-4 sm:p-5 rounded-xl bg-[#07101D] border border-white/[0.08] space-y-2 relative overflow-hidden">
+          <div className="flex items-center justify-between text-xs text-[#98A2B3]">
+            <span className="font-medium">Network / Chain</span>
+            <div className="w-7 h-7 rounded-lg bg-[#F59E0B]/10 border border-[#F59E0B]/20 flex items-center justify-center text-[#F59E0B]">
+              <BnbIcon size={14} />
+            </div>
+          </div>
+          <div className="text-lg font-bold font-mono text-white">
+            BSC Mainnet (56)
+          </div>
+          <div className="text-[11px] text-[#667085]">
+            BEP-20 Protocol Standard
+          </div>
+        </div>
+
+        {/* Card 4: Required Confirmations */}
+        <div className="p-4 sm:p-5 rounded-xl bg-[#07101D] border border-white/[0.08] space-y-2 relative overflow-hidden">
+          <div className="flex items-center justify-between text-xs text-[#98A2B3]">
+            <span className="font-medium">Confirmations</span>
+            <div className="w-7 h-7 rounded-lg bg-white/[0.05] border border-white/[0.1] flex items-center justify-center text-[#98A2B3]">
+              <Clock className="w-3.5 h-3.5" />
+            </div>
+          </div>
+          <div className="text-2xl sm:text-3xl font-bold font-mono text-white tabular-nums">
+            {addressInfo?.requiredConfirmations || 3} Blocks
+          </div>
+          <div className="text-[11px] text-[#667085]">
+            ≈ 9 seconds finality
           </div>
         </div>
       </div>
 
-      {/* 2. PRIMARY DEPOSIT CARD & QR DISPLAY SECTION */}
+      {/* ========================================================
+          3. ASSET TOGGLE & ASSIGNED DEPOSIT ADDRESS CARD
+         ======================================================== */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* Left: Interactive Address Box */}
-        <div className="lg:col-span-8 p-6 lg:p-8 rounded-2xl border border-white/[0.08] bg-[#07101D] space-y-6">
-          <div className="flex items-center justify-between">
+        {/* Left: Address & Details (8 Cols) */}
+        <div className="lg:col-span-8 p-5 sm:p-6 rounded-2xl bg-[#07101D] border border-white/[0.08] shadow-xl space-y-5">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-white/[0.06] pb-4">
             <div className="flex items-center gap-2.5">
-              {isBnbSelected ? <BnbIcon size={24} /> : <UsdtIcon size={24} />}
-              <h2 className="text-lg font-bold text-white">
-                Your Assigned {selectedAsset} Deposit Address
-              </h2>
-            </div>
-            <span className="text-xs font-mono text-[#F0B90B] bg-[#F0B90B]/10 px-2.5 py-1 rounded-md border border-[#F0B90B]/20 font-semibold flex items-center gap-1.5">
-              <BnbIcon size={14} />
-              BNB Smart Chain (BEP-20)
-            </span>
-          </div>
-
-          {/* Monospace Address Display */}
-          <div className={`p-4 rounded-xl bg-black/50 border relative group transition-colors ${isBnbSelected ? 'border-amber-500/30' : 'border-emerald-500/30'}`}>
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-              <div className="min-w-0 flex-1">
-                <span className="text-[11px] font-mono text-[#98A2B3] uppercase tracking-wider block mb-1">
-                  Recipient EVM Address ({addressInfo?.networkName || 'BNB Smart Chain'})
-                </span>
-                <p className={`font-mono text-sm sm:text-base md:text-lg font-semibold truncate select-all ${isBnbSelected ? 'text-amber-300' : 'text-emerald-300'}`}>
-                  {activeAddress}
+              {isBnbSelected ? <BnbIcon size={22} /> : <UsdtIcon size={22} />}
+              <div>
+                <h2 className="text-sm sm:text-base font-bold text-white">
+                  Official {selectedAsset} Deposit Address
+                </h2>
+                <p className="text-xs text-[#98A2B3]">
+                  Send {selectedAsset} on BNB Smart Chain to this address.
                 </p>
               </div>
+            </div>
+
+            {/* Currency Selector Toggle */}
+            <div className="inline-flex p-1 rounded-xl bg-[#05070B] border border-white/[0.08] self-start sm:self-auto">
               <button
-                onClick={handleCopy}
-                className={`px-4 py-3 rounded-xl border text-xs font-bold flex items-center justify-center gap-2 transition-all cursor-pointer flex-shrink-0 active:scale-95 ${
-                  isBnbSelected
-                    ? 'bg-amber-500/20 hover:bg-amber-500/30 border-amber-500/40 text-amber-300'
-                    : 'bg-emerald-500/20 hover:bg-emerald-500/30 border-emerald-500/40 text-emerald-300'
+                onClick={() => handleAssetChange('USDT')}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer min-h-[36px] ${
+                  !isBnbSelected
+                    ? 'bg-[#32D583]/15 text-[#32D583] border border-[#32D583]/30 shadow-sm'
+                    : 'text-[#98A2B3] hover:text-white'
                 }`}
               >
-                {copied ? (
-                  <>
-                    <Check className="w-4 h-4 text-emerald-400" />
-                    <span className="text-emerald-400">Copied!</span>
-                  </>
-                ) : (
-                  <>
-                    <Copy className="w-4 h-4" />
-                    <span>Copy Address</span>
-                  </>
-                )}
+                <UsdtIcon size={14} />
+                <span>USDT (BEP-20)</span>
+              </button>
+
+              <button
+                onClick={() => handleAssetChange('BNB')}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer min-h-[36px] ${
+                  isBnbSelected
+                    ? 'bg-[#F59E0B]/15 text-[#F59E0B] border border-[#F59E0B]/30 shadow-sm'
+                    : 'text-[#98A2B3] hover:text-white'
+                }`}
+              >
+                <BnbIcon size={14} />
+                <span>BNB (Native)</span>
               </button>
             </div>
           </div>
 
-          {/* Explorer Details */}
-          <div className="flex flex-wrap items-center justify-between gap-4 pt-2 text-xs text-[#98A2B3] border-t border-white/[0.04]">
+          {/* Monospace Address Box */}
+          <div className="space-y-2">
+            <label className="text-xs font-mono text-[#98A2B3] uppercase tracking-wider block">
+              Recipient BSC Address
+            </label>
+            <div className="flex items-center gap-2">
+              <div className="flex-1 px-4 py-3 rounded-xl bg-[#05070B] border border-white/[0.08] font-mono text-xs sm:text-sm font-semibold text-[#00CFFF] select-all truncate min-h-[44px] flex items-center">
+                {activeAddress}
+              </div>
+              <button
+                onClick={handleCopy}
+                className="px-4 py-3 rounded-xl bg-[#00CFFF]/10 hover:bg-[#00CFFF]/20 text-[#00CFFF] border border-[#00CFFF]/30 font-mono text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer min-h-[44px] shrink-0"
+                title="Copy deposit address"
+              >
+                {copied ? <Check className="w-4 h-4 text-[#32D583]" /> : <Copy className="w-4 h-4" />}
+                <span>{copied ? 'Copied' : 'Copy'}</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Explorer Links & Notes */}
+          <div className="flex flex-wrap items-center justify-between gap-3 pt-3 border-t border-white/[0.04] text-xs text-[#98A2B3]">
             <div className="flex flex-wrap items-center gap-4">
               <span>
-                Asset: <strong className={`font-mono ${isBnbSelected ? 'text-amber-300' : 'text-emerald-300'}`}>{selectedAsset}</strong>
+                Asset: <strong className="text-white font-mono">{selectedAsset}</strong>
               </span>
               <span>
-                Network: <strong className="text-white font-mono">{addressInfo?.networkName || 'BNB Smart Chain'}</strong>
-              </span>
-              <span>
-                Required Confirmations: <strong className="text-[#00CFFF] font-mono">{addressInfo?.requiredConfirmations || 3} Blocks</strong>
+                Network: <strong className="text-white font-mono">BNB Smart Chain (BSC)</strong>
               </span>
             </div>
             <a
               href={addressInfo?.explorerUrl || `https://bscscan.com/address/${activeAddress}`}
               target="_blank"
               rel="noopener noreferrer"
-              className="text-[#00CFFF] hover:text-[#80EAFF] flex items-center gap-1.5 transition-colors font-mono"
+              className="text-[#00CFFF] hover:underline flex items-center gap-1 font-mono text-xs"
             >
               <span>View on BscScan</span>
-              <ExternalLink className="w-3.5 h-3.5" />
+              <ExternalLink className="w-3 h-3" />
             </a>
           </div>
 
-          {/* Asset Specific Safety Card */}
-          <div className={`p-4 rounded-xl border text-xs flex items-start gap-3 ${
-            isBnbSelected
-              ? 'bg-amber-500/[0.06] border-amber-500/20 text-amber-200'
-              : 'bg-emerald-500/[0.06] border-emerald-500/20 text-emerald-200'
-          }`}>
-            <ShieldCheck className="w-5 h-5 flex-shrink-0 mt-0.5 text-[#F0B90B]" />
-            <div className="space-y-1">
-              <p className="font-semibold text-white">BNB Smart Chain Protocol Instructions</p>
-              <p className="text-[#98A2B3]">
-                {isBnbSelected
-                  ? 'Send native BNB on BNB Smart Chain (BSC / BEP-20) only. Your transaction will be confirmed within 3 on-chain blocks and automatically credited to your balance.'
-                  : 'Send BEP-20 USDT on BNB Smart Chain (BSC) only. Do not send via other networks. Deposits are detected automatically by the real-time node listener.'}
-              </p>
-            </div>
+          {/* Safety Notice */}
+          <div className="p-3.5 rounded-xl bg-white/[0.02] border border-white/[0.06] flex items-start gap-2.5 text-xs text-[#98A2B3]">
+            <ShieldCheck className="w-4 h-4 text-[#32D583] shrink-0 mt-0.5" />
+            <p className="text-[11px] leading-relaxed">
+              Send <strong className="text-white">BEP-20 USDT</strong> or <strong className="text-white">native BNB</strong> on BNB Smart Chain only. Submissions are verified on-chain and credited to your ledger balance.
+            </p>
           </div>
         </div>
 
-        {/* Right: QR Code Visual Display */}
-        <div className="lg:col-span-4 p-6 rounded-2xl border border-white/[0.08] bg-[#07101D] flex flex-col items-center justify-center text-center space-y-4">
-          <div className="text-center space-y-1">
-            <span className="text-xs font-mono text-[#F0B90B] font-semibold">QR SCAN</span>
-            <h3 className="text-sm font-bold text-white">Scan with BNB Wallet</h3>
+        {/* Right: QR Code (4 Cols) */}
+        <div className="lg:col-span-4 p-5 sm:p-6 rounded-2xl bg-[#07101D] border border-white/[0.08] shadow-xl flex flex-col items-center justify-center text-center space-y-4">
+          <div className="space-y-1">
+            <span className="text-xs font-mono text-[#F59E0B] font-semibold">QR SCAN</span>
+            <h3 className="text-sm font-bold text-white">Scan with Mobile Wallet</h3>
           </div>
 
-          {/* QR Code Frame */}
-          <div className="p-4 rounded-2xl bg-white shadow-2xl border border-white/20 inline-block">
+          <div className="p-3.5 rounded-2xl bg-white shadow-xl inline-block">
             <QRCodeSVG
               value={activeAddress}
-              size={160}
+              size={140}
               bgColor="#FFFFFF"
               fgColor="#05070B"
               level="M"
@@ -503,56 +543,45 @@ export const DepositView: React.FC<DepositViewProps> = ({ user, onNavigateTab })
             />
           </div>
 
-          <p className="text-[11px] text-[#98A2B3] max-w-xs">
-            Scan using <strong className="text-white">Binance App</strong>, <strong className="text-white">Trust Wallet</strong>, or <strong className="text-white">MetaMask</strong> on BNB Smart Chain.
+          <p className="text-[11px] text-[#667085] max-w-xs">
+            Compatible with Binance App, Trust Wallet, MetaMask, and SafePal.
           </p>
         </div>
       </div>
 
-      {/* 2.5 INSTANT TXHASH VERIFICATION & CREDIT SECTION */}
-      <div className="p-6 lg:p-8 rounded-2xl border border-white/[0.08] bg-gradient-to-b from-[#0B1527] to-[#07101D] space-y-6">
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-          <div>
-            <div className="flex items-center gap-2 mb-1">
-              <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-[#F0B90B]/10 border border-[#F0B90B]/30 text-[#F0B90B]">
-                INSTANT AUTO-CREDIT
-              </span>
-              <span className="text-xs text-[#98A2B3] font-mono">BNB Smart Chain (BEP-20)</span>
-            </div>
-            <h2 className="text-lg lg:text-xl font-bold text-white flex items-center gap-2">
-              <Send className="w-5 h-5 text-[#F0B90B]" />
-              Submit Transaction Hash (TxHash / TxID)
-            </h2>
-            <p className="text-xs text-[#98A2B3] mt-1 max-w-2xl">
-              Sent funds from your Binance, Trust Wallet, or MetaMask? Paste your on-chain transaction hash below. Our node listener will instantly verify the blockchain receipt and credit your balance within seconds.
-            </p>
+      {/* ========================================================
+          4. INSTANT TXHASH SUBMISSION FORM
+         ======================================================== */}
+      <div className="p-5 sm:p-6 rounded-2xl bg-[#07101D] border border-white/[0.08] shadow-xl space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-white/[0.06] pb-3">
+          <div className="flex items-center gap-2">
+            <Send className="w-4 h-4 text-[#F59E0B]" />
+            <h3 className="text-sm sm:text-base font-bold text-white">
+              Instant TxHash Auto-Credit
+            </h3>
           </div>
+          <span className="text-xs font-mono text-[#98A2B3]">
+            Paste TxHash for instant on-chain verification
+          </span>
         </div>
 
-        {/* Verification Success / Error alerts */}
+        {/* Verification Success / Error */}
         {txVerifySuccess && (
-          <div className="p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 flex items-start gap-3 animate-in fade-in">
-            <CheckCircle2 className="w-5 h-5 flex-shrink-0 mt-0.5 text-emerald-400" />
-            <div className="text-xs">
-              <p className="font-bold text-emerald-200">Deposit Verified &amp; Credited!</p>
-              <p className="mt-0.5 text-emerald-300/90">{txVerifySuccess}</p>
-            </div>
+          <div className="p-3.5 rounded-xl bg-[#32D583]/10 border border-[#32D583]/30 text-[#32D583] flex items-center gap-2 text-xs">
+            <CheckCircle2 className="w-4 h-4 shrink-0" />
+            <span>{txVerifySuccess}</span>
           </div>
         )}
 
         {txVerifyError && (
-          <div className="p-4 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 flex items-start gap-3 animate-in fade-in">
-            <AlertTriangle className="w-5 h-5 flex-shrink-0 mt-0.5 text-rose-400" />
-            <div className="text-xs">
-              <p className="font-bold text-rose-200">Verification Alert</p>
-              <p className="mt-0.5 text-rose-300/90">{txVerifyError}</p>
-            </div>
+          <div className="p-3.5 rounded-xl bg-[#F04438]/10 border border-[#F04438]/30 text-[#FDA29B] flex items-center gap-2 text-xs">
+            <AlertTriangle className="w-4 h-4 shrink-0 text-[#F04438]" />
+            <span>{txVerifyError}</span>
           </div>
         )}
 
-        {/* TxHash Input Form */}
-        <form onSubmit={handleSubmitTxHash} className="space-y-4">
-          <div className="flex flex-col sm:flex-row items-stretch gap-3">
+        <form onSubmit={handleSubmitTxHash} className="space-y-3">
+          <div className="flex flex-col sm:flex-row items-stretch gap-2.5">
             <div className="relative flex-1">
               <input
                 type="text"
@@ -560,13 +589,13 @@ export const DepositView: React.FC<DepositViewProps> = ({ user, onNavigateTab })
                 onChange={(e) => setInputTxHash(e.target.value)}
                 placeholder="Paste transaction hash: 0x1234567890abcdef..."
                 disabled={submittingTx}
-                className="w-full px-4 py-3 rounded-xl bg-black/50 border border-white/[0.12] text-sm text-white placeholder-[#98A2B3]/60 font-mono focus:outline-none focus:border-[#F0B90B] transition-colors pr-24"
+                className="w-full px-4 py-3 rounded-xl bg-[#05070B] border border-white/[0.1] text-xs sm:text-sm text-white placeholder-[#667085] font-mono focus:outline-none focus:border-[#00CFFF] transition-colors pr-20 min-h-[44px]"
               />
               <button
                 type="button"
                 onClick={handlePasteTx}
                 disabled={submittingTx}
-                className="absolute right-2 top-2 px-3 py-1.5 rounded-lg bg-white/[0.06] hover:bg-white/[0.12] text-[#98A2B3] hover:text-white text-xs font-mono font-medium transition-all"
+                className="absolute right-2 top-2 px-2.5 py-1.5 rounded-lg bg-white/[0.06] hover:bg-white/[0.12] text-[#98A2B3] hover:text-white text-xs font-mono font-medium transition-all cursor-pointer"
               >
                 Paste
               </button>
@@ -575,57 +604,49 @@ export const DepositView: React.FC<DepositViewProps> = ({ user, onNavigateTab })
             <button
               type="submit"
               disabled={submittingTx || !inputTxHash.trim()}
-              className="px-6 py-3 rounded-xl bg-gradient-to-r from-[#F0B90B] to-amber-500 hover:from-[#f5c52c] hover:to-amber-400 text-slate-950 text-sm font-bold flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed shrink-0 shadow-lg shadow-amber-500/20 active:scale-95"
+              className="px-5 py-3 rounded-xl bg-[#F59E0B] hover:bg-[#F59E0B]/90 text-[#05070B] text-xs sm:text-sm font-bold flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed shrink-0 min-h-[44px]"
             >
               {submittingTx ? (
                 <>
                   <Loader2 className="w-4 h-4 animate-spin" />
-                  <span>Verifying on BSC...</span>
+                  <span>Verifying...</span>
                 </>
               ) : (
                 <>
                   <Check className="w-4 h-4" />
-                  <span>Verify &amp; Credit Deposit</span>
+                  <span>Verify &amp; Credit</span>
                 </>
               )}
             </button>
           </div>
-
-          <div className="flex flex-wrap items-center justify-between text-[11px] text-[#98A2B3] gap-2 pt-1">
-            <span>
-              Network: <strong className="text-white">BNB Smart Chain (Mainnet BSC)</strong>
-            </span>
-            <span>
-              Target: <strong className={isBnbSelected ? 'text-amber-300' : 'text-emerald-300'}>{selectedAsset} Deposit</strong>
-            </span>
-            <span>
-              Expected Confirmations: <strong className="text-white">3 Blocks</strong>
-            </span>
-          </div>
         </form>
       </div>
 
-      {/* 3. DEPOSIT HISTORY & SUMMARY TABLE */}
-      <div className="p-6 lg:p-8 rounded-2xl border border-white/[0.08] bg-[#07101D] space-y-6">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+      {/* ========================================================
+          5. DEPOSIT TRANSACTION HISTORY
+         ======================================================== */}
+      <div className="p-5 sm:p-6 rounded-2xl bg-[#07101D] border border-white/[0.08] shadow-xl space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-white/[0.06] pb-3">
           <div>
-            <h2 className="text-lg font-bold text-white">Deposit Transaction History</h2>
+            <h3 className="text-sm sm:text-base font-bold text-white flex items-center gap-2">
+              <Clock className="w-4 h-4 text-[#00CFFF]" />
+              <span>Deposit Transaction History</span>
+            </h3>
             <p className="text-xs text-[#98A2B3]">
-              Real-time on-chain transfers on BNB Smart Chain detected and credited to your protocol ledger.
+              On-chain transfers detected and credited to your financial ledger.
             </p>
           </div>
 
-          {/* Filters */}
-          <div className="flex flex-wrap items-center gap-3">
-            {/* Search Input */}
+          <div className="flex flex-wrap items-center gap-2">
+            {/* Search */}
             <div className="relative">
-              <Search className="w-4 h-4 text-[#98A2B3] absolute left-3 top-2.5" />
+              <Search className="w-3.5 h-3.5 text-[#98A2B3] absolute left-3 top-1/2 -translate-y-1/2" />
               <input
                 type="text"
-                placeholder="Search TX / ID / Address..."
+                placeholder="Search TX / ID..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="pl-9 pr-3 py-1.5 rounded-lg bg-black/40 border border-white/[0.1] text-xs text-white placeholder-[#98A2B3] focus:outline-none focus:border-[#F0B90B] w-48"
+                className="pl-8 pr-3 py-1.5 rounded-lg bg-[#05070B] border border-white/[0.1] text-xs text-white placeholder-[#667085] focus:outline-none focus:border-[#00CFFF] w-36 sm:w-48 min-h-[36px]"
               />
             </div>
 
@@ -633,7 +654,7 @@ export const DepositView: React.FC<DepositViewProps> = ({ user, onNavigateTab })
             <select
               value={statusFilter}
               onChange={(e) => setStatusFilter(e.target.value)}
-              className="px-3 py-1.5 rounded-lg bg-black/40 border border-white/[0.1] text-xs text-white focus:outline-none focus:border-[#F0B90B]"
+              className="px-2.5 py-1.5 rounded-lg bg-[#05070B] border border-white/[0.1] text-xs text-white focus:outline-none focus:border-[#00CFFF] min-h-[36px]"
             >
               <option value="ALL">All Statuses</option>
               <option value="CREDITED">Credited</option>
@@ -643,59 +664,53 @@ export const DepositView: React.FC<DepositViewProps> = ({ user, onNavigateTab })
           </div>
         </div>
 
-        {/* Deposit List Table */}
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs border-collapse">
-            <thead>
-              <tr className="border-b border-white/[0.08] text-[#98A2B3] uppercase font-mono tracking-wider">
-                <th className="py-3 px-4">Deposit ID</th>
-                <th className="py-3 px-4">Asset</th>
-                <th className="py-3 px-4">Amount</th>
-                <th className="py-3 px-4">From Address</th>
-                <th className="py-3 px-4">TX Hash</th>
-                <th className="py-3 px-4">Confirmations</th>
-                <th className="py-3 px-4">Status</th>
-                <th className="py-3 px-4">Date</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-white/[0.04] text-slate-200">
-              {loading ? (
-                <tr>
-                  <td colSpan={8} className="py-8 text-center text-[#98A2B3]">
-                    Loading deposit history...
-                  </td>
+        {/* Desktop Table View */}
+        <div className="hidden md:block overflow-x-auto">
+          {filteredDeposits.length === 0 && !loading ? (
+            <div className="p-8 text-center text-xs text-[#98A2B3] font-mono border border-dashed border-white/[0.08] rounded-xl space-y-2">
+              <div className="text-white font-medium">No deposits recorded yet</div>
+              <p className="text-[#667085]">
+                Send USDT or BNB to your deposit address above to see transactions here.
+              </p>
+            </div>
+          ) : (
+            <table className="w-full text-left text-xs border-collapse">
+              <thead>
+                <tr className="border-b border-white/[0.06] text-[#98A2B3] uppercase font-mono text-[11px] tracking-wider">
+                  <th className="py-3 px-3">Deposit ID</th>
+                  <th className="py-3 px-3">Asset</th>
+                  <th className="py-3 px-3">Amount</th>
+                  <th className="py-3 px-3">From</th>
+                  <th className="py-3 px-3">TX Hash</th>
+                  <th className="py-3 px-3">Confirmations</th>
+                  <th className="py-3 px-3">Status</th>
+                  <th className="py-3 px-3 text-right">Date</th>
                 </tr>
-              ) : filteredDeposits.length === 0 ? (
-                <tr>
-                  <td colSpan={8} className="py-12 text-center text-[#98A2B3] space-y-2">
-                    <Layers className="w-8 h-8 mx-auto text-slate-600 mb-2" />
-                    <p className="font-semibold text-white">No deposits found</p>
-                    <p className="text-xs max-w-sm mx-auto">
-                      Send {selectedAsset} on BNB Smart Chain to your assigned deposit address above. Incoming transfers appear here in real-time.
-                    </p>
-                  </td>
-                </tr>
-              ) : (
-                filteredDeposits.map((dep) => (
+              </thead>
+              <tbody className="divide-y divide-white/[0.04]">
+                {filteredDeposits.map((dep) => (
                   <tr key={dep.id} className="hover:bg-white/[0.02] transition-colors">
-                    <td className="py-3.5 px-4 font-mono text-cyan-300 font-medium">
+                    <td className="py-3 px-3 font-mono text-[#00CFFF] font-medium">
                       {dep.publicDepositId}
                     </td>
-                    <td className="py-3.5 px-4 font-mono font-bold">
-                      <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[10px] ${
-                        dep.asset === 'BNB' ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30' : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
-                      }`}>
-                        {dep.asset === 'BNB' ? <BnbIcon size={12} /> : <UsdtIcon size={12} />}
-                        {dep.asset || 'BNB'}
+                    <td className="py-3 px-3 font-mono font-bold">
+                      <span
+                        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] ${
+                          dep.asset === 'BNB'
+                            ? 'bg-[#F59E0B]/10 text-[#F59E0B] border border-[#F59E0B]/20'
+                            : 'bg-[#32D583]/10 text-[#32D583] border border-[#32D583]/20'
+                        }`}
+                      >
+                        {dep.asset || 'USDT'}
                       </span>
                     </td>
-                    <td className="py-3.5 px-4 font-mono font-bold text-white text-sm">
-                      +{dep.amount} {dep.asset || 'BNB'}
+                    <td className="py-3 px-3 font-mono font-bold text-white">
+                      +{dep.amount} {dep.asset || 'USDT'}
                     </td>
-                    <td className="py-3.5 px-4 font-mono text-[#98A2B3]">
+                    <td className="py-3 px-3 font-mono text-[#98A2B3]">
                       {formatShortAddress(dep.fromAddress)}
                     </td>
-                    <td className="py-3.5 px-4 font-mono">
+                    <td className="py-3 px-3 font-mono">
                       <a
                         href={`https://bscscan.com/tx/${dep.txHash}`}
                         target="_blank"
@@ -706,28 +721,90 @@ export const DepositView: React.FC<DepositViewProps> = ({ user, onNavigateTab })
                         <ExternalLink className="w-3 h-3" />
                       </a>
                     </td>
-                    <td className="py-3.5 px-4 font-mono text-[#98A2B3]">
+                    <td className="py-3 px-3 font-mono text-[#98A2B3]">
                       {dep.confirmations} / {summary?.requiredConfirmations || 3}
                     </td>
-                    <td className="py-3.5 px-4">
-                      <span className={`px-2 py-1 rounded-full text-[10px] font-mono font-bold ${
-                        dep.status === 'CREDITED'
-                          ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
-                          : dep.status === 'CONFIRMING'
-                          ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20 animate-pulse'
-                          : 'bg-cyan-500/10 text-cyan-400 border border-cyan-500/20'
-                      }`}>
+                    <td className="py-3 px-3">
+                      <span
+                        className={`px-2 py-0.5 rounded-full text-[10px] font-mono font-bold ${
+                          dep.status === 'CREDITED'
+                            ? 'bg-[#32D583]/10 text-[#32D583]'
+                            : dep.status === 'CONFIRMING'
+                            ? 'bg-[#F59E0B]/10 text-[#F59E0B]'
+                            : 'bg-[#00CFFF]/10 text-[#00CFFF]'
+                        }`}
+                      >
                         {dep.status}
                       </span>
                     </td>
-                    <td className="py-3.5 px-4 text-[#98A2B3] text-[11px]">
-                      {new Date(dep.createdAt).toLocaleString()}
+                    <td className="py-3 px-3 text-[#98A2B3] text-[11px] text-right font-mono">
+                      {new Date(dep.createdAt).toLocaleDateString()}
                     </td>
                   </tr>
-                ))
-              )}
-            </tbody>
-          </table>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+
+        {/* Mobile Stacked Card View (<768px) */}
+        <div className="block md:hidden space-y-3">
+          {filteredDeposits.length === 0 && !loading ? (
+            <div className="p-6 text-center text-xs text-[#98A2B3] font-mono border border-dashed border-white/[0.08] rounded-xl space-y-2">
+              <div className="text-white font-medium">No deposits found</div>
+              <p className="text-[#667085]">
+                Incoming on-chain deposits will appear here.
+              </p>
+            </div>
+          ) : (
+            filteredDeposits.map((dep) => (
+              <div
+                key={dep.id}
+                className="p-4 rounded-xl bg-[#05070B] border border-white/[0.06] space-y-2.5"
+              >
+                <div className="flex items-center justify-between">
+                  <span className="font-mono font-bold text-xs text-[#00CFFF]">
+                    {dep.publicDepositId}
+                  </span>
+                  <span
+                    className={`px-2 py-0.5 rounded-full text-[9px] font-mono font-bold ${
+                      dep.status === 'CREDITED'
+                        ? 'bg-[#32D583]/10 text-[#32D583]'
+                        : dep.status === 'CONFIRMING'
+                        ? 'bg-[#F59E0B]/10 text-[#F59E0B]'
+                        : 'bg-[#00CFFF]/10 text-[#00CFFF]'
+                    }`}
+                  >
+                    {dep.status}
+                  </span>
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <div className="text-sm font-mono font-bold text-white">
+                    +{dep.amount} {dep.asset || 'USDT'}
+                  </div>
+                  <span className="text-[10px] font-mono text-[#667085]">
+                    {new Date(dep.createdAt).toLocaleDateString()}
+                  </span>
+                </div>
+
+                <div className="flex items-center justify-between text-xs pt-1 border-t border-white/[0.04]">
+                  <span className="text-[11px] font-mono text-[#98A2B3]">
+                    {formatShortAddress(dep.fromAddress)}
+                  </span>
+                  <a
+                    href={`https://bscscan.com/tx/${dep.txHash}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-[#00CFFF] font-mono text-xs flex items-center gap-1"
+                  >
+                    <span>{formatShortTx(dep.txHash)}</span>
+                    <ExternalLink className="w-3 h-3" />
+                  </a>
+                </div>
+              </div>
+            ))
+          )}
         </div>
       </div>
     </div>

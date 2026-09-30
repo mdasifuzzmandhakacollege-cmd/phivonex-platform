@@ -32,7 +32,11 @@ import {
   getAutomationRules,
   createAutomationRule,
   updateAutomationRule,
-  deleteAutomationRule
+  deleteAutomationRule,
+  getEmailQueue,
+  getEmailQueueStats,
+  retryQueueItem,
+  processEmailQueue
 } from '../services/emailService';
 
 export const adminRouter = Router();
@@ -671,5 +675,87 @@ adminRouter.delete('/email/automation/:id', async (req: AuthRequest, res: Respon
     return res.status(500).json({ error: 'SERVER_ERROR', message: 'Failed to delete automation rule.' });
   }
 });
+
+// ----------------------------------------------------------------------------
+// ADMIN EMAIL QUEUE & OUTBOX MONITORING
+// ----------------------------------------------------------------------------
+
+/**
+ * GET /api/admin/email/queue
+ * Retrieves paginated email queue items with optional status and search filters (admin-only).
+ */
+adminRouter.get('/email/queue', async (req: AuthRequest, res: Response) => {
+  try {
+    const status = req.query.status as string | undefined;
+    const search = req.query.search as string | undefined;
+    const limit = parseInt(req.query.limit as string, 10) || 20;
+    const offset = parseInt(req.query.offset as string, 10) || 0;
+
+    const data = await getEmailQueue({ status, search, limit, offset });
+    const stats = await getEmailQueueStats();
+
+    return res.status(200).json({
+      success: true,
+      items: data.items,
+      total: data.total,
+      stats,
+    });
+  } catch (err: any) {
+    console.error('[Admin API] Error retrieving email queue:', err);
+    return res.status(500).json({ error: 'SERVER_ERROR', message: 'Failed to retrieve email queue.' });
+  }
+});
+
+/**
+ * GET /api/admin/email/stats
+ * Retrieves email queue summary metrics (admin-only).
+ */
+adminRouter.get('/email/stats', async (req: AuthRequest, res: Response) => {
+  try {
+    const stats = await getEmailQueueStats();
+    return res.status(200).json({ success: true, stats });
+  } catch (err: any) {
+    console.error('[Admin API] Error retrieving email stats:', err);
+    return res.status(500).json({ error: 'SERVER_ERROR', message: 'Failed to retrieve email stats.' });
+  }
+});
+
+/**
+ * POST /api/admin/email/queue/process
+ * Manually triggers immediate processing of pending queued emails (admin-only).
+ */
+adminRouter.post('/email/queue/process', async (req: AuthRequest, res: Response) => {
+  try {
+    await processEmailQueue();
+    const stats = await getEmailQueueStats();
+    return res.status(200).json({
+      success: true,
+      message: 'Email queue processing completed successfully.',
+      stats,
+    });
+  } catch (err: any) {
+    console.error('[Admin API] Error processing email queue:', err);
+    return res.status(500).json({ error: 'SERVER_ERROR', message: 'Failed to process email queue.' });
+  }
+});
+
+/**
+ * POST /api/admin/email/queue/retry/:id
+ * Retries a failed email from the queue (admin-only).
+ */
+adminRouter.post('/email/queue/retry/:id', async (req: AuthRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+    const retried = await retryQueueItem(id);
+    if (!retried) {
+      return res.status(404).json({ error: 'NOT_FOUND', message: 'Queue item not found or could not be retried.' });
+    }
+    return res.status(200).json({ success: true, message: 'Email re-queued for processing.', id });
+  } catch (err: any) {
+    console.error('[Admin API] Error retrying email queue item:', err);
+    return res.status(500).json({ error: 'SERVER_ERROR', message: 'Failed to retry email queue item.' });
+  }
+});
+
 
 

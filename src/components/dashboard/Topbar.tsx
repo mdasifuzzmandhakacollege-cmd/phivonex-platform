@@ -227,20 +227,20 @@ export const Topbar: React.FC<TopbarProps> = ({
       </div>
 
       {/* Right Area: Available Balance + Public Portal Link + PWA Install + Network Status + User Menu */}
-      <div className="flex items-center gap-2 sm:gap-3">
+      <div className="flex items-center gap-1.5 sm:gap-2.5">
         {/* Available Balance Header Badge */}
         <button
           onClick={() => onSelectTab('wallet')}
-          className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-[#00CFFF]/10 hover:bg-[#00CFFF]/20 border border-[#00CFFF]/30 transition-all cursor-pointer min-h-[36px] shadow-sm hover:shadow-[#00CFFF]/20"
+          className="flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3 py-1.5 rounded-xl bg-[#00CFFF]/10 hover:bg-[#00CFFF]/20 border border-[#00CFFF]/30 transition-all cursor-pointer min-h-[44px] shadow-sm hover:shadow-[#00CFFF]/20 shrink-0"
           title="Click to view Wallet & Ledger"
         >
-          <Wallet className="w-3.5 h-3.5 text-[#00CFFF]" />
-          <div className="flex items-center gap-1 font-mono">
-            <span className="text-[10px] uppercase text-[#98A2B3] hidden sm:inline">Available:</span>
-            <span className="text-xs font-bold text-white">
+          <Wallet className="w-3.5 h-3.5 text-[#00CFFF] shrink-0" />
+          <div className="flex items-center gap-1 font-mono text-xs">
+            <span className="text-[10px] uppercase text-[#98A2B3] hidden md:inline">Available:</span>
+            <span className="font-bold text-white tabular-nums">
               ${availableBalance !== null ? availableBalance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '0.00'}
             </span>
-            <span className="text-[10px] text-[#00CFFF] font-semibold">USDT</span>
+            <span className="text-[10px] text-[#00CFFF] font-semibold hidden xs:inline">USDT</span>
           </div>
         </button>
 
@@ -249,7 +249,9 @@ export const Topbar: React.FC<TopbarProps> = ({
           <NetworkPulseTrigger variant="compact" />
         </div>
 
-        <PWAInstallHeaderButton />
+        <div className="hidden md:flex items-center">
+          <PWAInstallHeaderButton />
+        </div>
 
         {/* Public Portal link */}
         <button

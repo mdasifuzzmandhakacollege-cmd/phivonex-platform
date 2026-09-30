@@ -39,6 +39,7 @@ import {
   Power,
   Gift,
   Trophy,
+  Mail,
 } from 'lucide-react';
 import { PhivonexLogo } from '../components/brand/PhivonexLogo';
 import { WithdrawalManagement } from '../components/admin/WithdrawalManagement';
@@ -50,6 +51,7 @@ import { CloudSqlDiagnosticCard } from '../components/admin/CloudSqlDiagnosticCa
 import { OffersManagement } from '../components/admin/OffersManagement';
 import { WithdrawalStateLogsView } from '../components/admin/WithdrawalStateLogsView';
 import { LeadershipRankControl } from '../components/admin/LeadershipRankControl';
+import { AdminCommunicationsHub } from '../components/admin/AdminCommunicationsHub';
 import { AuditLogger, logAction, exportAuditLogsToCsv } from '../services/auditLogger';
 
 interface AdminPageProps {
@@ -71,7 +73,8 @@ export type AdminTab =
   | 'withdrawal-logs'
   | 'transactions'
   | 'network'
-  | 'audit';
+  | 'audit'
+  | 'communications';
 
 export const AdminPage: React.FC<AdminPageProps> = ({ onNavigate, currentPath = '/admin' }) => {
   const { user, loading } = useAuth();
@@ -92,6 +95,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onNavigate, currentPath = 
 
   const getTabFromPath = (path: string): AdminTab => {
     const clean = path.toLowerCase().split('?')[0];
+    if (clean.includes('/communications') || clean.includes('/email')) return 'communications';
     if (clean.includes('/treasury')) return 'treasury';
     if (clean.includes('/reconciliation')) return 'reconciliation';
     if (clean.includes('/economics')) return 'economics';
@@ -600,6 +604,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onNavigate, currentPath = 
     { id: 'withdrawal-logs' as AdminTab, label: 'Withdrawal State Logs', icon: Clock },
     { id: 'transactions' as AdminTab, label: 'Ledger Explorer', icon: ArrowLeftRight },
     { id: 'network' as AdminTab, label: 'Network Telemetry', icon: GitFork },
+    { id: 'communications' as AdminTab, label: 'Communications & Email', icon: Mail },
     { id: 'audit' as AdminTab, label: 'Admin Audit Logs', icon: FileText },
   ];
 
@@ -1463,6 +1468,9 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onNavigate, currentPath = 
 
           {/* TAB 5: AUDIT LOGS */}
           {activeTab === 'audit' && <AdminAuditLog />}
+
+          {/* TAB 6: COMMUNICATIONS & EMAIL AUTOMATION */}
+          {activeTab === 'communications' && <AdminCommunicationsHub />}
         </main>
       </div>
 

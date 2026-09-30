@@ -64,5 +64,10 @@ service cloud.firestore {
       allow create: if isValidId(logId) && isValidSystemAuditLog(request.resource.data);
       allow update, delete: if false; // Immutable audit log trail
     }
+
+    match /system_settings/{settingId} {
+      allow read: if true;
+      allow write: if false;
+    }
   }
 }

@@ -66,7 +66,7 @@ const NAV_ITEMS: NavItem[] = [
   { id: 'deposit', label: 'Deposit (BNB/USDT)', icon: ArrowDownLeft },
   { id: 'withdrawals', label: 'Withdrawals', icon: ArrowUpRight },
   { id: 'notifications', label: 'Notifications', icon: Bell },
-  { id: 'rewards', label: 'Rewards', icon: Coins, comingSoon: true },
+  { id: 'rewards', label: 'Rewards', icon: Coins },
   { id: 'transactions', label: 'Transactions', icon: ArrowLeftRight },
   { id: 'profile', label: 'Profile', icon: User },
   { id: 'security', label: 'Security', icon: ShieldCheck },

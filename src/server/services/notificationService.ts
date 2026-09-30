@@ -1,6 +1,10 @@
+import { EventEmitter } from 'events';
 import { getDb } from '../db/db';
 import { v4 as uuidv4 } from 'uuid';
 import { generateNotificationPublicId } from '../utils/idGenerator';
+
+export const notificationEmitter = new EventEmitter();
+notificationEmitter.setMaxListeners(1000);
 
 export type NotificationType =
   | 'NODE_ACTIVATED'
@@ -104,7 +108,7 @@ export async function createNotification(params: CreateNotificationParams): Prom
       // Ignore background push errors
     }
 
-    return {
+    const createdNotification: PublicNotification = {
       id: row.public_notification_id,
       type: row.type,
       title: row.title,
@@ -112,6 +116,15 @@ export async function createNotification(params: CreateNotificationParams): Prom
       readAt: row.read_at ? new Date(row.read_at).toISOString() : null,
       createdAt: new Date(row.created_at).toISOString(),
     };
+
+    // Emit real-time event scoped to authenticated user ID
+    try {
+      notificationEmitter.emit(`notification:${userId}`, createdNotification);
+    } catch {
+      // Ignore SSE listener errors
+    }
+
+    return createdNotification;
   } catch (err) {
     console.error('[NotificationService] Error creating notification:', err);
     return null;

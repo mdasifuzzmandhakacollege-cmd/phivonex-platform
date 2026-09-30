@@ -4,12 +4,18 @@ import { db } from '../lib/firebase';
 
 export interface SystemConfigState {
   minWithdrawalAmount: number;
+  maxDailyWithdrawalAmount: number;
   autoWithdrawalEnabled: boolean;
   coinPriceUsdt: number;
   nodeBasePriceUsd: number;
   directReferralCommissionRate: number;
   genesisNodeCap: number;
   captchaEnabled: boolean;
+  cryptoDepositsEnabled: boolean;
+  cryptoWithdrawalsEnabled: boolean;
+  internalCoinSwapEnabled: boolean;
+  nodeRewardsEnabled: boolean;
+  systemNotice: string | null;
   lastUpdated: string;
   isConnected: boolean;
 }
@@ -23,12 +29,18 @@ const SystemConfigContext = createContext<SystemConfigContextType | undefined>(u
 export const SystemConfigProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [configs, setConfigs] = useState<SystemConfigState>({
     minWithdrawalAmount: 0.10,
+    maxDailyWithdrawalAmount: 10000,
     autoWithdrawalEnabled: false,
     coinPriceUsdt: 0.10,
     nodeBasePriceUsd: 50.0,
     directReferralCommissionRate: 10,
     genesisNodeCap: 1000,
     captchaEnabled: false,
+    cryptoDepositsEnabled: true,
+    cryptoWithdrawalsEnabled: true,
+    internalCoinSwapEnabled: true,
+    nodeRewardsEnabled: true,
+    systemNotice: null,
     lastUpdated: new Date().toISOString(),
     isConnected: true,
   });
@@ -36,14 +48,35 @@ export const SystemConfigProvider: React.FC<{ children: React.ReactNode }> = ({ 
   // REST Snapshot fetch
   const fetchConfigs = useCallback(async () => {
     try {
-      const [withdrawalRes, networkRes] = await Promise.all([
+      const [platformRes, withdrawalRes, networkRes] = await Promise.all([
+        fetch('/api/economic/platform-settings').catch(() => null),
         fetch('/api/withdrawals/config').catch(() => null),
         fetch('/api/public/network/summary').catch(() => null),
       ]);
 
+      if (platformRes && platformRes.ok) {
+        platformRes.json().then((data) => {
+          if (data && data.success && data.settings) {
+            const s = data.settings;
+            setConfigs((p) => ({
+              ...p,
+              coinPriceUsdt: typeof s.coinPriceUsdt === 'number' ? s.coinPriceUsdt : p.coinPriceUsdt,
+              minWithdrawalAmount: typeof s.minWithdrawalAmount === 'number' ? s.minWithdrawalAmount : p.minWithdrawalAmount,
+              autoWithdrawalEnabled: typeof s.autoWithdrawalEnabled === 'boolean' ? s.autoWithdrawalEnabled : p.autoWithdrawalEnabled,
+              nodeBasePriceUsd: typeof s.nodeBasePriceUsd === 'number' ? s.nodeBasePriceUsd : p.nodeBasePriceUsd,
+              directReferralCommissionRate: typeof s.directReferralCommissionRate === 'number' ? s.directReferralCommissionRate : p.directReferralCommissionRate,
+              cryptoDepositsEnabled: typeof s.cryptoDepositsEnabled === 'boolean' ? s.cryptoDepositsEnabled : p.cryptoDepositsEnabled,
+              cryptoWithdrawalsEnabled: typeof s.cryptoWithdrawalsEnabled === 'boolean' ? s.cryptoWithdrawalsEnabled : p.cryptoWithdrawalsEnabled,
+              internalCoinSwapEnabled: typeof s.internalCoinSwapEnabled === 'boolean' ? s.internalCoinSwapEnabled : p.internalCoinSwapEnabled,
+              nodeRewardsEnabled: typeof s.nodeRewardsEnabled === 'boolean' ? s.nodeRewardsEnabled : p.nodeRewardsEnabled,
+              lastUpdated: new Date().toISOString(),
+            }));
+          }
+        }).catch(() => {});
+      }
+
       setConfigs((prev) => {
         const next = { ...prev };
-        let updated = false;
 
         if (withdrawalRes && withdrawalRes.ok) {
           withdrawalRes.json().then((data) => {
@@ -97,7 +130,8 @@ export const SystemConfigProvider: React.FC<{ children: React.ReactNode }> = ({ 
           }
         },
         (err) => {
-          console.warn('[SystemConfigContext] Firestore withdrawals listener warning:', err);
+          // Gracefully fallback to REST endpoints
+          fetchConfigs();
         }
       );
 
@@ -120,7 +154,8 @@ export const SystemConfigProvider: React.FC<{ children: React.ReactNode }> = ({ 
           }
         },
         (err) => {
-          console.warn('[SystemConfigContext] Firestore configs listener warning:', err);
+          // Gracefully fallback to REST endpoints
+          fetchConfigs();
         }
       );
 
@@ -141,11 +176,12 @@ export const SystemConfigProvider: React.FC<{ children: React.ReactNode }> = ({ 
           }
         },
         (err) => {
-          console.warn('[SystemConfigContext] Firestore economic listener warning:', err);
+          // Gracefully fallback to REST endpoints
+          fetchConfigs();
         }
       );
     } catch (e) {
-      console.warn('[SystemConfigContext] Firestore real-time setup warning:', e);
+      fetchConfigs();
     }
 
     return () => {
@@ -169,12 +205,31 @@ export const SystemConfigProvider: React.FC<{ children: React.ReactNode }> = ({ 
             const val = payload.value;
 
             setConfigs((prev) => {
+              if (payload.updatedAt && prev.lastUpdated && new Date(payload.updatedAt).getTime() < new Date(prev.lastUpdated).getTime()) {
+                return prev; // Ignore out-of-order older event
+              }
+
               const updated = { ...prev, lastUpdated: new Date().toISOString() };
               if (key === 'MIN_WITHDRAWAL_AMOUNT') updated.minWithdrawalAmount = Number(val);
+              if (key === 'MAX_DAILY_WITHDRAWAL_AMOUNT') updated.maxDailyWithdrawalAmount = Number(val);
               if (key === 'AUTO_WITHDRAWAL_ENABLED') updated.autoWithdrawalEnabled = Boolean(val);
-              if (key === 'INTERNAL_COIN_PRICE_USDT') updated.coinPriceUsdt = Number(val);
+              if (key === 'GENESIS_NODE_CAP') updated.genesisNodeCap = Number(val);
+              if (key === 'INTERNAL_COIN_PRICE_USDT') {
+                const price = typeof val === 'object' && val !== null ? val.priceUsdt : Number(val);
+                if (typeof price === 'number') updated.coinPriceUsdt = price;
+              }
               if (key === 'NODE_BASE_PRICE_USD') updated.nodeBasePriceUsd = Number(val);
-              if (key === 'DIRECT_REFERRAL_COMMISSION_USD') updated.directReferralCommissionRate = Number(val);
+              if (key === 'DIRECT_REFERRAL_COMMISSION_USD' || key === 'REFERRAL_COMMISSION_RATE') {
+                updated.directReferralCommissionRate = Number(val);
+              }
+              if (key === 'CRYPTO_DEPOSITS_ENABLED') updated.cryptoDepositsEnabled = Boolean(val);
+              if (key === 'CRYPTO_WITHDRAWALS_ENABLED') updated.cryptoWithdrawalsEnabled = Boolean(val);
+              if (key === 'INTERNAL_COIN_SWAP_ENABLED') updated.internalCoinSwapEnabled = Boolean(val);
+              if (key === 'NODE_REWARDS_ENABLED') updated.nodeRewardsEnabled = Boolean(val);
+              if (key === 'SYSTEM_NOTICE') updated.systemNotice = val ? String(val) : null;
+              if (key === 'PROMOTIONAL_OFFERS_UPDATED' || key === 'PROMOTIONAL_BANNERS_UPDATED') {
+                updated.lastUpdated = new Date().toISOString();
+              }
               return updated;
             });
           }
@@ -197,7 +252,20 @@ export const SystemConfigProvider: React.FC<{ children: React.ReactNode }> = ({ 
     const interval = setInterval(() => {
       fetchConfigs();
     }, 4000);
-    return () => clearInterval(interval);
+
+    const handleSync = () => {
+      if (document.visibilityState === 'visible') {
+        fetchConfigs();
+      }
+    };
+    window.addEventListener('visibilitychange', handleSync);
+    window.addEventListener('focus', handleSync);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('visibilitychange', handleSync);
+      window.removeEventListener('focus', handleSync);
+    };
   }, [fetchConfigs]);
 
   return (

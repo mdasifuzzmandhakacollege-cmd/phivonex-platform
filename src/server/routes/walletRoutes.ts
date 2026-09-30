@@ -49,10 +49,11 @@ walletRouter.get('/transactions', requireAuth, async (req: AuthRequest, res: Res
     const userId = req.user!.id;
     const page = parseInt(req.query.page as string, 10) || 1;
     const limit = parseInt(req.query.limit as string, 10) || 20;
-    const typeFilter = (req.query.type as string) || (req.query.sourceType as string) || undefined;
+    const typeFilter = (req.query.type as string) || (req.query.sourceType as string) || (req.query.category as string) || undefined;
+    const entryTypeFilter = (req.query.entryType as string) || undefined;
     const search = (req.query.search as string) || (req.query.q as string) || undefined;
 
-    const result = await getWalletTransactions(userId, page, limit, typeFilter, search);
+    const result = await getWalletTransactions(userId, page, limit, typeFilter, search, entryTypeFilter);
     return res.status(200).json(result);
   } catch (err: any) {
     console.error('[Wallet API] Error in GET /api/wallet/transactions:', err);

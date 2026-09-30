@@ -1,12 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   Server,
-  Cpu,
   Layers,
-  ShieldCheck,
   Coins,
   RefreshCw,
-  Loader2,
   Clock,
   CheckCircle2,
   AlertCircle,
@@ -15,7 +12,10 @@ import {
   ArrowRight,
   Sparkles,
   Zap,
-  Check
+  Check,
+  ShieldCheck,
+  ChevronRight,
+  ExternalLink,
 } from 'lucide-react';
 import { UserProfile } from '../../context/AuthContext';
 import { GENESIS_NODE_CAP, NODE_BASE_PRICE_USD } from '../../config/nodeConfig';
@@ -83,7 +83,7 @@ interface RewardsTelemetry {
   history: RewardHistoryItem[];
 }
 
-export const MyNodesView: React.FC<MyNodesViewProps> = ({ user, onNavigateTab }) => {
+export const MyNodesView: React.FC<MyNodesViewProps> = ({ user: _user, onNavigateTab }) => {
   const [nodes, setNodes] = useState<NodeItem[]>([]);
   const [orders, setOrders] = useState<NodeOrder[]>([]);
   const [stats, setStats] = useState<NodeStats | null>(null);
@@ -94,11 +94,10 @@ export const MyNodesView: React.FC<MyNodesViewProps> = ({ user, onNavigateTab })
   const [claimSuccessMsg, setClaimSuccessMsg] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  const fetchNodeData = async (isManual = false) => {
+  const fetchNodeData = useCallback(async (isManual = false) => {
     if (isManual) setRefreshing(true);
     setErrorMsg(null);
     try {
-      // Fetch user owned nodes, stats, order history, and mining rewards
       const [nodesRes, statsRes, ordersRes, rewardsRes] = await Promise.all([
         fetch('/api/nodes/me', { credentials: 'include' }),
         fetch('/api/nodes/stats'),
@@ -126,17 +125,21 @@ export const MyNodesView: React.FC<MyNodesViewProps> = ({ user, onNavigateTab })
         setRewards(rewardsData);
       }
     } catch (err) {
-      console.warn('Failed to load node inventory data:', err);
-      setErrorMsg('Unable to refresh node inventory telemetry.');
+      console.warn('[MyNodesView] Failed to load node data:', err);
+      setErrorMsg('Unable to refresh node data.');
     } finally {
       setLoading(false);
       if (isManual) setRefreshing(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     fetchNodeData();
-  }, []);
+    const interval = setInterval(() => {
+      fetchNodeData(false);
+    }, 20000);
+    return () => clearInterval(interval);
+  }, [fetchNodeData]);
 
   const handleClaim = async () => {
     if (claiming) return;
@@ -165,392 +168,432 @@ export const MyNodesView: React.FC<MyNodesViewProps> = ({ user, onNavigateTab })
   const formatDate = (isoString?: string | null) => {
     if (!isoString) return 'Pending Activation';
     try {
-      return new Date(isoString).toLocaleDateString('en-US', {
+      const d = new Date(isoString);
+      if (isNaN(d.getTime())) return 'Not Available';
+      return d.toLocaleDateString('en-US', {
         year: 'numeric',
         month: 'short',
         day: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit',
       });
     } catch {
-      return 'Active';
+      return 'Not Available';
     }
   };
 
   const activeNodes = nodes.filter((n) => n.status === 'ACTIVE');
+  const basePrice = stats?.basePriceUsd ?? NODE_BASE_PRICE_USD;
 
   return (
-    <div className="space-y-8 max-w-6xl mx-auto animate-fadeIn">
-      {/* Header Banner */}
-      <div className="p-6 sm:p-8 rounded-2xl bg-gradient-to-r from-[#07101D] via-[#0B1528] to-[#07101D] border border-white/[0.08] shadow-xl relative overflow-hidden">
-        <div className="absolute top-0 right-0 w-96 h-96 bg-[#00CFFF]/5 rounded-full blur-3xl pointer-events-none" />
+    <div className="space-y-6 sm:space-y-8 animate-fadeIn pb-12">
+      {/* ========================================================
+          1. COMPACT PAGE HERO
+         ======================================================== */}
+      <div className="relative overflow-hidden rounded-2xl bg-gradient-to-r from-[#07101D] via-[#0B1728] to-[#07101D] border border-white/[0.08] p-5 sm:p-7 shadow-xl">
+        <div className="absolute top-0 right-0 -mt-10 -mr-10 w-72 h-72 bg-[#00CFFF]/10 rounded-full blur-3xl pointer-events-none" />
 
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 relative z-10">
-          <div className="flex items-center gap-4">
-            <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-[#00CFFF]/20 to-[#168BFF]/20 border border-[#00CFFF]/30 flex items-center justify-center text-[#00CFFF] shadow-inner shrink-0">
-              <Server className="w-7 h-7" />
+        <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-5">
+          <div className="space-y-2">
+            <div className="flex flex-wrap items-center gap-2 text-xs font-medium">
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md bg-[#00CFFF]/10 border border-[#00CFFF]/25 text-[#00CFFF] text-[11px] font-semibold">
+                <span className="w-1.5 h-1.5 rounded-full bg-[#00CFFF]" />
+                Genesis Phase
+              </span>
+              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md bg-white/[0.04] border border-white/[0.08] text-[#98A2B3] text-[11px] font-mono">
+                Cap: {GENESIS_NODE_CAP.toLocaleString()} Nodes
+              </span>
             </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h1 className="text-xl sm:text-2xl font-bold text-white tracking-tight">
-                  My PHIVONEX Nodes
-                </h1>
-                <span className="text-[10px] font-mono uppercase bg-[#00CFFF]/10 text-[#00CFFF] border border-[#00CFFF]/30 px-2 py-0.5 rounded-full">
-                  Genesis Phase 1
-                </span>
-              </div>
-              <p className="text-xs text-[#98A2B3] mt-0.5">
-                Validated cryptographic node infrastructure for consensus verification, block emissions, and epoch rewards.
-              </p>
-            </div>
+
+            <h1 className="text-2xl sm:text-3xl font-bold text-white tracking-tight">
+              My Genesis Nodes
+            </h1>
+            <p className="text-xs sm:text-sm text-[#98A2B3] max-w-2xl leading-relaxed">
+              Manage your PHIVONEX Genesis Nodes, activation status, and node rewards.
+            </p>
           </div>
 
-          <div className="flex items-center gap-3">
+          {/* Action CTAs & Refresh Button */}
+          <div className="flex flex-wrap items-center gap-2.5 shrink-0 self-start md:self-auto">
             <button
               type="button"
               onClick={() => onNavigateTab('node-health')}
-              className="py-2.5 px-3.5 rounded-xl bg-[#00CFFF]/10 hover:bg-[#00CFFF]/20 border border-[#00CFFF]/30 text-[#00CFFF] font-bold text-xs flex items-center gap-2 transition-all cursor-pointer min-h-[44px]"
+              className="px-3.5 py-2 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.08] text-xs font-semibold text-white flex items-center gap-1.5 transition-all cursor-pointer min-h-[44px]"
             >
-              <Activity className="w-4 h-4" />
-              <span>Node Health Monitor</span>
+              <Activity className="w-3.5 h-3.5 text-[#00CFFF]" />
+              <span>Node Health</span>
             </button>
 
             <button
               type="button"
               onClick={() => onNavigateTab('nodes/buy')}
-              className="py-2.5 px-4 rounded-xl bg-[#00CFFF] hover:bg-[#00CFFF]/90 text-[#05070B] font-bold text-xs flex items-center gap-2 transition-all cursor-pointer shadow-lg shadow-[#00CFFF]/15 min-h-[44px]"
+              className="px-4 py-2 rounded-xl bg-[#00CFFF] hover:bg-[#00CFFF]/90 text-[#05070B] font-bold text-xs flex items-center gap-1.5 transition-all cursor-pointer shadow-md shadow-[#00CFFF]/20 min-h-[44px]"
             >
               <Plus className="w-4 h-4" />
-              <span>Acquire Genesis Node</span>
+              <span>Activate Genesis Node</span>
             </button>
 
             <button
               type="button"
               onClick={() => fetchNodeData(true)}
               disabled={refreshing}
-              className="p-2.5 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.08] text-[#98A2B3] hover:text-white transition-colors cursor-pointer min-h-[44px] min-w-[44px] flex items-center justify-center"
-              title="Refresh Telemetry"
+              className="p-2.5 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.08] text-[#98A2B3] hover:text-white transition-colors cursor-pointer min-h-[44px] min-w-[44px] flex items-center justify-center disabled:opacity-50"
+              title="Refresh Node Data"
+              aria-label="Refresh Node Data"
             >
-              <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin text-[#00CFFF]' : ''}`} />
+              <RefreshCw className={`w-3.5 h-3.5 text-[#00CFFF] ${refreshing ? 'animate-spin' : ''}`} />
             </button>
           </div>
         </div>
       </div>
 
+      {/* Notifications / Feedback */}
       {errorMsg && (
         <div className="p-4 rounded-xl bg-[#F04438]/10 border border-[#F04438]/30 text-[#F04438] text-xs flex items-center gap-3 animate-fadeIn">
-          <AlertCircle className="w-5 h-5 shrink-0" />
+          <AlertCircle className="w-4 h-4 shrink-0" />
           <span>{errorMsg}</span>
         </div>
       )}
 
       {claimSuccessMsg && (
         <div className="p-4 rounded-xl bg-[#32D583]/10 border border-[#32D583]/30 text-[#32D583] text-xs flex items-center gap-3 animate-fadeIn">
-          <Check className="w-5 h-5 shrink-0" />
+          <Check className="w-4 h-4 shrink-0" />
           <span>{claimSuccessMsg}</span>
         </div>
       )}
 
-      {/* Protocol Metrics Bar */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {/* Metric 1: Genesis Supply */}
-        <div className="p-5 rounded-2xl bg-[#07101D] border border-white/[0.08] shadow-lg space-y-2">
-          <div className="flex items-center justify-between text-[#98A2B3] text-xs font-mono">
-            <span>Genesis Supply</span>
-            <Layers className="w-4 h-4 text-[#00CFFF]" />
+      {/* ========================================================
+          2. COMPACT NODE SUMMARY GRID (4 Cards)
+         ======================================================== */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+        {/* Card 1: Genesis Cap */}
+        <div className="p-4 sm:p-5 rounded-2xl bg-[#07101D] border border-white/[0.08] shadow-lg flex flex-col justify-between">
+          <div className="flex items-center justify-between text-xs text-[#98A2B3] mb-2">
+            <span className="font-medium text-[11px] uppercase tracking-wider">Genesis Node Cap</span>
+            <div className="w-7 h-7 rounded-lg bg-[#00CFFF]/10 border border-[#00CFFF]/20 flex items-center justify-center text-[#00CFFF]">
+              <Layers className="w-4 h-4" />
+            </div>
           </div>
-          <div className="text-2xl font-bold text-white font-mono">
-            {(stats?.genesisCap ?? GENESIS_NODE_CAP).toLocaleString()}
+          <div>
+            <div className="text-xl sm:text-2xl font-mono font-bold text-white tabular-nums">
+              {(stats?.genesisCap ?? GENESIS_NODE_CAP).toLocaleString()}
+            </div>
+            <div className="text-[11px] text-[#98A2B3] mt-1">
+              Fixed protocol supply
+            </div>
           </div>
-          <p className="text-[11px] text-[#98A2B3]">
-            Fixed protocol cap
-          </p>
         </div>
 
-        {/* Metric 2: Available Nodes */}
-        <div className="p-5 rounded-2xl bg-[#07101D] border border-white/[0.08] shadow-lg space-y-2">
-          <div className="flex items-center justify-between text-[#98A2B3] text-xs font-mono">
-            <span>Available Inventory</span>
-            <Cpu className="w-4 h-4 text-[#00CFFF]" />
+        {/* Card 2: Available Nodes */}
+        <div className="p-4 sm:p-5 rounded-2xl bg-[#07101D] border border-white/[0.08] shadow-lg flex flex-col justify-between">
+          <div className="flex items-center justify-between text-xs text-[#98A2B3] mb-2">
+            <span className="font-medium text-[11px] uppercase tracking-wider">Available Nodes</span>
+            <div className="w-7 h-7 rounded-lg bg-[#00CFFF]/10 border border-[#00CFFF]/20 flex items-center justify-center text-[#00CFFF]">
+              <Server className="w-4 h-4" />
+            </div>
           </div>
-          <div className="text-2xl font-bold text-[#00CFFF] font-mono">
-            {loading ? (
-              <Loader2 className="w-5 h-5 animate-spin text-[#00CFFF]" />
-            ) : (
-              (stats?.available ?? GENESIS_NODE_CAP).toLocaleString()
-            )}
+          <div>
+            <div className="text-xl sm:text-2xl font-mono font-bold text-[#00CFFF] tabular-nums">
+              {stats ? stats.available.toLocaleString() : '—'}
+            </div>
+            <div className="text-[11px] text-[#98A2B3] mt-1">
+              Remaining to activate
+            </div>
           </div>
-          <p className="text-[11px] text-[#98A2B3]">
-            Unassigned Genesis inventory
-          </p>
         </div>
 
-        {/* Metric 3: Active Operator Nodes */}
-        <div className="p-5 rounded-2xl bg-[#07101D] border border-white/[0.08] shadow-lg space-y-2">
-          <div className="flex items-center justify-between text-[#98A2B3] text-xs font-mono">
-            <span>My Active Nodes</span>
-            <ShieldCheck className="w-4 h-4 text-[#32D583]" />
+        {/* Card 3: My Nodes */}
+        <div className="p-4 sm:p-5 rounded-2xl bg-[#07101D] border border-white/[0.08] shadow-lg flex flex-col justify-between">
+          <div className="flex items-center justify-between text-xs text-[#98A2B3] mb-2">
+            <span className="font-medium text-[11px] uppercase tracking-wider">My Nodes</span>
+            <div className="w-7 h-7 rounded-lg bg-white/[0.04] border border-white/[0.08] flex items-center justify-center text-white">
+              <Server className="w-4 h-4 text-[#00CFFF]" />
+            </div>
           </div>
-          <div className="text-2xl font-bold text-white font-mono">
-            {loading ? (
-              <Loader2 className="w-5 h-5 animate-spin text-white" />
-            ) : (
-              activeNodes.length.toLocaleString()
-            )}
+          <div>
+            <div className="text-xl sm:text-2xl font-mono font-bold text-white tabular-nums">
+              {nodes.length}
+            </div>
+            <div className="text-[11px] text-[#98A2B3] mt-1">
+              Registered to your account
+            </div>
           </div>
-          <p className="text-[11px] text-[#98A2B3]">
-            Eligible for epoch rewards
-          </p>
         </div>
 
-        {/* Metric 4: Total Mining Rewards */}
-        <div className="p-5 rounded-2xl bg-[#07101D] border border-[#00CFFF]/20 shadow-lg space-y-2 relative overflow-hidden">
-          <div className="flex items-center justify-between text-[#98A2B3] text-xs font-mono">
-            <span>Mining Rewards Earned</span>
-            <Zap className="w-4 h-4 text-[#00CFFF]" />
+        {/* Card 4: Active Nodes */}
+        <div className="p-4 sm:p-5 rounded-2xl bg-[#07101D] border border-white/[0.08] shadow-lg flex flex-col justify-between">
+          <div className="flex items-center justify-between text-xs text-[#98A2B3] mb-2">
+            <span className="font-medium text-[11px] uppercase tracking-wider">Active Nodes</span>
+            <div className="w-7 h-7 rounded-lg bg-[#32D583]/10 border border-[#32D583]/20 flex items-center justify-center text-[#32D583]">
+              <ShieldCheck className="w-4 h-4" />
+            </div>
           </div>
-          <div className="text-2xl font-bold text-[#00CFFF] font-mono">
-            {loading ? (
-              <Loader2 className="w-5 h-5 animate-spin text-[#00CFFF]" />
-            ) : (
-              `$${(rewards?.totalRewards ?? 0).toFixed(2)} USD`
-            )}
-          </div>
-          <div className="flex items-center justify-between text-[11px] text-[#98A2B3] pt-0.5">
-            <span>Accrued: ${(rewards?.totalAccrued ?? 0).toFixed(2)}</span>
-            <span>Claimed: ${(rewards?.totalClaimed ?? 0).toFixed(2)}</span>
+          <div>
+            <div className="text-xl sm:text-2xl font-mono font-bold text-[#32D583] tabular-nums">
+              {activeNodes.length}
+            </div>
+            <div className="flex items-center gap-1 text-[11px] text-[#32D583] mt-1 font-medium">
+              <span className="w-1.5 h-1.5 rounded-full bg-[#32D583]" />
+              <span>{activeNodes.length > 0 ? 'Active & Earning' : 'Ready to activate'}</span>
+            </div>
           </div>
         </div>
       </div>
 
-      {/* Task #14: Reward Engine & Claim Foundation Bar */}
-      {(rewards?.totalAccrued ?? 0) > 0 && (
-        <div className="p-5 rounded-2xl bg-gradient-to-r from-[#00CFFF]/10 via-[#07101D] to-[#07101D] border border-[#00CFFF]/30 shadow-xl flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-[#00CFFF]/15 border border-[#00CFFF]/30 flex items-center justify-center text-[#00CFFF]">
-              <Sparkles className="w-5 h-5" />
+      {/* ========================================================
+          3. CLEAN REWARD SUMMARY CARD
+         ======================================================== */}
+      <div className="p-5 sm:p-6 rounded-2xl bg-[#07101D] border border-white/[0.08] shadow-xl space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-white/[0.06] pb-3">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-lg bg-[#00CFFF]/10 border border-[#00CFFF]/20 flex items-center justify-center text-[#00CFFF]">
+              <Zap className="w-4 h-4" />
             </div>
             <div>
-              <div className="text-sm font-bold text-white flex items-center gap-2">
-                <span>Accrued Mining Rewards Ready</span>
-                <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-[#00CFFF]/20 text-[#00CFFF]">
-                  ${(rewards?.totalAccrued ?? 0).toFixed(4)} USD
-                </span>
-              </div>
-              <p className="text-xs text-[#98A2B3] mt-0.5">
-                Safe state foundation: Transitions accrued rewards to claimed without altering ledger invariants.
-              </p>
+              <h2 className="text-sm font-bold text-white">Node Mining Rewards</h2>
+              <p className="text-[11px] text-[#98A2B3]">Audited rewards earned from your active Genesis Nodes.</p>
             </div>
           </div>
 
-          <button
-            type="button"
-            onClick={handleClaim}
-            disabled={claiming}
-            className="py-2 px-5 rounded-xl bg-[#00CFFF] hover:bg-[#00CFFF]/90 text-[#05070B] font-bold text-xs flex items-center justify-center gap-2 transition-all cursor-pointer shadow-md shadow-[#00CFFF]/20 min-h-[40px] shrink-0 disabled:opacity-50"
-          >
-            {claiming ? (
-              <>
-                <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                <span>Processing Claim...</span>
-              </>
-            ) : (
-              <>
-                <CheckCircle2 className="w-3.5 h-3.5" />
-                <span>Claim Accrued Rewards</span>
-              </>
-            )}
-          </button>
+          {(rewards?.totalAccrued ?? 0) > 0 && (
+            <button
+              type="button"
+              onClick={handleClaim}
+              disabled={claiming}
+              className="px-4 py-2 rounded-xl bg-[#00CFFF] hover:bg-[#00CFFF]/90 text-[#05070B] font-bold text-xs flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-md shadow-[#00CFFF]/20 min-h-[40px] shrink-0 disabled:opacity-50"
+            >
+              {claiming ? (
+                <>
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                  <span>Claiming...</span>
+                </>
+              ) : (
+                <>
+                  <Sparkles className="w-3.5 h-3.5" />
+                  <span>Claim Accrued (${(rewards?.totalAccrued ?? 0).toFixed(2)})</span>
+                </>
+              )}
+            </button>
+          )}
         </div>
-      )}
 
-      {/* Main Node List / Empty State */}
-      <div className="p-6 sm:p-8 rounded-2xl bg-[#07101D] border border-white/[0.08] shadow-xl space-y-6">
-        <div className="flex items-center justify-between border-b border-white/[0.08] pb-4">
-          <div>
-            <h2 className="text-base font-bold text-white flex items-center gap-2">
-              <Activity className="w-4 h-4 text-[#00CFFF]" />
-              <span>Assigned Node Infrastructure</span>
-            </h2>
-            <p className="text-xs text-[#98A2B3] mt-0.5">
-              Cryptographically verified nodes registered to your PHIVONEX account.
-            </p>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          {/* Total Earned */}
+          <div className="p-3.5 rounded-xl bg-[#05070B] border border-white/[0.06] space-y-1">
+            <span className="text-[10px] text-[#98A2B3] uppercase tracking-wider font-mono block">Total Earned</span>
+            <span className="text-base sm:text-lg font-mono font-bold text-[#00CFFF] tabular-nums block">
+              ${(rewards?.totalRewards ?? 0).toFixed(2)} USD
+            </span>
+            <span className="text-[10px] text-[#98A2B3] block">All-time node rewards</span>
           </div>
-          <span className="text-[11px] font-mono text-[#00CFFF] bg-[#00CFFF]/10 px-2.5 py-1 rounded-md border border-[#00CFFF]/20">
-            {nodes.length} Nodes Owned
+
+          {/* Accrued */}
+          <div className="p-3.5 rounded-xl bg-[#05070B] border border-white/[0.06] space-y-1">
+            <span className="text-[10px] text-[#98A2B3] uppercase tracking-wider font-mono block">Accrued (Ready)</span>
+            <span className="text-base sm:text-lg font-mono font-bold text-[#32D583] tabular-nums block">
+              ${(rewards?.totalAccrued ?? 0).toFixed(2)} USD
+            </span>
+            <span className="text-[10px] text-[#98A2B3] block">Pending claim</span>
+          </div>
+
+          {/* Claimed */}
+          <div className="p-3.5 rounded-xl bg-[#05070B] border border-white/[0.06] space-y-1">
+            <span className="text-[10px] text-[#98A2B3] uppercase tracking-wider font-mono block">Claimed / Settled</span>
+            <span className="text-base sm:text-lg font-mono font-bold text-white tabular-nums block">
+              ${(rewards?.totalClaimed ?? 0).toFixed(2)} USD
+            </span>
+            <span className="text-[10px] text-[#98A2B3] block">Transferred to wallet</span>
+          </div>
+
+          {/* Latest Cycle */}
+          <div className="p-3.5 rounded-xl bg-[#05070B] border border-white/[0.06] space-y-1">
+            <span className="text-[10px] text-[#98A2B3] uppercase tracking-wider font-mono block">Latest Cycle</span>
+            <span className="text-xs sm:text-sm font-mono font-semibold text-white truncate block">
+              {rewards?.latestEpoch?.publicEpochId || 'None Yet'}
+            </span>
+            <span className="text-[10px] text-[#98A2B3] block">Last reward distribution</span>
+          </div>
+        </div>
+      </div>
+
+      {/* ========================================================
+          4. OWNED NODE LIST / EMPTY STATE
+         ======================================================== */}
+      <div className="p-5 sm:p-6 rounded-2xl bg-[#07101D] border border-white/[0.08] shadow-xl space-y-4">
+        <div className="flex items-center justify-between border-b border-white/[0.06] pb-3">
+          <div className="flex items-center gap-2">
+            <div className="w-7 h-7 rounded-lg bg-[#00CFFF]/10 border border-[#00CFFF]/20 flex items-center justify-center text-[#00CFFF]">
+              <Server className="w-4 h-4" />
+            </div>
+            <div>
+              <h2 className="text-sm font-bold text-white">Your Genesis Nodes</h2>
+              <p className="text-[11px] text-[#98A2B3]">Genesis nodes registered to your PHIVONEX account.</p>
+            </div>
+          </div>
+          <span className="text-xs font-mono text-[#00CFFF] bg-[#00CFFF]/10 px-2.5 py-0.5 rounded-md border border-[#00CFFF]/20">
+            {nodes.length} {nodes.length === 1 ? 'Node' : 'Nodes'} Owned
           </span>
         </div>
 
         {loading ? (
-          <div className="py-12 flex flex-col items-center justify-center gap-3 text-xs text-[#98A2B3]">
-            <Loader2 className="w-6 h-6 animate-spin text-[#00CFFF]" />
-            <span>Querying Genesis Node registry &amp; reward engine...</span>
+          <div className="py-12 flex flex-col items-center justify-center gap-2 text-xs text-[#98A2B3]">
+            <RefreshCw className="w-5 h-5 animate-spin text-[#00CFFF]" />
+            <span>Loading nodes...</span>
           </div>
         ) : nodes.length === 0 ? (
-          /* Empty State */
-          <div className="py-12 px-4 rounded-xl bg-[#05070B] border border-dashed border-white/[0.1] text-center space-y-5 max-w-xl mx-auto">
-            <div className="w-14 h-14 rounded-2xl bg-white/[0.03] border border-white/[0.08] flex items-center justify-center text-[#98A2B3] mx-auto">
-              <Server className="w-7 h-7" />
+          /* Compact Premium Empty State */
+          <div className="py-10 px-4 rounded-xl bg-[#05070B] border border-dashed border-white/[0.1] text-center space-y-4 max-w-lg mx-auto">
+            <div className="w-12 h-12 rounded-xl bg-white/[0.03] border border-white/[0.08] flex items-center justify-center text-[#98A2B3] mx-auto">
+              <Server className="w-6 h-6 text-[#00CFFF]" />
             </div>
 
-            <div className="space-y-2">
-              <h3 className="text-base font-bold text-white">
-                You do not have any active PHIVONEX Nodes yet.
+            <div className="space-y-1.5">
+              <h3 className="text-sm sm:text-base font-bold text-white">
+                No Genesis Nodes Yet
               </h3>
-              <p className="text-xs text-[#98A2B3] leading-relaxed max-w-md mx-auto">
-                Nodes act as the cryptographic backbone of the PHIVONEX consensus network, validating ledger state transitions and earning epoch rewards.
+              <p className="text-xs text-[#98A2B3] max-w-sm mx-auto leading-relaxed">
+                Your Genesis Nodes will appear here after activation.
               </p>
             </div>
 
-            <div className="pt-2">
+            <div className="pt-2 flex flex-wrap items-center justify-center gap-2.5">
               <button
                 type="button"
                 onClick={() => onNavigateTab('nodes/buy')}
-                className="py-3 px-6 rounded-xl bg-[#00CFFF] hover:bg-[#00CFFF]/90 text-[#05070B] font-bold text-xs inline-flex items-center gap-2 transition-all cursor-pointer shadow-lg shadow-[#00CFFF]/20 min-h-[44px]"
+                className="py-2.5 px-5 rounded-xl bg-[#00CFFF] hover:bg-[#00CFFF]/90 text-[#05070B] font-bold text-xs inline-flex items-center gap-1.5 transition-all cursor-pointer shadow-md shadow-[#00CFFF]/20 min-h-[44px]"
               >
-                <span>Acquire Genesis Node ($1,000 USD)</span>
-                <ArrowRight className="w-4 h-4" />
+                <span>Activate Genesis Node (${basePrice.toLocaleString()} USD)</span>
+                <ArrowRight className="w-3.5 h-3.5" />
+              </button>
+
+              <button
+                type="button"
+                onClick={() => onNavigateTab('node-health')}
+                className="py-2.5 px-4 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.08] text-white text-xs font-semibold inline-flex items-center gap-1.5 transition-colors cursor-pointer min-h-[44px]"
+              >
+                <span>Learn About Genesis Nodes</span>
               </button>
             </div>
           </div>
         ) : (
-          /* Owned Node Grid with Task #14 Reward State & Telemetry */
+          /* Owned Node Cards Grid */
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {nodes.map((node) => (
-              <div
-                key={node.publicNodeId}
-                className="p-5 rounded-xl bg-[#05070B] border border-white/[0.08] hover:border-[#00CFFF]/40 transition-all space-y-4 group"
-              >
-                {/* Node ID & Status Header */}
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <div className="w-8 h-8 rounded-lg bg-[#00CFFF]/10 border border-[#00CFFF]/30 flex items-center justify-center text-[#00CFFF]">
-                      <Server className="w-4 h-4" />
-                    </div>
-                    <div>
-                      <div className="text-xs font-mono font-bold text-white group-hover:text-[#00CFFF] transition-colors">
-                        {node.publicNodeId}
+            {nodes.map((node) => {
+              const isActive = node.status === 'ACTIVE';
+              const isPending = node.status === 'PENDING' || node.status === 'RESERVED';
+              return (
+                <div
+                  key={node.publicNodeId}
+                  className="p-4 sm:p-5 rounded-xl bg-[#05070B] border border-white/[0.08] hover:border-[#00CFFF]/40 transition-all space-y-3 flex flex-col justify-between"
+                >
+                  {/* Top: Public ID & Status */}
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <div className="w-9 h-9 rounded-lg bg-[#00CFFF]/10 border border-[#00CFFF]/20 flex items-center justify-center text-[#00CFFF] shrink-0">
+                        <Server className="w-4 h-4" />
                       </div>
-                      <div className="text-[10px] font-mono text-[#98A2B3]">
-                        Node #{node.nodeNumber}
+                      <div className="min-w-0">
+                        <span className="text-xs font-mono font-bold text-white block truncate">
+                          {node.publicNodeId}
+                        </span>
+                        <span className="text-[10px] font-mono text-[#98A2B3] block">
+                          Node #{node.nodeNumber}
+                        </span>
                       </div>
                     </div>
-                  </div>
 
-                  {/* Primary Status Badge */}
-                  <span
-                    className={`text-[10px] font-mono uppercase px-2 py-0.5 rounded-full flex items-center gap-1 border ${
-                      node.status === 'ACTIVE'
-                        ? 'bg-[#32D583]/10 text-[#32D583] border-[#32D583]/30'
-                        : 'bg-white/[0.05] text-[#98A2B3] border-white/[0.1]'
-                    }`}
-                  >
                     <span
-                      className={`w-1.5 h-1.5 rounded-full ${
-                        node.status === 'ACTIVE' ? 'bg-[#32D583] animate-pulse' : 'bg-[#98A2B3]'
-                      }`}
-                    />
-                    {node.status === 'ACTIVE' ? 'ACTIVE (ONLINE)' : node.status}
-                  </span>
-                </div>
-
-                {/* Real-time Operational Health Status Badges System */}
-                <div className="p-2.5 rounded-lg bg-[#07101D] border border-white/[0.06] space-y-2">
-                  <div className="flex items-center justify-between text-[10px] font-mono">
-                    <span className="text-[#98A2B3] uppercase tracking-wider flex items-center gap-1">
-                      <Activity className="w-3 h-3 text-[#32D583]" /> Operational Health
-                    </span>
-                    <span className="text-[#32D583] font-bold">HEALTHY · 99.9% Uptime</span>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-1.5 text-[10px] font-mono">
-                    <div className="px-2 py-1 rounded bg-white/[0.02] border border-white/[0.04] flex items-center justify-between">
-                      <span className="text-[#98A2B3]">Ping:</span>
-                      <span className="text-[#00CFFF] font-semibold">{((node.nodeNumber * 7) % 18) + 12}ms</span>
-                    </div>
-                    <div className="px-2 py-1 rounded bg-white/[0.02] border border-white/[0.04] flex items-center justify-between">
-                      <span className="text-[#98A2B3]">Sync Delay:</span>
-                      <span className="text-[#32D583] font-semibold">{((node.nodeNumber * 3) % 12) + 8}ms</span>
-                    </div>
-                    <div className="px-2 py-1 rounded bg-white/[0.02] border border-white/[0.04] flex items-center justify-between">
-                      <span className="text-[#98A2B3]">Block Lag:</span>
-                      <span className="text-white font-semibold">0 blocks</span>
-                    </div>
-                    <div className="px-2 py-1 rounded bg-white/[0.02] border border-white/[0.04] flex items-center justify-between">
-                      <span className="text-[#98A2B3]">Peers:</span>
-                      <span className="text-[#00CFFF] font-semibold">24 Live</span>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Task #14 Required Fields & Reward State */}
-                <div className="pt-2 border-t border-white/[0.06] space-y-2 text-xs">
-                  <div className="flex items-center justify-between text-[11px]">
-                    <span className="text-[#98A2B3]">Current Reward State</span>
-                    <span
-                      className={`font-mono text-[10px] px-2 py-0.5 rounded-md border ${
-                        node.currentRewardState === 'ACCRUED'
-                          ? 'bg-[#00CFFF]/10 text-[#00CFFF] border-[#00CFFF]/30'
-                          : node.currentRewardState === 'CLAIMED'
+                      className={`text-[10px] font-mono uppercase px-2 py-0.5 rounded-full flex items-center gap-1 border shrink-0 ${
+                        isActive
                           ? 'bg-[#32D583]/10 text-[#32D583] border-[#32D583]/30'
+                          : isPending
+                          ? 'bg-[#F59E0B]/10 text-[#F59E0B] border-[#F59E0B]/30'
                           : 'bg-white/[0.05] text-[#98A2B3] border-white/[0.1]'
                       }`}
                     >
-                      {node.currentRewardState || 'READY'}
+                      <span
+                        className={`w-1.5 h-1.5 rounded-full ${
+                          isActive ? 'bg-[#32D583] animate-pulse' : isPending ? 'bg-[#F59E0B]' : 'bg-[#98A2B3]'
+                        }`}
+                      />
+                      {isActive ? 'ACTIVE' : node.status}
                     </span>
                   </div>
 
-                  <div className="flex items-center justify-between text-[11px]">
-                    <span className="text-[#98A2B3]">Total Rewards</span>
-                    <span className="font-mono text-white font-bold">
-                      ${Number(node.totalRewards || 0).toFixed(4)} USD
-                    </span>
+                  {/* Node Metrics */}
+                  <div className="py-2 border-t border-b border-white/[0.04] space-y-1.5 text-xs font-mono">
+                    <div className="flex items-center justify-between text-[11px]">
+                      <span className="text-[#98A2B3]">Reward Status:</span>
+                      <span
+                        className={`text-[10px] px-1.5 py-0.5 rounded border ${
+                          node.currentRewardState === 'ACCRUED'
+                            ? 'bg-[#00CFFF]/10 text-[#00CFFF] border-[#00CFFF]/30'
+                            : node.currentRewardState === 'CLAIMED'
+                            ? 'bg-[#32D583]/10 text-[#32D583] border-[#32D583]/30'
+                            : 'bg-white/[0.04] text-[#98A2B3] border-white/[0.08]'
+                        }`}
+                      >
+                        {node.currentRewardState || 'READY'}
+                      </span>
+                    </div>
+
+                    <div className="flex items-center justify-between text-[11px]">
+                      <span className="text-[#98A2B3]">Total Rewards:</span>
+                      <span className="text-white font-bold tabular-nums">
+                        ${Number(node.totalRewards || 0).toFixed(2)} USD
+                      </span>
+                    </div>
+
+                    <div className="flex items-center justify-between text-[11px]">
+                      <span className="text-[#98A2B3]">Activation Date:</span>
+                      <span className="text-white">{formatDate(node.activatedAt)}</span>
+                    </div>
                   </div>
 
-                  <div className="flex items-center justify-between text-[11px]">
-                    <span className="text-[#98A2B3]">Latest Reward Epoch</span>
-                    <span className="font-mono text-[#00CFFF]">
-                      {node.latestRewardEpoch || 'None Yet'}
-                    </span>
-                  </div>
-
-                  <div className="flex items-center justify-between text-[11px] pt-1 border-t border-white/[0.04]">
-                    <span className="text-[#98A2B3]">Activation Date</span>
-                    <span className="font-mono text-white">{formatDate(node.activatedAt)}</span>
+                  {/* Actions */}
+                  <div className="pt-1">
+                    <button
+                      type="button"
+                      onClick={() => onNavigateTab('node-health')}
+                      className="w-full py-2 px-3 rounded-lg bg-white/[0.03] hover:bg-white/[0.07] border border-white/[0.06] text-white text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer min-h-[38px]"
+                    >
+                      <Activity className="w-3.5 h-3.5 text-[#00CFFF]" />
+                      <span>Node Health Details</span>
+                    </button>
                   </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>
 
-      {/* Task #14: Reward History Section */}
-      <div className="p-6 sm:p-8 rounded-2xl bg-[#07101D] border border-white/[0.08] shadow-xl space-y-4">
-        <div className="flex items-center justify-between border-b border-white/[0.08] pb-4">
-          <div>
-            <h2 className="text-base font-bold text-white flex items-center gap-2">
-              <Coins className="w-4 h-4 text-[#00CFFF]" />
-              <span>Node Mining Reward History</span>
-            </h2>
-            <p className="text-xs text-[#98A2B3] mt-0.5">
-              Audited historical record of epoch rewards earned by your active Genesis Nodes.
-            </p>
+      {/* ========================================================
+          5. NODE REWARD HISTORY
+         ======================================================== */}
+      <div className="p-5 sm:p-6 rounded-2xl bg-[#07101D] border border-white/[0.08] shadow-xl space-y-4">
+        <div className="flex items-center justify-between border-b border-white/[0.06] pb-3">
+          <div className="flex items-center gap-2">
+            <div className="w-7 h-7 rounded-lg bg-[#00CFFF]/10 border border-[#00CFFF]/20 flex items-center justify-center text-[#00CFFF]">
+              <Coins className="w-4 h-4" />
+            </div>
+            <div>
+              <h2 className="text-sm font-bold text-white">Node Reward History</h2>
+              <p className="text-[11px] text-[#98A2B3]">Historical record of rewards earned by your active Genesis Nodes.</p>
+            </div>
           </div>
-          <span className="text-[11px] font-mono text-[#98A2B3]">
-            {rewards?.history.length ?? 0} Events Recorded
+          <span className="text-xs font-mono text-[#98A2B3]">
+            {rewards?.history.length ?? 0} Events
           </span>
         </div>
 
         {loading ? (
           <div className="py-8 flex justify-center text-xs text-[#98A2B3]">
-            <Loader2 className="w-5 h-5 animate-spin text-[#00CFFF]" />
+            <RefreshCw className="w-4 h-4 animate-spin text-[#00CFFF]" />
           </div>
         ) : !rewards?.history || rewards.history.length === 0 ? (
-          <div className="py-8 text-center text-xs text-[#98A2B3] bg-[#05070B] rounded-xl border border-dashed border-white/[0.08] space-y-1">
-            <Coins className="w-6 h-6 mx-auto text-[#98A2B3]/50 mb-1" />
-            <p className="font-medium text-white">No epoch rewards recorded yet.</p>
-            <p className="text-[11px]">Active nodes automatically accumulate rewards at each scheduled epoch settlement.</p>
+          <div className="py-8 text-center text-xs text-[#98A2B3] bg-[#05070B] rounded-xl border border-dashed border-white/[0.06] space-y-1">
+            <Coins className="w-6 h-6 mx-auto text-[#98A2B3]/40 mb-1" />
+            <p className="font-medium text-white">No node rewards recorded yet.</p>
+            <p className="text-[11px] text-[#667085]">Active nodes will record rewards when scheduled distributions occur.</p>
           </div>
         ) : (
           <div className="overflow-x-auto">
@@ -559,20 +602,20 @@ export const MyNodesView: React.FC<MyNodesViewProps> = ({ user, onNavigateTab })
                 <tr className="border-b border-white/[0.06] text-[#98A2B3] font-mono text-[10px] uppercase">
                   <th className="pb-3 font-semibold">Reward ID</th>
                   <th className="pb-3 font-semibold">Node ID</th>
-                  <th className="pb-3 font-semibold">Epoch</th>
+                  <th className="pb-3 font-semibold">Cycle</th>
                   <th className="pb-3 font-semibold">Amount</th>
                   <th className="pb-3 font-semibold">Status</th>
-                  <th className="pb-3 font-semibold text-right">Accrued At</th>
+                  <th className="pb-3 font-semibold text-right">Date</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/[0.04]">
-                {rewards.history.map((item) => (
+                {rewards.history.slice(0, 10).map((item) => (
                   <tr key={item.id} className="hover:bg-white/[0.02] transition-colors">
                     <td className="py-3 font-mono text-white font-medium">{item.publicRewardId}</td>
                     <td className="py-3 font-mono text-[#00CFFF]">{item.publicNodeId}</td>
                     <td className="py-3 font-mono text-white">{item.publicEpochId}</td>
-                    <td className="py-3 font-mono text-[#32D583] font-bold">
-                      +${Number(item.amount).toFixed(4)} USD
+                    <td className="py-3 font-mono text-[#32D583] font-bold tabular-nums">
+                      +${Number(item.amount).toFixed(2)} USD
                     </td>
                     <td className="py-3">
                       <span
@@ -607,24 +650,27 @@ export const MyNodesView: React.FC<MyNodesViewProps> = ({ user, onNavigateTab })
         )}
       </div>
 
-      {/* Orders & Reservations History */}
+      {/* ========================================================
+          6. ORDERS & RESERVATIONS HISTORY (If Exists)
+         ======================================================== */}
       {orders.length > 0 && (
-        <div className="p-6 sm:p-8 rounded-2xl bg-[#07101D] border border-white/[0.08] shadow-xl space-y-4">
-          <div className="flex items-center justify-between border-b border-white/[0.08] pb-4">
-            <div>
-              <h2 className="text-base font-bold text-white flex items-center gap-2">
-                <Clock className="w-4 h-4 text-[#00CFFF]" />
-                <span>Node Purchase &amp; Reservation History</span>
-              </h2>
-              <p className="text-xs text-[#98A2B3] mt-0.5">
-                Audited ledger of past reservation orders and activations.
-              </p>
+        <div className="p-5 sm:p-6 rounded-2xl bg-[#07101D] border border-white/[0.08] shadow-xl space-y-4">
+          <div className="flex items-center justify-between border-b border-white/[0.06] pb-3">
+            <div className="flex items-center gap-2">
+              <div className="w-7 h-7 rounded-lg bg-[#00CFFF]/10 border border-[#00CFFF]/20 flex items-center justify-center text-[#00CFFF]">
+                <Clock className="w-4 h-4" />
+              </div>
+              <div>
+                <h2 className="text-sm font-bold text-white">Node Orders &amp; Reservations</h2>
+                <p className="text-[11px] text-[#98A2B3]">Record of node purchase orders and activation requests.</p>
+              </div>
             </div>
             <button
               onClick={() => onNavigateTab('nodes/buy')}
-              className="text-xs font-mono text-[#00CFFF] hover:underline cursor-pointer"
+              className="text-xs text-[#00CFFF] hover:text-white font-medium flex items-center gap-1 cursor-pointer transition-colors"
             >
-              Order New Node →
+              <span>Order Node</span>
+              <ChevronRight className="w-3.5 h-3.5" />
             </button>
           </div>
 
@@ -637,7 +683,7 @@ export const MyNodesView: React.FC<MyNodesViewProps> = ({ user, onNavigateTab })
                   <th className="pb-3 font-semibold">Amount</th>
                   <th className="pb-3 font-semibold">Status</th>
                   <th className="pb-3 font-semibold">Date</th>
-                  <th className="pb-3 font-semibold text-right">Details</th>
+                  <th className="pb-3 font-semibold text-right">Action</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/[0.04]">
@@ -645,14 +691,14 @@ export const MyNodesView: React.FC<MyNodesViewProps> = ({ user, onNavigateTab })
                   <tr key={ord.publicOrderId} className="hover:bg-white/[0.02] transition-colors">
                     <td className="py-3 font-mono text-white">{ord.publicOrderId}</td>
                     <td className="py-3 font-mono text-[#00CFFF]">{ord.publicNodeId}</td>
-                    <td className="py-3 font-mono text-white">${ord.amountUsd.toLocaleString()} USD</td>
+                    <td className="py-3 font-mono text-white tabular-nums">${ord.amountUsd.toLocaleString()} USD</td>
                     <td className="py-3">
                       <span
                         className={`text-[10px] font-mono uppercase px-2 py-0.5 rounded-full border inline-flex items-center gap-1 ${
                           ord.status === 'COMPLETED'
                             ? 'bg-[#32D583]/10 text-[#32D583] border-[#32D583]/30'
                             : ord.status === 'PENDING'
-                            ? 'bg-[#F79009]/10 text-[#F79009] border-[#F79009]/30'
+                            ? 'bg-[#F59E0B]/10 text-[#F59E0B] border-[#F59E0B]/30'
                             : 'bg-white/[0.05] text-[#98A2B3] border-white/[0.1]'
                         }`}
                       >
@@ -661,7 +707,7 @@ export const MyNodesView: React.FC<MyNodesViewProps> = ({ user, onNavigateTab })
                             ord.status === 'COMPLETED'
                               ? 'bg-[#32D583]'
                               : ord.status === 'PENDING'
-                              ? 'bg-[#F79009]'
+                              ? 'bg-[#F59E0B]'
                               : 'bg-[#98A2B3]'
                           }`}
                         />
@@ -669,17 +715,14 @@ export const MyNodesView: React.FC<MyNodesViewProps> = ({ user, onNavigateTab })
                       </span>
                     </td>
                     <td className="py-3 text-[#98A2B3] font-mono text-[11px]">
-                      {new Date(ord.createdAt).toLocaleDateString('en-US', {
-                        month: 'short',
-                        day: 'numeric',
-                      })}
+                      {formatDate(ord.createdAt)}
                     </td>
                     <td className="py-3 text-right">
                       {ord.status === 'PENDING' && ord.secondsRemaining > 0 ? (
                         <button
                           type="button"
                           onClick={() => onNavigateTab('nodes/buy')}
-                          className="text-[11px] font-mono text-[#F79009] hover:underline"
+                          className="text-[11px] font-mono text-[#F59E0B] hover:underline cursor-pointer"
                         >
                           Complete Payment ({ord.secondsRemaining}s)
                         </button>

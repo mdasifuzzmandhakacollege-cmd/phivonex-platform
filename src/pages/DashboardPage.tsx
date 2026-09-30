@@ -15,6 +15,8 @@ import { WithdrawalsView } from '../components/dashboard/WithdrawalsView';
 import { DepositView } from '../components/dashboard/DepositView';
 import { SwapView } from '../components/dashboard/SwapView';
 import { NotificationsView } from '../components/dashboard/NotificationsView';
+import { RewardsView } from '../components/dashboard/RewardsView';
+import { TransactionsView } from '../components/dashboard/TransactionsView';
 import { PlaceholderView } from '../components/dashboard/PlaceholderView';
 import { Loader2, AlertCircle, LogIn } from 'lucide-react';
 import { PhivonexLogo } from '../components/brand/PhivonexLogo';
@@ -178,8 +180,9 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onNavigate, curren
       case 'network':
         return <NetworkView />;
       case 'wallet':
-      case 'transactions':
         return <WalletView user={user} onNavigateTab={(tab) => handleSelectTab(tab as DashboardTab)} />;
+      case 'transactions':
+        return <TransactionsView user={user} onNavigateTab={(tab) => handleSelectTab(tab as DashboardTab)} />;
       case 'swap':
         return <SwapView user={user} onNavigateTab={(tab) => handleSelectTab(tab as DashboardTab)} />;
       case 'deposit':
@@ -188,6 +191,19 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onNavigate, curren
         return <WithdrawalsView user={user} onNavigateTab={(tab) => handleSelectTab(tab as DashboardTab)} />;
       case 'notifications':
         return <NotificationsView user={user} onNavigateTab={(tab) => handleSelectTab(tab as DashboardTab)} />;
+      case 'rewards':
+        return (
+          <RewardsView
+            user={user}
+            onNavigateTab={(tab) => {
+              if (tab === 'nodes/buy') {
+                onNavigate('/app/nodes/buy');
+              } else {
+                handleSelectTab(tab as DashboardTab);
+              }
+            }}
+          />
+        );
       case 'referrals':
         return (
           <DirectReferralsView

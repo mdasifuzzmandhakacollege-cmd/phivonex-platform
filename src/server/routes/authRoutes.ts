@@ -1215,6 +1215,19 @@ router.post('/change-password', requireAuth, async (req: AuthRequest, res: Respo
       userAgent: req.headers['user-agent'],
     });
 
+    // Trigger Phase 10 In-App & Web Push Notification
+    try {
+      const { notifySecurityAlert } = await import('../services/notificationService');
+      await notifySecurityAlert({
+        userId: user.id,
+        title: 'Security Alert: Password Changed',
+        message: 'Your account password was updated. All other active sessions have been terminated.',
+        sourceId: `pwd-rot-${uuidv4()}`,
+      });
+    } catch {
+      // Non-blocking notification
+    }
+
     res.status(200).json({
       message: 'Password changed successfully. All other active sessions have been terminated.',
     });

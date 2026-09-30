@@ -174,27 +174,43 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
     window.addEventListener('focus', handleVisibilityOrFocus);
     document.addEventListener('visibilitychange', handleVisibilityOrFocus);
 
-    // 3. Connect to live public network event stream (SSE)
-    // When live events fire (e.g. node.activated), trigger real-time refresh
+    // 3. Connect to authenticated user notification stream (SSE)
     try {
-      const es = new EventSource('/api/public/network/stream');
+      const es = new EventSource('/api/notifications/events');
       eventSourceRef.current = es;
 
       es.onmessage = (event) => {
         try {
           const parsed = JSON.parse(event.data);
-          if (parsed && parsed.type) {
-            // Live protocol event received - refresh notifications
+          if (parsed && parsed.type === 'NEW_NOTIFICATION' && parsed.notification) {
+            const notif: AppNotification = parsed.notification;
+            if (!knownNotificationIdsRef.current.has(notif.id)) {
+              knownNotificationIdsRef.current.add(notif.id);
+              setNotifications((prev) => [notif, ...prev.filter((item) => item.id !== notif.id)]);
+              setTotalCount((prev) => prev + 1);
+              if (!notif.readAt) {
+                setUnreadCount((prev) => prev + 1);
+                if (audioEnabled && isHighPriorityNotification(notif.type)) {
+                  playSubtleChime();
+                }
+              }
+
+              // Dispatch window events for real-time views synchronization
+              if (typeof window !== 'undefined') {
+                window.dispatchEvent(new CustomEvent('phivonex:balance-or-tx-updated', { detail: notif }));
+                window.dispatchEvent(new CustomEvent('phivonex:notifications-updated', { detail: notif }));
+              }
+            }
+          } else if (parsed && parsed.type === 'CONNECTED') {
             fetchUnreadCount();
-            fetchNotifications(true);
           }
         } catch {
-          // non-json keepalive
+          // non-json keepalive heartbeat
         }
       };
 
       es.onerror = () => {
-        // Fallback gracefully to polling
+        // Fallback gracefully to background polling
         if (es.readyState === EventSource.CLOSED) {
           es.close();
         }

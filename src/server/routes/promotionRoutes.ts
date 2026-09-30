@@ -291,6 +291,8 @@ promotionRouter.post('/admin/offers', requireAuth, requireAdmin, async (req: Aut
       priorityOrder
     });
 
+    broadcastSystemConfigChange('PROMOTIONAL_OFFERS_UPDATED', { timestamp: new Date().toISOString() });
+
     return res.status(201).json({ success: true, offer: created });
   } catch (err: any) {
     console.error('[Admin Promotion API] Error creating offer:', err);
@@ -341,6 +343,8 @@ promotionRouter.put('/admin/offers/:id', requireAuth, requireAdmin, async (req: 
       priorityOrder
     });
 
+    broadcastSystemConfigChange('PROMOTIONAL_OFFERS_UPDATED', { timestamp: new Date().toISOString() });
+
     return res.status(200).json({ success: true, offer: updated });
   } catch (err: any) {
     console.error('[Admin Promotion API] Error updating offer:', err);
@@ -359,6 +363,9 @@ promotionRouter.delete('/admin/offers/:id', requireAuth, requireAdmin, async (re
     if (!deleted) {
       return res.status(404).json({ error: 'NOT_FOUND', message: 'Promotional offer not found.' });
     }
+
+    broadcastSystemConfigChange('PROMOTIONAL_OFFERS_UPDATED', { timestamp: new Date().toISOString() });
+
     return res.status(200).json({ success: true, id });
   } catch (err: any) {
     console.error('[Admin Promotion API] Error deleting offer:', err);
@@ -402,6 +409,8 @@ promotionRouter.post('/admin/banners', requireAuth, requireAdmin, async (req: Au
       endDate
     });
 
+    broadcastSystemConfigChange('PROMOTIONAL_BANNERS_UPDATED', { timestamp: new Date().toISOString() });
+
     return res.status(201).json({ success: true, banner: created });
   } catch (err: any) {
     console.error('[Admin Promotion API] Error creating banner:', err);
@@ -433,6 +442,8 @@ promotionRouter.put('/admin/banners/:id', requireAuth, requireAdmin, async (req:
       endDate
     });
 
+    broadcastSystemConfigChange('PROMOTIONAL_BANNERS_UPDATED', { timestamp: new Date().toISOString() });
+
     return res.status(200).json({ success: true, banner: updated });
   } catch (err: any) {
     console.error('[Admin Promotion API] Error updating banner:', err);
@@ -451,6 +462,9 @@ promotionRouter.delete('/admin/banners/:id', requireAuth, requireAdmin, async (r
     if (!deleted) {
       return res.status(404).json({ error: 'NOT_FOUND', message: 'Promotional banner not found.' });
     }
+
+    broadcastSystemConfigChange('PROMOTIONAL_BANNERS_UPDATED', { timestamp: new Date().toISOString() });
+
     return res.status(200).json({ success: true, id });
   } catch (err: any) {
     console.error('[Admin Promotion API] Error deleting banner:', err);
