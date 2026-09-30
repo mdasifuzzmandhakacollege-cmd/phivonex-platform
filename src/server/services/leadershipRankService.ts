@@ -299,6 +299,7 @@ export async function updatePromotionRule(
     legBalanceRule?: LegBalanceRule;
     rewardUsd?: number;
     status?: 'ACTIVE' | 'INACTIVE';
+    expectedVersion?: number;
     reason: string;
   },
   dbClient?: DatabaseClient
@@ -323,6 +324,14 @@ export async function updatePromotionRule(
   }
 
   const current = currentRes.rows[0];
+
+  if (updates.expectedVersion !== undefined && Number(current.version) !== Number(updates.expectedVersion)) {
+    const err: any = new Error(`Stale version conflict. Rule is at version ${current.version}, but client expected v${updates.expectedVersion}. Please refresh and try again.`);
+    err.code = 'VERSION_CONFLICT';
+    err.statusCode = 409;
+    throw err;
+  }
+
   const newVersion = Number(current.version) + 1;
   const newRequiredLeft = updates.requiredLeft !== undefined ? updates.requiredLeft : current.required_left;
   const newRequiredRight = updates.requiredRight !== undefined ? updates.requiredRight : current.required_right;
@@ -330,6 +339,13 @@ export async function updatePromotionRule(
   const newLegBalanceRule = updates.legBalanceRule !== undefined ? updates.legBalanceRule : current.leg_balance_rule;
   const newRewardUsd = updates.rewardUsd !== undefined ? updates.rewardUsd : current.reward_usd;
   const newStatus = updates.status !== undefined ? updates.status : current.status;
+
+  if (newRewardUsd !== undefined && Number(newRewardUsd) < 0) {
+    const err: any = new Error('Reward USD amount cannot be negative.');
+    err.code = 'INVALID_REWARD';
+    err.statusCode = 400;
+    throw err;
+  }
 
   await db.query(
     `

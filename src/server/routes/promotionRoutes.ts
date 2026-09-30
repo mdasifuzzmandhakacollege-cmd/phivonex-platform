@@ -81,7 +81,7 @@ promotionRouter.put('/ranks/rules/:id', requireAuth, requireAdmin, async (req: A
   try {
     const admin = req.user!;
     const { id } = req.params;
-    const { requiredLeft, requiredRight, requiredLeaderRank, legBalanceRule, rewardUsd, status, reason } = req.body || {};
+    const { requiredLeft, requiredRight, requiredLeaderRank, legBalanceRule, rewardUsd, status, reason, expectedVersion } = req.body || {};
 
     if (!reason || String(reason).trim().length < 5) {
       return res.status(400).json({ error: 'INVALID_INPUT', message: 'Reason is required (min 5 characters).' });
@@ -94,8 +94,11 @@ promotionRouter.put('/ranks/rules/:id', requireAuth, requireAdmin, async (req: A
       legBalanceRule: legBalanceRule !== undefined ? legBalanceRule : undefined,
       rewardUsd: typeof rewardUsd === 'number' ? rewardUsd : undefined,
       status: status !== undefined ? status : undefined,
+      expectedVersion: typeof expectedVersion === 'number' ? expectedVersion : undefined,
       reason: String(reason).trim(),
     });
+
+    await broadcastSystemConfigChange('PROMOTION_RULES_UPDATED', { id, version: updated.version }, 'PROMOTION');
 
     return res.status(200).json({ success: true, rule: updated });
   } catch (err: any) {

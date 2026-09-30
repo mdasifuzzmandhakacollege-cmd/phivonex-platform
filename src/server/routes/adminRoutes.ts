@@ -4,6 +4,7 @@ import { adminFinancialLimiter } from '../middleware/rateLimiter';
 import {
   getAdminSummaryMetrics,
   getAdminUsersList,
+  updateAdminUserProfile,
   getAdminNodesList,
   getAdminOrdersList,
   getAdminWithdrawalsList,
@@ -221,6 +222,45 @@ adminRouter.get('/users', async (req: AuthRequest, res: Response) => {
     return res.status(500).json({
       error: 'SERVER_ERROR',
       message: 'Failed to fetch user accounts.',
+    });
+  }
+});
+
+/**
+ * PUT /api/admin/users/:userId
+ * Admin edits user profile safe fields (fullName, country, phone, status) with mandatory audit reason.
+ */
+adminRouter.put('/users/:userId', async (req: AuthRequest, res: Response) => {
+  try {
+    const { userId } = req.params;
+    const { fullName, country, phone, status, reason } = req.body || {};
+
+    const adminUserId = req.user?.id || '';
+    const adminPublicId = req.user?.public_id || 'SYSTEM_ADMIN';
+    const ipAddress = (req.headers['x-forwarded-for'] as string) || req.ip;
+
+    const result = await updateAdminUserProfile({
+      adminUserId,
+      adminPublicId,
+      targetUserId: userId,
+      fullName,
+      country,
+      phone,
+      status,
+      reason,
+      ipAddress,
+    });
+
+    return res.status(200).json({
+      success: true,
+      user: result.user,
+      message: `User ${result.user.public_id} profile updated successfully.`,
+    });
+  } catch (err: any) {
+    console.error('[Admin API] Error updating user profile:', err);
+    return res.status(err.statusCode || 500).json({
+      error: err.code || 'SERVER_ERROR',
+      message: err.message || 'Failed to update user profile.',
     });
   }
 });

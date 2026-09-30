@@ -866,3 +866,88 @@ export async function getUnifiedAuditFeed(
     },
   };
 }
+
+/**
+ * Admin profile modification for safe fields with audit log.
+ */
+export async function updateAdminUserProfile(params: {
+  adminUserId: string;
+  adminPublicId: string;
+  targetUserId: string;
+  fullName?: string;
+  country?: string;
+  phone?: string;
+  status?: 'ACTIVE' | 'LOCKED' | 'SUSPENDED';
+  reason: string;
+  ipAddress?: string;
+}): Promise<{ user: any }> {
+  const db = await getDb();
+
+  if (!params.reason || params.reason.trim().length < 5) {
+    const err: any = new Error('Admin reason is mandatory (minimum 5 characters) for user profile edits.');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  // Fetch current user state
+  const userRes = await db.query<any>(`SELECT * FROM users WHERE id = $1 OR public_id = $1`, [params.targetUserId]);
+  if (userRes.rows.length === 0) {
+    const err: any = new Error('Target user account not found.');
+    err.statusCode = 404;
+    throw err;
+  }
+
+  const currentUser = userRes.rows[0];
+
+  // Protect against self-locking
+  if (currentUser.id === params.adminUserId && params.status && params.status !== 'ACTIVE') {
+    const err: any = new Error('You cannot lock or suspend your own active administrator account.');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const newFullName = params.fullName !== undefined ? params.fullName.trim() : currentUser.full_name;
+  const newCountry = params.country !== undefined ? params.country.trim() : currentUser.country;
+  const newPhone = params.phone !== undefined ? params.phone.trim() : currentUser.phone;
+  const newStatus = params.status !== undefined ? params.status : currentUser.status;
+
+  await db.query(
+    `
+    UPDATE users
+    SET full_name = $1, country = $2, phone = $3, status = $4, updated_at = CURRENT_TIMESTAMP
+    WHERE id = $5
+    `,
+    [newFullName, newCountry, newPhone, newStatus, currentUser.id]
+  );
+
+  const updatedUserRes = await db.query<any>(`SELECT id, public_id, full_name, email, phone, country, status, role, created_at FROM users WHERE id = $1`, [currentUser.id]);
+  const updatedUser = updatedUserRes.rows[0];
+
+  // Audit log
+  await logAdminAction({
+    adminUserId: params.adminUserId,
+    adminPublicId: params.adminPublicId,
+    action: 'ADMIN_USER_PROFILE_UPDATED',
+    targetType: 'USER',
+    targetId: currentUser.public_id,
+    details: `Admin ${params.adminPublicId} updated profile for user ${currentUser.public_id}. Reason: ${params.reason}`,
+    metadata: {
+      before: {
+        fullName: currentUser.full_name,
+        country: currentUser.country,
+        phone: currentUser.phone,
+        status: currentUser.status,
+      },
+      after: {
+        fullName: newFullName,
+        country: newCountry,
+        phone: newPhone,
+        status: newStatus,
+      },
+      reason: params.reason,
+    },
+    ipAddress: params.ipAddress,
+  });
+
+  return { user: updatedUser };
+}

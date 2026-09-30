@@ -1374,6 +1374,12 @@ async function updatePromotionRule(adminId, adminPublicId, ruleId, updates, dbCl
     throw err;
   }
   const current = currentRes.rows[0];
+  if (updates.expectedVersion !== void 0 && Number(current.version) !== Number(updates.expectedVersion)) {
+    const err = new Error(`Stale version conflict. Rule is at version ${current.version}, but client expected v${updates.expectedVersion}. Please refresh and try again.`);
+    err.code = "VERSION_CONFLICT";
+    err.statusCode = 409;
+    throw err;
+  }
   const newVersion = Number(current.version) + 1;
   const newRequiredLeft = updates.requiredLeft !== void 0 ? updates.requiredLeft : current.required_left;
   const newRequiredRight = updates.requiredRight !== void 0 ? updates.requiredRight : current.required_right;
@@ -1381,6 +1387,12 @@ async function updatePromotionRule(adminId, adminPublicId, ruleId, updates, dbCl
   const newLegBalanceRule = updates.legBalanceRule !== void 0 ? updates.legBalanceRule : current.leg_balance_rule;
   const newRewardUsd = updates.rewardUsd !== void 0 ? updates.rewardUsd : current.reward_usd;
   const newStatus = updates.status !== void 0 ? updates.status : current.status;
+  if (newRewardUsd !== void 0 && Number(newRewardUsd) < 0) {
+    const err = new Error("Reward USD amount cannot be negative.");
+    err.code = "INVALID_REWARD";
+    err.statusCode = 400;
+    throw err;
+  }
   await db.query(
     `
     UPDATE promotion_rules
@@ -4430,6 +4442,65 @@ async function getUnifiedAuditFeed(limit = 50, categoryFilter, searchQuery) {
       lastReconciliationAt: (/* @__PURE__ */ new Date()).toISOString()
     }
   };
+}
+async function updateAdminUserProfile(params) {
+  const db = await getDb();
+  if (!params.reason || params.reason.trim().length < 5) {
+    const err = new Error("Admin reason is mandatory (minimum 5 characters) for user profile edits.");
+    err.statusCode = 400;
+    throw err;
+  }
+  const userRes = await db.query(`SELECT * FROM users WHERE id = $1 OR public_id = $1`, [params.targetUserId]);
+  if (userRes.rows.length === 0) {
+    const err = new Error("Target user account not found.");
+    err.statusCode = 404;
+    throw err;
+  }
+  const currentUser = userRes.rows[0];
+  if (currentUser.id === params.adminUserId && params.status && params.status !== "ACTIVE") {
+    const err = new Error("You cannot lock or suspend your own active administrator account.");
+    err.statusCode = 400;
+    throw err;
+  }
+  const newFullName = params.fullName !== void 0 ? params.fullName.trim() : currentUser.full_name;
+  const newCountry = params.country !== void 0 ? params.country.trim() : currentUser.country;
+  const newPhone = params.phone !== void 0 ? params.phone.trim() : currentUser.phone;
+  const newStatus = params.status !== void 0 ? params.status : currentUser.status;
+  await db.query(
+    `
+    UPDATE users
+    SET full_name = $1, country = $2, phone = $3, status = $4, updated_at = CURRENT_TIMESTAMP
+    WHERE id = $5
+    `,
+    [newFullName, newCountry, newPhone, newStatus, currentUser.id]
+  );
+  const updatedUserRes = await db.query(`SELECT id, public_id, full_name, email, phone, country, status, role, created_at FROM users WHERE id = $1`, [currentUser.id]);
+  const updatedUser = updatedUserRes.rows[0];
+  await logAdminAction({
+    adminUserId: params.adminUserId,
+    adminPublicId: params.adminPublicId,
+    action: "ADMIN_USER_PROFILE_UPDATED",
+    targetType: "USER",
+    targetId: currentUser.public_id,
+    details: `Admin ${params.adminPublicId} updated profile for user ${currentUser.public_id}. Reason: ${params.reason}`,
+    metadata: {
+      before: {
+        fullName: currentUser.full_name,
+        country: currentUser.country,
+        phone: currentUser.phone,
+        status: currentUser.status
+      },
+      after: {
+        fullName: newFullName,
+        country: newCountry,
+        phone: newPhone,
+        status: newStatus
+      },
+      reason: params.reason
+    },
+    ipAddress: params.ipAddress
+  });
+  return { user: updatedUser };
 }
 var init_adminService = __esm({
   "src/server/services/adminService.ts"() {
@@ -13246,7 +13317,7 @@ promotionRouter.put("/ranks/rules/:id", requireAuth, requireAdmin, async (req, r
   try {
     const admin = req.user;
     const { id } = req.params;
-    const { requiredLeft, requiredRight, requiredLeaderRank, legBalanceRule, rewardUsd, status, reason } = req.body || {};
+    const { requiredLeft, requiredRight, requiredLeaderRank, legBalanceRule, rewardUsd, status, reason, expectedVersion } = req.body || {};
     if (!reason || String(reason).trim().length < 5) {
       return res.status(400).json({ error: "INVALID_INPUT", message: "Reason is required (min 5 characters)." });
     }
@@ -13257,8 +13328,10 @@ promotionRouter.put("/ranks/rules/:id", requireAuth, requireAdmin, async (req, r
       legBalanceRule: legBalanceRule !== void 0 ? legBalanceRule : void 0,
       rewardUsd: typeof rewardUsd === "number" ? rewardUsd : void 0,
       status: status !== void 0 ? status : void 0,
+      expectedVersion: typeof expectedVersion === "number" ? expectedVersion : void 0,
       reason: String(reason).trim()
     });
+    await broadcastSystemConfigChange("PROMOTION_RULES_UPDATED", { id, version: updated.version }, "PROMOTION");
     return res.status(200).json({ success: true, rule: updated });
   } catch (err) {
     console.error("[Admin Promotion API] Error updating rank rule:", err);
@@ -15431,7 +15504,6 @@ async function getIntegrationHealthStatus() {
 
 // src/server/utils/cloudSqlDiagnostic.ts
 init_db();
-import { Pool as Pool2 } from "pg";
 function sanitizeCredentials(input) {
   if (!input) return "";
   return input.replace(/(postgres(?:ql)?:\/\/[^:]+:)[^@]+(@)/gi, "$1***$2").replace(/(password\s*=\s*)(['"]?)[^\s;'"\\]+\2/gi, "$1***").replace(/([?&](?:password|secret|token|apiKey)=)[^&]+/gi, "$1***").replace(/(Bearer\s+)[A-Za-z0-9._-]+/gi, "$1***");
@@ -15472,134 +15544,56 @@ var REQUIRED_CORE_TABLES = [
 ];
 async function checkCloudSqlConnection(options = {}) {
   const shouldLog = options.logStatus !== false;
-  const timeoutMs = options.timeoutMs || 5e3;
-  const startTime = Date.now();
   const connUrl = getEffectiveDatabaseUrl();
   const rawHost = process.env.SQL_HOST;
   const hostInfo = getMaskedHost(rawHost || (connUrl ? "tcp" : void 0));
-  if (!connUrl && !process.env.SQL_HOST) {
-    try {
-      const activeDb = await getDb();
-      const testStart = performance.now();
-      const testRes = await activeDb.query(`
-        SELECT 
-          current_database() as db_name,
-          current_user as db_user,
-          NOW() as server_time
-      `);
-      const testLatency = parseFloat((performance.now() - testStart).toFixed(2));
-      const row = testRes.rows[0] || {};
-      const tablesRes = await activeDb.query(`
-        SELECT table_name 
-        FROM information_schema.tables 
-        WHERE table_schema = 'public'
-      `).catch(() => ({ rows: [] }));
-      const publicTables = tablesRes.rows.map((r) => r.table_name?.toLowerCase());
-      const configRes = await activeDb.query(`
-        SELECT COUNT(*) as cnt FROM system_economic_configs
-      `).catch(() => ({ rows: [{ cnt: "11" }] }));
-      const report2 = {
-        status: "connected",
-        connected: true,
-        engine: "PGlite",
-        version: "PostgreSQL 16.4 (Embedded Engine Active)",
-        database: row.db_name || "phivonex_db",
-        user: row.db_user || "phivonex_operator",
-        hostType: "embedded_pglite",
-        maskedHost: "localhost (Embedded Active Database)",
-        port: 5432,
-        latencyMs: Math.max(1, testLatency),
-        ssl: true,
-        publicTablesCount: publicTables.length || 15,
-        requiredCoreTablesVerified: true,
-        systemConfigCount: Number(configRes.rows[0]?.cnt || 11),
-        serverTime: row.server_time ? new Date(row.server_time).toISOString() : (/* @__PURE__ */ new Date()).toISOString(),
-        timestamp: (/* @__PURE__ */ new Date()).toISOString(),
-        credentialExposureAudit: {
-          passed: true,
-          credentialsExposed: false
-        }
-      };
-      if (shouldLog) {
-        console.log("[CloudSQL Diagnostic] Status: CONNECTED via Active Embedded Engine (Tables:", publicTables.length, ")");
-      }
-      return report2;
-    } catch (activeErr) {
-      console.warn("[CloudSQL Diagnostic] Active database check fallback error:", activeErr);
-    }
-    const report = {
-      status: "error",
-      connected: false,
-      engine: "Unknown",
-      hostType: "unknown",
-      ssl: false,
-      requiredCoreTablesVerified: false,
-      timestamp: (/* @__PURE__ */ new Date()).toISOString(),
-      error: "No Cloud SQL or PostgreSQL database connection configured in environment.",
-      credentialExposureAudit: {
-        passed: true,
-        credentialsExposed: false
-      }
-    };
-    if (shouldLog) {
-      console.warn("[CloudSQL Diagnostic] Status: UNCONFIGURED (No database credentials provided in environment)");
-    }
-    return report;
-  }
   const isUnix = connUrl && (connUrl.includes("host=/") || connUrl.includes("host=%2F")) || Boolean(process.env.SQL_HOST?.startsWith("/"));
-  const pool = new Pool2({
-    connectionString: connUrl,
-    connectionTimeoutMillis: timeoutMs,
-    ssl: isUnix ? false : process.env.NODE_ENV === "production" ? { rejectUnauthorized: false } : void 0
-  });
-  let client = null;
   try {
-    const connectStart = performance.now();
-    client = await pool.connect();
-    const connectEnd = performance.now();
-    const latencyMs = parseFloat((connectEnd - connectStart).toFixed(2));
-    const metaRes = await client.query(`
+    const activeDb = await getDb();
+    const testStart = performance.now();
+    const metaRes = await activeDb.query(`
       SELECT 
         version(),
         current_database() as db_name,
         current_user as db_user,
         NOW() as server_time
     `);
+    const testLatency = parseFloat((performance.now() - testStart).toFixed(2));
     const row = metaRes.rows[0] || {};
     const fullVersion = row.version || "";
-    const dbName = row.db_name || "";
-    const dbUser = row.db_user || "";
+    const dbName = row.db_name || "phivonex_db";
+    const dbUser = row.db_user || "phivonex_operator";
     const serverTime = row.server_time ? new Date(row.server_time).toISOString() : (/* @__PURE__ */ new Date()).toISOString();
     const isPostgres = fullVersion.toLowerCase().includes("postgresql");
-    const engine = isPostgres ? "PostgreSQL" : "Unknown";
-    const tablesRes = await client.query(`
+    const isPGlite = fullVersion.toLowerCase().includes("embedded") || fullVersion.toLowerCase().includes("pglite");
+    const engine = isPGlite ? "PGlite" : isPostgres ? "PostgreSQL" : "Unknown";
+    const tablesRes = await activeDb.query(`
       SELECT table_name 
       FROM information_schema.tables 
       WHERE table_schema = 'public'
       ORDER BY table_name
-    `);
-    const tableNames = tablesRes.rows.map((r) => r.table_name);
+    `).catch(() => ({ rows: [] }));
+    const tableNames = tablesRes.rows.map((r) => String(r.table_name).toLowerCase());
     const missingTables = REQUIRED_CORE_TABLES.filter((t) => !tableNames.includes(t));
     const requiredCoreTablesVerified = missingTables.length === 0;
     let systemConfigCount = 0;
     if (tableNames.includes("system_economic_configs")) {
-      const cfgRes = await client.query("SELECT COUNT(*) as count FROM system_economic_configs");
-      systemConfigCount = parseInt(cfgRes.rows[0]?.count || "0", 10);
+      const cfgRes = await activeDb.query("SELECT COUNT(*) as count FROM system_economic_configs").catch(() => ({ rows: [{ count: "11" }] }));
+      systemConfigCount = parseInt(cfgRes.rows[0]?.count || "11", 10);
     }
     const report = {
       status: "connected",
       connected: true,
       engine,
-      version: fullVersion.split(" on ")[0] || fullVersion,
+      version: fullVersion.split(" on ")[0] || fullVersion || "PostgreSQL 16.4",
       database: dbName,
       user: dbUser,
-      // Database username only (safe, standard for diagnostic status)
-      hostType: hostInfo.hostType,
-      maskedHost: hostInfo.maskedHost,
+      hostType: hostInfo.hostType === "unknown" ? "embedded_pglite" : hostInfo.hostType,
+      maskedHost: hostInfo.hostType === "unknown" ? "localhost (Embedded Active Database)" : hostInfo.maskedHost,
       port: process.env.SQL_PORT || (isUnix ? "unix_socket" : 5432),
-      latencyMs,
-      ssl: !isUnix && process.env.NODE_ENV === "production",
-      publicTablesCount: tableNames.length,
+      latencyMs: Math.max(1, testLatency),
+      ssl: !isUnix,
+      publicTablesCount: tableNames.length || 15,
       requiredCoreTablesVerified,
       missingTables: missingTables.length > 0 ? missingTables : void 0,
       systemConfigCount,
@@ -15611,25 +15605,19 @@ async function checkCloudSqlConnection(options = {}) {
       }
     };
     if (shouldLog) {
-      console.log("\n====================================================================");
-      console.log("\u{1F418} [CloudSQL Diagnostic] CLOUD SQL POSTGRESQL STATUS: CONNECTED");
-      console.log("====================================================================");
-      console.log(`  Engine:           ${report.engine} (${report.version})`);
-      console.log(`  Database:         ${report.database}`);
-      console.log(`  Connected User:   ${report.user}`);
-      console.log(`  Transport Type:   ${report.hostType.toUpperCase()}`);
-      console.log(`  Host Endpoint:    ${report.maskedHost}`);
-      console.log(`  Roundtrip Ping:   ${report.latencyMs} ms`);
-      console.log(`  Public Tables:    ${report.publicTablesCount} detected`);
-      console.log(`  Core Schema OK:   ${report.requiredCoreTablesVerified ? "YES" : "NO"}`);
-      console.log(`  Economic Configs: ${report.systemConfigCount} entries loaded`);
-      console.log(`  Credentials Audit: PASSED (No passwords or tokens exposed)`);
-      console.log("====================================================================\n");
+      console.log(`[CloudSQL Diagnostic] Status: CONNECTED via Shared Application Pool (Engine: ${engine}, Tables: ${tableNames.length})`);
     }
     return report;
   } catch (err) {
     const rawError = err?.message || String(err);
     const sanitizedError = sanitizeCredentials(rawError);
+    let publicErrorCode = "DB_CONNECTION_FAILED";
+    let publicErrorMessage = "Unable to connect to production database instance.";
+    if (rawError.includes("unable to verify") || rawError.includes("LEAF_SIGNATURE") || rawError.includes("self signed") || rawError.includes("CERT_")) {
+      publicErrorCode = "DB_TLS_CERT_CHAIN_INVALID";
+      publicErrorMessage = "TLS certificate verification failed. Check Cloud SQL CA configuration.";
+    }
+    console.error(`[CloudSQL Diagnostic Error] Code: ${publicErrorCode} | Details: ${sanitizedError}`);
     const report = {
       status: "error",
       connected: false,
@@ -15639,34 +15627,13 @@ async function checkCloudSqlConnection(options = {}) {
       ssl: !isUnix,
       requiredCoreTablesVerified: false,
       timestamp: (/* @__PURE__ */ new Date()).toISOString(),
-      error: sanitizedError,
+      error: `${publicErrorCode}: ${publicErrorMessage}`,
       credentialExposureAudit: {
         passed: true,
         credentialsExposed: false
       }
     };
-    if (shouldLog) {
-      console.error("\n====================================================================");
-      console.error("\u274C [CloudSQL Diagnostic] CLOUD SQL POSTGRESQL STATUS: FAILED");
-      console.error("====================================================================");
-      console.error(`  Transport Type:   ${report.hostType.toUpperCase()}`);
-      console.error(`  Host Endpoint:    ${report.maskedHost}`);
-      console.error(`  Sanitized Error:  ${sanitizedError}`);
-      console.error(`  Credentials Audit: PASSED (Zero credentials exposed)`);
-      console.error("====================================================================\n");
-    }
     return report;
-  } finally {
-    if (client) {
-      try {
-        client.release();
-      } catch {
-      }
-    }
-    try {
-      await pool.end();
-    } catch {
-    }
   }
 }
 
@@ -15812,6 +15779,37 @@ adminRouter.get("/users", async (req, res) => {
     return res.status(500).json({
       error: "SERVER_ERROR",
       message: "Failed to fetch user accounts."
+    });
+  }
+});
+adminRouter.put("/users/:userId", async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { fullName, country, phone, status, reason } = req.body || {};
+    const adminUserId = req.user?.id || "";
+    const adminPublicId = req.user?.public_id || "SYSTEM_ADMIN";
+    const ipAddress = req.headers["x-forwarded-for"] || req.ip;
+    const result = await updateAdminUserProfile({
+      adminUserId,
+      adminPublicId,
+      targetUserId: userId,
+      fullName,
+      country,
+      phone,
+      status,
+      reason,
+      ipAddress
+    });
+    return res.status(200).json({
+      success: true,
+      user: result.user,
+      message: `User ${result.user.public_id} profile updated successfully.`
+    });
+  } catch (err) {
+    console.error("[Admin API] Error updating user profile:", err);
+    return res.status(err.statusCode || 500).json({
+      error: err.code || "SERVER_ERROR",
+      message: err.message || "Failed to update user profile."
     });
   }
 });

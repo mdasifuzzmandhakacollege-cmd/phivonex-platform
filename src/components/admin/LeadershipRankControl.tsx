@@ -190,6 +190,7 @@ export const LeadershipRankControl: React.FC = () => {
           legBalanceRule: editLegBalanceRule,
           rewardUsd: Number(editRewardUsd),
           status: editStatus,
+          expectedVersion: editingRule.version,
           reason: editReason.trim(),
         }),
       });
@@ -453,13 +454,17 @@ export const LeadershipRankControl: React.FC = () => {
                   <td className="py-3 px-3 font-mono text-[#98A2B3]">v{rule.version}</td>
                   <td className="py-3 px-3 font-mono font-bold text-white">{rule.achieversCount}</td>
                   <td className="py-3 px-3 text-right">
-                    {rule.rankOrder > 0 && (
+                    {rule.rankOrder > 0 ? (
                       <button
                         onClick={() => openEditModal(rule)}
                         className="px-2.5 py-1 rounded bg-white/[0.05] hover:bg-white/[0.1] text-white text-[11px] font-mono border border-white/10 flex items-center gap-1 ml-auto cursor-pointer"
                       >
                         <Edit2 className="w-3 h-3 text-[#00CFFF]" /> Edit
                       </button>
+                    ) : (
+                      <span className="px-2 py-0.5 rounded bg-slate-500/10 text-[#98A2B3] text-[10px] font-mono font-bold uppercase border border-slate-500/20 whitespace-nowrap">
+                        IMMUTABLE BASE TIER
+                      </span>
                     )}
                   </td>
                 </tr>

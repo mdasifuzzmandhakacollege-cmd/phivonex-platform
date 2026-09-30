@@ -38,6 +38,7 @@ import {
   Zap,
   Power,
   Gift,
+  Edit3,
   Trophy,
   Mail,
 } from 'lucide-react';
@@ -137,6 +138,65 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onNavigate, currentPath = 
     message: string;
     logId?: string;
   } | null>(null);
+
+  // Edit User Modal State
+  const [editingUser, setEditingUser] = useState<any | null>(null);
+  const [editUserFullName, setEditUserFullName] = useState<string>('');
+  const [editUserCountry, setEditUserCountry] = useState<string>('');
+  const [editUserPhone, setEditUserPhone] = useState<string>('');
+  const [editUserStatus, setEditUserStatus] = useState<'ACTIVE' | 'LOCKED' | 'SUSPENDED'>('ACTIVE');
+  const [editUserReason, setEditUserReason] = useState<string>('');
+  const [savingUserEdit, setSavingUserEdit] = useState<boolean>(false);
+
+  const handleOpenUserEditModal = (u: any) => {
+    setEditingUser(u);
+    setEditUserFullName(u.fullName || '');
+    setEditUserCountry(u.country || '');
+    setEditUserPhone(u.phone || '');
+    setEditUserStatus(u.status || 'ACTIVE');
+    setEditUserReason('');
+  };
+
+  const handleSaveUserEdit = async () => {
+    if (!editingUser) return;
+    if (!editUserReason || editUserReason.trim().length < 5) {
+      alert('Audit reason is required (minimum 5 characters).');
+      return;
+    }
+    try {
+      setSavingUserEdit(true);
+      const res = await fetch(`/api/admin/users/${editingUser.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fullName: editUserFullName,
+          country: editUserCountry,
+          phone: editUserPhone,
+          status: editUserStatus,
+          reason: editUserReason.trim(),
+        }),
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setEditingUser(null);
+        setAuditFeedback({
+          type: 'success',
+          message: `User ${data.user.public_id} profile updated and logged to audit trail.`,
+        });
+        const userRes = await fetch(`/api/admin/users?search=${encodeURIComponent(searchQuery)}&status=${statusFilter}`);
+        if (userRes.ok) {
+          const uData = await userRes.json();
+          setUsersList(uData.users || []);
+        }
+      } else {
+        alert(data.message || 'Failed to update user profile.');
+      }
+    } catch (err: any) {
+      alert(err.message || 'Network error updating user profile.');
+    } finally {
+      setSavingUserEdit(false);
+    }
+  };
 
   // CSV Export State
   const [exportingCsv, setExportingCsv] = useState<boolean>(false);
@@ -1369,6 +1429,14 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onNavigate, currentPath = 
                         <td className="py-3 px-3 text-[#98A2B3]">{new Date(u.createdAt).toLocaleDateString()}</td>
                         <td className="py-3 px-3 text-right">
                           <div className="flex items-center justify-end gap-1.5">
+                            <button
+                              onClick={() => handleOpenUserEditModal(u)}
+                              className="px-2 py-1 rounded bg-[#00CFFF]/10 hover:bg-[#00CFFF]/20 text-[#00CFFF] text-[10px] font-bold border border-[#00CFFF]/30 flex items-center gap-1 cursor-pointer"
+                              title="Edit user profile safe fields (Audited)"
+                            >
+                              <Edit3 className="w-3 h-3" /> Edit
+                            </button>
+
                             {u.status === 'ACTIVE' ? (
                               <button
                                 onClick={() => setSelectedUserAction({ user: u, action: 'LOCK' })}
@@ -1520,6 +1588,121 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onNavigate, currentPath = 
               >
                 {actionSubmitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
                 <span>Confirm &amp; Log to Firestore</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Edit User Profile Safe Fields Modal */}
+      {editingUser && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="p-6 rounded-2xl bg-[#07101D] border border-white/[0.12] shadow-2xl max-w-lg w-full space-y-4 max-h-[90vh] overflow-y-auto animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-center justify-between pb-3 border-b border-white/[0.08]">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-[#00CFFF]/10 border border-[#00CFFF]/30 flex items-center justify-center text-[#00CFFF]">
+                  <Edit3 className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-white">Edit Profile: {editingUser.publicId}</h3>
+                  <p className="text-[11px] text-[#98A2B3]">{editingUser.email}</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setEditingUser(null)}
+                className="text-[#98A2B3] hover:text-white text-lg p-1"
+              >
+                &times;
+              </button>
+            </div>
+
+            <div className="p-3 rounded-xl bg-[#05070B] border border-white/[0.06] text-[11px] text-[#98A2B3]">
+              <strong className="text-white">Security Invariant:</strong> Financial ledgers, wallet balances, node purchases, earned commissions, and historical ledger entries are strictly immutable and cannot be altered via user profile editing.
+            </div>
+
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs font-medium text-white mb-1">Full Name</label>
+                <input
+                  type="text"
+                  value={editUserFullName}
+                  onChange={(e) => setEditUserFullName(e.target.value)}
+                  className="w-full px-3 py-2 bg-[#05070B] border border-white/[0.12] rounded-xl text-xs text-white outline-none focus:border-[#00CFFF]"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-white mb-1">Country</label>
+                  <input
+                    type="text"
+                    value={editUserCountry}
+                    onChange={(e) => setEditUserCountry(e.target.value)}
+                    className="w-full px-3 py-2 bg-[#05070B] border border-white/[0.12] rounded-xl text-xs text-white outline-none focus:border-[#00CFFF]"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-white mb-1">Mobile / Phone</label>
+                  <input
+                    type="text"
+                    value={editUserPhone}
+                    onChange={(e) => setEditUserPhone(e.target.value)}
+                    className="w-full px-3 py-2 bg-[#05070B] border border-white/[0.12] rounded-xl text-xs text-white outline-none focus:border-[#00CFFF]"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-white mb-1">Account Status</label>
+                <select
+                  value={editUserStatus}
+                  onChange={(e) => setEditUserStatus(e.target.value as any)}
+                  className="w-full px-3 py-2 bg-[#05070B] border border-white/[0.12] rounded-xl text-xs text-white outline-none"
+                >
+                  <option value="ACTIVE">ACTIVE (Operational)</option>
+                  <option value="LOCKED">LOCKED (Administrative Lock)</option>
+                  <option value="SUSPENDED">SUSPENDED (Restricted)</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-white mb-1">Audit Reason / Justification (Required)</label>
+                <input
+                  type="text"
+                  placeholder="e.g. Identity verification update, contact correction..."
+                  value={editUserReason}
+                  onChange={(e) => setEditUserReason(e.target.value)}
+                  className="w-full px-3 py-2 bg-[#05070B] border border-white/[0.12] rounded-xl text-xs text-white outline-none focus:border-[#00CFFF]"
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-3 pt-2 border-t border-white/[0.08]">
+              <button
+                type="button"
+                onClick={() => setEditingUser(null)}
+                disabled={savingUserEdit}
+                className="px-4 py-2 rounded-xl bg-white/[0.08] hover:bg-white/[0.12] text-white text-xs font-bold cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveUserEdit}
+                disabled={savingUserEdit}
+                className="px-5 py-2 rounded-xl bg-[#00CFFF] hover:bg-[#00CFFF]/90 text-[#05070B] text-xs font-extrabold flex items-center gap-2 cursor-pointer shadow-lg active:scale-95"
+              >
+                {savingUserEdit ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>Saving Profile...</span>
+                  </>
+                ) : (
+                  <>
+                    <Check className="w-3.5 h-3.5" />
+                    <span>Save &amp; Log Audit</span>
+                  </>
+                )}
               </button>
             </div>
           </div>

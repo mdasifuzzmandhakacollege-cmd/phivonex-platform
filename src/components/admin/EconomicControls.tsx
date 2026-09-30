@@ -76,6 +76,11 @@ export const EconomicControls: React.FC = () => {
   const [editReasonInput, setEditReasonInput] = useState<string>('');
   const [saving, setSaving] = useState<boolean>(false);
 
+  // Structured Tier Editors
+  const [matchingTiersList, setMatchingTiersList] = useState<{ units: number; rewardUsd: number }[]>([]);
+  const [promotionList, setPromotionList] = useState<{ milestone: string; units: number; rewardUsd: number }[]>([]);
+  const [showRawJsonPreview, setShowRawJsonPreview] = useState<boolean>(false);
+
   // Coin price specific modal state
   const [coinPriceInput, setCoinPriceInput] = useState<string>('0.10');
   const [coinSwapEnabledInput, setCoinSwapEnabledInput] = useState<boolean>(true);
@@ -141,8 +146,21 @@ export const EconomicControls: React.FC = () => {
     setEditingConfig(config);
     setEditStatusInput(config.status);
     setEditReasonInput('');
+    setShowRawJsonPreview(false);
 
-    if (config.configKey === 'INTERNAL_COIN_PRICE_USDT') {
+    if (config.configKey === 'MATCHING_TIERS_CONFIG') {
+      const val = Array.isArray(config.configValue) ? config.configValue : [];
+      setMatchingTiersList(val.map((t: any) => ({ units: Number(t.units || 0), rewardUsd: Number(t.rewardUsd || 0) })));
+      setEditValueInput(JSON.stringify(config.configValue, null, 2));
+    } else if (config.configKey === 'PROMOTION_MILESTONES_CONFIG') {
+      const val = Array.isArray(config.configValue) ? config.configValue : [];
+      setPromotionList(val.map((m: any) => ({
+        milestone: String(m.milestone || ''),
+        units: Number(m.units || 0),
+        rewardUsd: Number(m.rewardUsd || 0),
+      })));
+      setEditValueInput(JSON.stringify(config.configValue, null, 2));
+    } else if (config.configKey === 'INTERNAL_COIN_PRICE_USDT') {
       const val = config.configValue || {};
       setCoinPriceInput(val.priceUsdt ? String(val.priceUsdt) : '');
       setCoinSwapEnabledInput(val.swapEnabled !== false);
@@ -162,9 +180,33 @@ export const EconomicControls: React.FC = () => {
       setSaving(true);
       setFeedback(null);
 
+      if (!editReasonInput || editReasonInput.trim().length < 5) {
+        throw new Error('Audit justification reason is required (minimum 5 characters).');
+      }
+
       let parsedValue: any = editValueInput;
 
-      if (editingConfig.configKey === 'NODE_BASE_PRICE_USD' || editingConfig.configKey === 'DIRECT_REFERRAL_COMMISSION_USD') {
+      if (editingConfig.configKey === 'MATCHING_TIERS_CONFIG') {
+        if (!matchingTiersList || matchingTiersList.length === 0) {
+          throw new Error('At least one binary matching tier must be configured.');
+        }
+        for (const t of matchingTiersList) {
+          if (!t.units || t.units <= 0 || !t.rewardUsd || t.rewardUsd <= 0) {
+            throw new Error('Each matching tier must have positive matched units and positive reward USD.');
+          }
+        }
+        parsedValue = matchingTiersList;
+      } else if (editingConfig.configKey === 'PROMOTION_MILESTONES_CONFIG') {
+        if (!promotionList || promotionList.length === 0) {
+          throw new Error('At least one promotion milestone must be configured.');
+        }
+        for (const m of promotionList) {
+          if (!m.milestone || !m.milestone.trim() || !m.units || m.units <= 0 || !m.rewardUsd || m.rewardUsd <= 0) {
+            throw new Error('Each promotion milestone must have a milestone name, positive units, and positive reward USD.');
+          }
+        }
+        parsedValue = promotionList;
+      } else if (editingConfig.configKey === 'NODE_BASE_PRICE_USD' || editingConfig.configKey === 'DIRECT_REFERRAL_COMMISSION_USD') {
         const num = parseFloat(editValueInput);
         if (isNaN(num) || num < 0) {
           throw new Error('Please enter a valid numeric value.');
@@ -203,7 +245,7 @@ export const EconomicControls: React.FC = () => {
         try {
           parsedValue = JSON.parse(editValueInput);
         } catch {
-          throw new Error('Invalid JSON format for tiered array configuration.');
+          throw new Error('Invalid JSON format for configuration object.');
         }
       }
 
@@ -1102,7 +1144,174 @@ export const EconomicControls: React.FC = () => {
             </div>
 
             {/* Parameter Input Form */}
-            {editingConfig.configKey === 'INTERNAL_COIN_PRICE_USDT' ? (
+            {editingConfig.configKey === 'MATCHING_TIERS_CONFIG' ? (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-bold text-white block">Structured Matching Tiers Editor</label>
+                  <button
+                    type="button"
+                    onClick={() => setMatchingTiersList([...matchingTiersList, { units: 1, rewardUsd: 50 }])}
+                    className="px-2.5 py-1 rounded bg-[#00CFFF]/10 hover:bg-[#00CFFF]/20 text-[#00CFFF] text-[10px] font-bold border border-[#00CFFF]/30 cursor-pointer"
+                  >
+                    + Add Tier
+                  </button>
+                </div>
+                <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
+                  {matchingTiersList.map((tier, idx) => (
+                    <div key={idx} className="flex items-center gap-2 p-2 rounded-xl bg-[#05070B] border border-white/[0.08]">
+                      <div className="flex-1 space-y-1">
+                        <span className="text-[10px] text-[#98A2B3] block">Matched Volume Units</span>
+                        <input
+                          type="number"
+                          min="1"
+                          value={tier.units}
+                          onChange={(e) => {
+                            const val = parseInt(e.target.value, 10) || 0;
+                            const next = [...matchingTiersList];
+                            next[idx] = { ...next[idx], units: val };
+                            setMatchingTiersList(next);
+                          }}
+                          className="w-full px-2 py-1 bg-[#07101D] border border-white/[0.12] rounded text-xs text-white font-mono outline-none"
+                        />
+                      </div>
+                      <div className="flex-1 space-y-1">
+                        <span className="text-[10px] text-[#98A2B3] block">Daily Reward USD</span>
+                        <input
+                          type="number"
+                          min="1"
+                          value={tier.rewardUsd}
+                          onChange={(e) => {
+                            const val = parseFloat(e.target.value) || 0;
+                            const next = [...matchingTiersList];
+                            next[idx] = { ...next[idx], rewardUsd: val };
+                            setMatchingTiersList(next);
+                          }}
+                          className="w-full px-2 py-1 bg-[#07101D] border border-white/[0.12] rounded text-xs text-white font-mono outline-none"
+                        />
+                      </div>
+                      {matchingTiersList.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={() => setMatchingTiersList(matchingTiersList.filter((_, i) => i !== idx))}
+                          className="text-rose-400 hover:text-rose-300 text-xs px-2 py-1 self-end mb-1"
+                          title="Remove tier"
+                        >
+                          &times;
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+
+                {/* Read-Only Advanced Preview Accordion */}
+                <div className="pt-2 border-t border-white/[0.06]">
+                  <button
+                    type="button"
+                    onClick={() => setShowRawJsonPreview(!showRawJsonPreview)}
+                    className="text-[10px] font-mono text-[#98A2B3] hover:text-white flex items-center gap-1 cursor-pointer"
+                  >
+                    <span>{showRawJsonPreview ? '▼ Hide' : '▶ Show'} Advanced / Raw Configuration Preview (Read-Only)</span>
+                  </button>
+                  {showRawJsonPreview && (
+                    <pre className="mt-2 p-2.5 rounded-lg bg-[#05070B] border border-white/[0.08] text-[10px] font-mono text-[#98A2B3] max-h-32 overflow-auto select-all">
+                      {JSON.stringify(matchingTiersList, null, 2)}
+                    </pre>
+                  )}
+                </div>
+              </div>
+            ) : editingConfig.configKey === 'PROMOTION_MILESTONES_CONFIG' ? (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-bold text-white block">Structured Promotion Milestones Editor</label>
+                  <button
+                    type="button"
+                    onClick={() => setPromotionList([...promotionList, { milestone: `Tier ${promotionList.length + 1}`, units: 10, rewardUsd: 500 }])}
+                    className="px-2.5 py-1 rounded bg-[#00CFFF]/10 hover:bg-[#00CFFF]/20 text-[#00CFFF] text-[10px] font-bold border border-[#00CFFF]/30 cursor-pointer"
+                  >
+                    + Add Milestone
+                  </button>
+                </div>
+                <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
+                  {promotionList.map((m, idx) => (
+                    <div key={idx} className="flex flex-col gap-2 p-2 rounded-xl bg-[#05070B] border border-white/[0.08]">
+                      <div className="flex items-center gap-2">
+                        <div className="flex-1 space-y-1">
+                          <span className="text-[10px] text-[#98A2B3] block">Milestone / Rank Name</span>
+                          <input
+                            type="text"
+                            value={m.milestone}
+                            onChange={(e) => {
+                              const next = [...promotionList];
+                              next[idx] = { ...next[idx], milestone: e.target.value };
+                              setPromotionList(next);
+                            }}
+                            className="w-full px-2 py-1 bg-[#07101D] border border-white/[0.12] rounded text-xs text-white outline-none"
+                          />
+                        </div>
+                        {promotionList.length > 1 && (
+                          <button
+                            type="button"
+                            onClick={() => setPromotionList(promotionList.filter((_, i) => i !== idx))}
+                            className="text-rose-400 hover:text-rose-300 text-xs px-2 py-1"
+                            title="Remove milestone"
+                          >
+                            &times;
+                          </button>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <div className="flex-1 space-y-1">
+                          <span className="text-[10px] text-[#98A2B3] block">Volume Units (Left / Right)</span>
+                          <input
+                            type="number"
+                            min="1"
+                            value={m.units}
+                            onChange={(e) => {
+                              const val = parseInt(e.target.value, 10) || 0;
+                              const next = [...promotionList];
+                              next[idx] = { ...next[idx], units: val };
+                              setPromotionList(next);
+                            }}
+                            className="w-full px-2 py-1 bg-[#07101D] border border-white/[0.12] rounded text-xs text-white font-mono outline-none"
+                          />
+                        </div>
+                        <div className="flex-1 space-y-1">
+                          <span className="text-[10px] text-[#98A2B3] block">One-Time Bonus USD</span>
+                          <input
+                            type="number"
+                            min="1"
+                            value={m.rewardUsd}
+                            onChange={(e) => {
+                              const val = parseFloat(e.target.value) || 0;
+                              const next = [...promotionList];
+                              next[idx] = { ...next[idx], rewardUsd: val };
+                              setPromotionList(next);
+                            }}
+                            className="w-full px-2 py-1 bg-[#07101D] border border-white/[0.12] rounded text-xs text-white font-mono outline-none"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Read-Only Advanced Preview Accordion */}
+                <div className="pt-2 border-t border-white/[0.06]">
+                  <button
+                    type="button"
+                    onClick={() => setShowRawJsonPreview(!showRawJsonPreview)}
+                    className="text-[10px] font-mono text-[#98A2B3] hover:text-white flex items-center gap-1 cursor-pointer"
+                  >
+                    <span>{showRawJsonPreview ? '▼ Hide' : '▶ Show'} Advanced / Raw Configuration Preview (Read-Only)</span>
+                  </button>
+                  {showRawJsonPreview && (
+                    <pre className="mt-2 p-2.5 rounded-lg bg-[#05070B] border border-white/[0.08] text-[10px] font-mono text-[#98A2B3] max-h-32 overflow-auto select-all">
+                      {JSON.stringify(promotionList, null, 2)}
+                    </pre>
+                  )}
+                </div>
+              </div>
+            ) : editingConfig.configKey === 'INTERNAL_COIN_PRICE_USDT' ? (
               <div className="space-y-3">
                 <div className="space-y-1">
                   <label className="text-xs font-bold text-white block">1 PHIVO Coin Price (in USDT)</label>
@@ -1126,14 +1335,11 @@ export const EconomicControls: React.FC = () => {
                 </div>
               </div>
             ) : typeof editingConfig.configValue === 'object' && editingConfig.configValue !== null ? (
-              <div className="space-y-1">
-                <label className="text-xs font-bold text-white block">JSON Tier Configuration</label>
-                <textarea
-                  rows={6}
-                  value={editValueInput}
-                  onChange={(e) => setEditValueInput(e.target.value)}
-                  className="w-full px-3 py-2 bg-[#05070B] border border-white/[0.12] rounded-xl text-xs text-white font-mono outline-none focus:border-[#00CFFF]"
-                />
+              <div className="space-y-2">
+                <label className="text-xs font-bold text-white block">Advanced / Raw Configuration Preview (Read-Only)</label>
+                <pre className="p-3 bg-[#05070B] border border-white/[0.12] rounded-xl text-xs text-[#98A2B3] font-mono max-h-48 overflow-auto select-all">
+                  {JSON.stringify(editingConfig.configValue, null, 2)}
+                </pre>
               </div>
             ) : (
               <div className="space-y-1">

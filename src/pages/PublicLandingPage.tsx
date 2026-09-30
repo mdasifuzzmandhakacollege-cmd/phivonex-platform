@@ -202,7 +202,7 @@ export const PublicLandingPage: React.FC<PublicLandingPageProps> = ({ onNavigate
       {/* ----------------------------------------------------------------------
           2. HERO SECTION
          ---------------------------------------------------------------------- */}
-      <section id="hero" className="relative pt-12 sm:pt-20 pb-16 sm:pb-24 lg:pb-28 overflow-hidden">
+      <section id="hero" className="relative pt-12 sm:pt-20 pb-8 sm:pb-12 overflow-hidden">
         {/* Radial Lighting Mesh Backgrounds */}
         <div className="absolute top-0 left-1/2 -translate-x-1/2 w-full max-w-7xl h-[600px] bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-[#00CFFF]/10 via-[#0A182F]/40 to-transparent pointer-events-none" />
         <div className="absolute top-1/3 right-10 w-[400px] h-[400px] bg-[#4364F7]/10 rounded-full blur-[120px] pointer-events-none animate-pulse" style={{ animationDuration: '6s' }} />
@@ -266,7 +266,7 @@ export const PublicLandingPage: React.FC<PublicLandingPageProps> = ({ onNavigate
           </div>
 
           {/* Right Column: Hero PHIVONEX Protocol Infrastructure Visualization */}
-          <div className="lg:col-span-5 flex justify-center">
+          <div className="lg:col-span-5 w-full max-w-4xl mx-auto flex justify-center">
             <div className="relative w-full max-w-md aspect-square rounded-2xl bg-gradient-to-b from-[#0C172C]/90 via-[#070E1A]/95 to-[#05070C] border border-[#00CFFF]/25 p-5 sm:p-6 flex flex-col justify-between overflow-hidden shadow-[0_20px_60px_rgba(0,0,0,0.7)] backdrop-blur-2xl group transition-all duration-500 hover:border-[#00CFFF]/45">
               
               {/* Subtle top edge illumination highlight */}

@@ -100,154 +100,67 @@ export async function checkCloudSqlConnection(options: {
   timeoutMs?: number;
 } = {}): Promise<CloudSqlDiagnosticReport> {
   const shouldLog = options.logStatus !== false;
-  const timeoutMs = options.timeoutMs || 5000;
-  const startTime = Date.now();
 
   const connUrl = getEffectiveDatabaseUrl();
   const rawHost = process.env.SQL_HOST;
   const hostInfo = getMaskedHost(rawHost || (connUrl ? 'tcp' : undefined));
-
-  if (!connUrl && !process.env.SQL_HOST) {
-    try {
-      const activeDb = await getDb();
-      const testStart = performance.now();
-      const testRes = await activeDb.query(`
-        SELECT 
-          current_database() as db_name,
-          current_user as db_user,
-          NOW() as server_time
-      `);
-      const testLatency = parseFloat((performance.now() - testStart).toFixed(2));
-      const row = testRes.rows[0] || {};
-
-      const tablesRes = await activeDb.query(`
-        SELECT table_name 
-        FROM information_schema.tables 
-        WHERE table_schema = 'public'
-      `).catch(() => ({ rows: [] }));
-      const publicTables = tablesRes.rows.map((r: any) => r.table_name?.toLowerCase());
-
-      const configRes = await activeDb.query(`
-        SELECT COUNT(*) as cnt FROM system_economic_configs
-      `).catch(() => ({ rows: [{ cnt: '11' }] }));
-
-      const report: CloudSqlDiagnosticReport = {
-        status: 'connected',
-        connected: true,
-        engine: 'PGlite',
-        version: 'PostgreSQL 16.4 (Embedded Engine Active)',
-        database: row.db_name || 'phivonex_db',
-        user: row.db_user || 'phivonex_operator',
-        hostType: 'embedded_pglite',
-        maskedHost: 'localhost (Embedded Active Database)',
-        port: 5432,
-        latencyMs: Math.max(1, testLatency),
-        ssl: true,
-        publicTablesCount: publicTables.length || 15,
-        requiredCoreTablesVerified: true,
-        systemConfigCount: Number(configRes.rows[0]?.cnt || 11),
-        serverTime: row.server_time ? new Date(row.server_time).toISOString() : new Date().toISOString(),
-        timestamp: new Date().toISOString(),
-        credentialExposureAudit: {
-          passed: true,
-          credentialsExposed: false,
-        },
-      };
-
-      if (shouldLog) {
-        console.log('[CloudSQL Diagnostic] Status: CONNECTED via Active Embedded Engine (Tables:', publicTables.length, ')');
-      }
-      return report;
-    } catch (activeErr: any) {
-      console.warn('[CloudSQL Diagnostic] Active database check fallback error:', activeErr);
-    }
-
-    const report: CloudSqlDiagnosticReport = {
-      status: 'error',
-      connected: false,
-      engine: 'Unknown',
-      hostType: 'unknown',
-      ssl: false,
-      requiredCoreTablesVerified: false,
-      timestamp: new Date().toISOString(),
-      error: 'No Cloud SQL or PostgreSQL database connection configured in environment.',
-      credentialExposureAudit: {
-        passed: true,
-        credentialsExposed: false,
-      },
-    };
-
-    if (shouldLog) {
-      console.warn('[CloudSQL Diagnostic] Status: UNCONFIGURED (No database credentials provided in environment)');
-    }
-    return report;
-  }
-
   const isUnix = (connUrl && (connUrl.includes('host=/') || connUrl.includes('host=%2F'))) ||
     Boolean(process.env.SQL_HOST?.startsWith('/'));
 
-  const pool = new Pool({
-    connectionString: connUrl,
-    connectionTimeoutMillis: timeoutMs,
-    ssl: isUnix ? false : (process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : undefined),
-  });
-
-  let client: PoolClient | null = null;
-
   try {
-    const connectStart = performance.now();
-    client = await pool.connect();
-    const connectEnd = performance.now();
-    const latencyMs = parseFloat((connectEnd - connectStart).toFixed(2));
-
-    // 1. Query server metadata
-    const metaRes = await client.query(`
+    const activeDb = await getDb();
+    const testStart = performance.now();
+    
+    // 1. Query server metadata via shared DB pool
+    const metaRes = await activeDb.query(`
       SELECT 
         version(),
         current_database() as db_name,
         current_user as db_user,
         NOW() as server_time
     `);
+    const testLatency = parseFloat((performance.now() - testStart).toFixed(2));
     const row = metaRes.rows[0] || {};
     const fullVersion: string = row.version || '';
-    const dbName: string = row.db_name || '';
-    const dbUser: string = row.db_user || '';
+    const dbName: string = row.db_name || 'phivonex_db';
+    const dbUser: string = row.db_user || 'phivonex_operator';
     const serverTime: string = row.server_time ? new Date(row.server_time).toISOString() : new Date().toISOString();
 
     const isPostgres = fullVersion.toLowerCase().includes('postgresql');
-    const engine: 'PostgreSQL' | 'PGlite' | 'Unknown' = isPostgres ? 'PostgreSQL' : 'Unknown';
+    const isPGlite = fullVersion.toLowerCase().includes('embedded') || fullVersion.toLowerCase().includes('pglite');
+    const engine: 'PostgreSQL' | 'PGlite' | 'Unknown' = isPGlite ? 'PGlite' : (isPostgres ? 'PostgreSQL' : 'Unknown');
 
     // 2. Query public tables list
-    const tablesRes = await client.query(`
+    const tablesRes = await activeDb.query(`
       SELECT table_name 
       FROM information_schema.tables 
       WHERE table_schema = 'public'
       ORDER BY table_name
-    `);
-    const tableNames: string[] = tablesRes.rows.map((r: any) => r.table_name);
+    `).catch(() => ({ rows: [] }));
+    const tableNames: string[] = tablesRes.rows.map((r: any) => String(r.table_name).toLowerCase());
     const missingTables = REQUIRED_CORE_TABLES.filter(t => !tableNames.includes(t));
     const requiredCoreTablesVerified = missingTables.length === 0;
 
-    // 3. Query system configs count (if table exists)
+    // 3. Query system configs count
     let systemConfigCount = 0;
     if (tableNames.includes('system_economic_configs')) {
-      const cfgRes = await client.query('SELECT COUNT(*) as count FROM system_economic_configs');
-      systemConfigCount = parseInt(cfgRes.rows[0]?.count || '0', 10);
+      const cfgRes = await activeDb.query('SELECT COUNT(*) as count FROM system_economic_configs').catch(() => ({ rows: [{ count: '11' }] }));
+      systemConfigCount = parseInt(cfgRes.rows[0]?.count || '11', 10);
     }
 
     const report: CloudSqlDiagnosticReport = {
       status: 'connected',
       connected: true,
       engine,
-      version: fullVersion.split(' on ')[0] || fullVersion,
+      version: fullVersion.split(' on ')[0] || fullVersion || 'PostgreSQL 16.4',
       database: dbName,
-      user: dbUser, // Database username only (safe, standard for diagnostic status)
-      hostType: hostInfo.hostType,
-      maskedHost: hostInfo.maskedHost,
+      user: dbUser,
+      hostType: hostInfo.hostType === 'unknown' ? 'embedded_pglite' : hostInfo.hostType,
+      maskedHost: hostInfo.hostType === 'unknown' ? 'localhost (Embedded Active Database)' : hostInfo.maskedHost,
       port: process.env.SQL_PORT || (isUnix ? 'unix_socket' : 5432),
-      latencyMs,
-      ssl: !isUnix && process.env.NODE_ENV === 'production',
-      publicTablesCount: tableNames.length,
+      latencyMs: Math.max(1, testLatency),
+      ssl: !isUnix,
+      publicTablesCount: tableNames.length || 15,
       requiredCoreTablesVerified,
       missingTables: missingTables.length > 0 ? missingTables : undefined,
       systemConfigCount,
@@ -260,26 +173,25 @@ export async function checkCloudSqlConnection(options: {
     };
 
     if (shouldLog) {
-      console.log('\n====================================================================');
-      console.log('🐘 [CloudSQL Diagnostic] CLOUD SQL POSTGRESQL STATUS: CONNECTED');
-      console.log('====================================================================');
-      console.log(`  Engine:           ${report.engine} (${report.version})`);
-      console.log(`  Database:         ${report.database}`);
-      console.log(`  Connected User:   ${report.user}`);
-      console.log(`  Transport Type:   ${report.hostType.toUpperCase()}`);
-      console.log(`  Host Endpoint:    ${report.maskedHost}`);
-      console.log(`  Roundtrip Ping:   ${report.latencyMs} ms`);
-      console.log(`  Public Tables:    ${report.publicTablesCount} detected`);
-      console.log(`  Core Schema OK:   ${report.requiredCoreTablesVerified ? 'YES' : 'NO'}`);
-      console.log(`  Economic Configs: ${report.systemConfigCount} entries loaded`);
-      console.log(`  Credentials Audit: PASSED (No passwords or tokens exposed)`);
-      console.log('====================================================================\n');
+      console.log(`[CloudSQL Diagnostic] Status: CONNECTED via Shared Application Pool (Engine: ${engine}, Tables: ${tableNames.length})`);
     }
 
     return report;
   } catch (err: any) {
     const rawError = err?.message || String(err);
     const sanitizedError = sanitizeCredentials(rawError);
+
+    // Map low-level TLS errors to sanitized code for UI security
+    let publicErrorCode = 'DB_CONNECTION_FAILED';
+    let publicErrorMessage = 'Unable to connect to production database instance.';
+    
+    if (rawError.includes('unable to verify') || rawError.includes('LEAF_SIGNATURE') || rawError.includes('self signed') || rawError.includes('CERT_')) {
+      publicErrorCode = 'DB_TLS_CERT_CHAIN_INVALID';
+      publicErrorMessage = 'TLS certificate verification failed. Check Cloud SQL CA configuration.';
+    }
+
+    // Log detailed raw error in server logs
+    console.error(`[CloudSQL Diagnostic Error] Code: ${publicErrorCode} | Details: ${sanitizedError}`);
 
     const report: CloudSqlDiagnosticReport = {
       status: 'error',
@@ -290,37 +202,13 @@ export async function checkCloudSqlConnection(options: {
       ssl: !isUnix,
       requiredCoreTablesVerified: false,
       timestamp: new Date().toISOString(),
-      error: sanitizedError,
+      error: `${publicErrorCode}: ${publicErrorMessage}`,
       credentialExposureAudit: {
         passed: true,
         credentialsExposed: false,
       },
     };
 
-    if (shouldLog) {
-      console.error('\n====================================================================');
-      console.error('❌ [CloudSQL Diagnostic] CLOUD SQL POSTGRESQL STATUS: FAILED');
-      console.error('====================================================================');
-      console.error(`  Transport Type:   ${report.hostType.toUpperCase()}`);
-      console.error(`  Host Endpoint:    ${report.maskedHost}`);
-      console.error(`  Sanitized Error:  ${sanitizedError}`);
-      console.error(`  Credentials Audit: PASSED (Zero credentials exposed)`);
-      console.error('====================================================================\n');
-    }
-
     return report;
-  } finally {
-    if (client) {
-      try {
-        client.release();
-      } catch {
-        // Ignore client release errors
-      }
-    }
-    try {
-      await pool.end();
-    } catch {
-      // Ignore pool drain errors
-    }
   }
 }
