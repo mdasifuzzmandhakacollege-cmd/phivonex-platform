@@ -85,7 +85,17 @@ router.get('/me', requireAuth, async (req: AuthRequest, res: Response): Promise<
       node_number: number;
       public_node_id: string;
       status: string;
+      product_version: string;
+      purchase_price_usd: string | number;
+      phivo_reference_price_at_purchase: string | number;
+      lifetime_phivo_allocation: string | number;
+      term_days: number;
+      daily_phivo_emission: string | number;
+      purchase_timestamp: Date | null;
       activated_at: Date | null;
+      maturity_timestamp: Date | null;
+      distributed_phivo: string | number;
+      remaining_phivo: string | number;
     }>(
       `
       SELECT 
@@ -93,7 +103,17 @@ router.get('/me', requireAuth, async (req: AuthRequest, res: Response): Promise<
         node_number,
         public_node_id,
         status,
-        activated_at
+        product_version,
+        purchase_price_usd,
+        phivo_reference_price_at_purchase,
+        lifetime_phivo_allocation,
+        term_days,
+        daily_phivo_emission,
+        purchase_timestamp,
+        activated_at,
+        maturity_timestamp,
+        distributed_phivo,
+        remaining_phivo
       FROM nodes
       WHERE owner_user_id = $1
       ORDER BY node_number ASC
@@ -110,11 +130,31 @@ router.get('/me', requireAuth, async (req: AuthRequest, res: Response): Promise<
         latestRewardEpoch: null,
       };
 
+      const lifetimeAllocation = Number(n.lifetime_phivo_allocation || 10000);
+      const dailyEmission = Number(n.daily_phivo_emission || 25);
+      const distributedPhivo = Number(n.distributed_phivo || stat.totalRewards || 0);
+      const remainingPhivo = Math.max(0, lifetimeAllocation - distributedPhivo);
+      const progressPercent = Math.min(100, Number(((distributedPhivo / lifetimeAllocation) * 100).toFixed(2)));
+      const completedDays = Math.min(400, Math.floor(distributedPhivo / dailyEmission));
+      const currentDay = n.status === 'MATURED' ? 400 : Math.min(400, completedDays + 1);
+
       return {
         publicNodeId: n.public_node_id,
         nodeNumber: n.node_number,
         status: n.status,
+        productVersion: n.product_version || 'GENESIS_V1',
+        purchasePriceUsd: Number(n.purchase_price_usd || 1000),
+        phivoReferencePriceAtPurchase: Number(n.phivo_reference_price_at_purchase || 0.10),
+        lifetimePhivoAllocation: lifetimeAllocation,
+        termDays: n.term_days || 400,
+        dailyPhivoEmission: dailyEmission,
+        purchaseTimestamp: n.purchase_timestamp ? n.purchase_timestamp.toISOString() : (n.activated_at ? n.activated_at.toISOString() : null),
         activatedAt: n.activated_at ? n.activated_at.toISOString() : null,
+        maturityTimestamp: n.maturity_timestamp ? n.maturity_timestamp.toISOString() : (n.activated_at ? new Date(new Date(n.activated_at).getTime() + 400 * 24 * 60 * 60 * 1000).toISOString() : null),
+        distributedPhivo,
+        remainingPhivo,
+        progressPercent,
+        currentDay,
         totalRewards: stat.totalRewards,
         currentRewardState: stat.currentRewardState,
         latestRewardEpoch: stat.latestRewardEpoch,

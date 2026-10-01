@@ -569,10 +569,20 @@ export async function settleNodeOrder(
       status = 'ACTIVE',
       owner_user_id = $1,
       reserved_by_user_id = NULL,
+      purchase_timestamp = COALESCE(purchase_timestamp, CURRENT_TIMESTAMP),
       activated_at = CURRENT_TIMESTAMP,
+      maturity_timestamp = CURRENT_TIMESTAMP + INTERVAL '400 days',
+      product_version = COALESCE(product_version, 'GENESIS_V1'),
+      purchase_price_usd = COALESCE(purchase_price_usd, 1000.00),
+      phivo_reference_price_at_purchase = COALESCE(phivo_reference_price_at_purchase, 0.10),
+      lifetime_phivo_allocation = COALESCE(lifetime_phivo_allocation, 10000.00),
+      term_days = COALESCE(term_days, 400),
+      daily_phivo_emission = COALESCE(daily_phivo_emission, 25.00),
+      distributed_phivo = COALESCE(distributed_phivo, 0.00),
+      remaining_phivo = COALESCE(remaining_phivo, 10000.00),
       updated_at = CURRENT_TIMESTAMP
     WHERE id = $2 AND status = 'RESERVED'
-    RETURNING id, public_node_id, node_number, status, activated_at
+    RETURNING id, public_node_id, node_number, status, activated_at, maturity_timestamp, distributed_phivo, remaining_phivo
     `,
     [order.user_id, order.node_id]
   );

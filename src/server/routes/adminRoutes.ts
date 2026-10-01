@@ -12,6 +12,10 @@ import {
   getAdminAuditLogs,
   getUnifiedAuditFeed,
   logAdminAction,
+  getUser360Details,
+  executeAdminWalletAdjustment,
+  setUserAccountStatus,
+  revokeUserSessions,
 } from '../services/adminService';
 import { settleWithdrawalAction } from '../services/withdrawalService';
 import {
@@ -261,6 +265,156 @@ adminRouter.put('/users/:userId', async (req: AuthRequest, res: Response) => {
     return res.status(err.statusCode || 500).json({
       error: err.code || 'SERVER_ERROR',
       message: err.message || 'Failed to update user profile.',
+    });
+  }
+});
+
+/**
+ * GET /api/admin/users/:userId/360 & GET /api/admin/users/:userId
+ * Returns complete server-authoritative User 360° details:
+ * Profile, Wallet Overview, Address History, Withdrawals, Nodes, Orders, Transactions, Sessions, Security & Audit Logs.
+ */
+const handleGetUser360 = async (req: AuthRequest, res: Response) => {
+  try {
+    const { userId } = req.params;
+    const data = await getUser360Details(userId);
+    return res.status(200).json({
+      success: true,
+      ...data,
+    });
+  } catch (err: any) {
+    console.error('[Admin API] Error fetching User 360 details:', err);
+    return res.status(err.statusCode || 500).json({
+      error: err.statusCode === 404 ? 'USER_NOT_FOUND' : 'SERVER_ERROR',
+      message: err.message || 'Failed to retrieve User 360 details.',
+    });
+  }
+};
+
+adminRouter.get('/users/:userId/360', handleGetUser360);
+adminRouter.get('/users/:userId/details', handleGetUser360);
+
+/**
+ * POST /api/admin/users/:userId/wallet/adjustments
+ * Secure, server-authoritative administrative CREDIT or DEBIT wallet adjustment.
+ * Executes inside ONE PostgreSQL transaction with FOR UPDATE row locks, safe decimal checks,
+ * negative balance protection, strict idempotency, immutable financial_ledger_entries, and audit log.
+ */
+adminRouter.post('/users/:userId/wallet/adjustments', adminFinancialLimiter, async (req: AuthRequest, res: Response) => {
+  try {
+    const admin = req.user!;
+    const { userId } = req.params;
+    const { asset, direction, amount, reason, idempotencyKey } = req.body || {};
+
+    const ipAddress = (req.headers['x-forwarded-for'] as string) || req.ip;
+
+    const result = await executeAdminWalletAdjustment({
+      adminUserId: admin.id,
+      adminPublicId: admin.public_id,
+      targetUserId: userId,
+      asset,
+      direction,
+      amount,
+      reason,
+      idempotencyKey,
+      ipAddress,
+    });
+
+    return res.status(200).json(result);
+  } catch (err: any) {
+    console.error('[Admin API] Error executing wallet adjustment:', err);
+    return res.status(err.statusCode || 500).json({
+      error: err.statusCode === 400 ? 'INVALID_ADJUSTMENT' : 'SERVER_ERROR',
+      message: err.message || 'Failed to execute administrative wallet adjustment.',
+    });
+  }
+});
+
+/**
+ * POST /api/admin/users/:userId/lock
+ * Locks target user account and immediately revokes all active user sessions.
+ */
+adminRouter.post('/users/:userId/lock', async (req: AuthRequest, res: Response) => {
+  try {
+    const admin = req.user!;
+    const { userId } = req.params;
+    const { reason } = req.body || {};
+    const ipAddress = (req.headers['x-forwarded-for'] as string) || req.ip;
+
+    const result = await setUserAccountStatus({
+      adminUserId: admin.id,
+      adminPublicId: admin.public_id,
+      targetUserId: userId,
+      status: 'LOCKED',
+      reason: reason || 'Administrative lock applied to user account.',
+      ipAddress,
+    });
+
+    return res.status(200).json(result);
+  } catch (err: any) {
+    console.error('[Admin API] Error locking user account:', err);
+    return res.status(err.statusCode || 500).json({
+      error: 'LOCK_FAILED',
+      message: err.message || 'Failed to lock user account.',
+    });
+  }
+});
+
+/**
+ * POST /api/admin/users/:userId/unlock
+ * Unlocks target user account.
+ */
+adminRouter.post('/users/:userId/unlock', async (req: AuthRequest, res: Response) => {
+  try {
+    const admin = req.user!;
+    const { userId } = req.params;
+    const { reason } = req.body || {};
+    const ipAddress = (req.headers['x-forwarded-for'] as string) || req.ip;
+
+    const result = await setUserAccountStatus({
+      adminUserId: admin.id,
+      adminPublicId: admin.public_id,
+      targetUserId: userId,
+      status: 'ACTIVE',
+      reason: reason || 'Administrative unlock applied to user account.',
+      ipAddress,
+    });
+
+    return res.status(200).json(result);
+  } catch (err: any) {
+    console.error('[Admin API] Error unlocking user account:', err);
+    return res.status(err.statusCode || 500).json({
+      error: 'UNLOCK_FAILED',
+      message: err.message || 'Failed to unlock user account.',
+    });
+  }
+});
+
+/**
+ * POST /api/admin/users/:userId/sessions/revoke
+ * Revokes all active user sessions for target user.
+ */
+adminRouter.post('/users/:userId/sessions/revoke', async (req: AuthRequest, res: Response) => {
+  try {
+    const admin = req.user!;
+    const { userId } = req.params;
+    const { reason } = req.body || {};
+    const ipAddress = (req.headers['x-forwarded-for'] as string) || req.ip;
+
+    const result = await revokeUserSessions({
+      adminUserId: admin.id,
+      adminPublicId: admin.public_id,
+      targetUserId: userId,
+      reason: reason || 'Administrative session revocation requested.',
+      ipAddress,
+    });
+
+    return res.status(200).json(result);
+  } catch (err: any) {
+    console.error('[Admin API] Error revoking user sessions:', err);
+    return res.status(err.statusCode || 500).json({
+      error: 'REVOKE_FAILED',
+      message: err.message || 'Failed to revoke active user sessions.',
     });
   }
 });

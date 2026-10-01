@@ -523,6 +523,50 @@ export const EconomicControls: React.FC = () => {
             </div>
           </div>
         </div>
+
+        {/* Private Admin Genesis Node Economics Card (Section 18) */}
+        <div className="p-5 rounded-xl bg-[#050812] border border-[#00CFFF]/30 space-y-4">
+          <div className="flex items-center justify-between border-b border-white/[0.08] pb-3">
+            <div className="flex items-center gap-2 font-mono text-xs text-[#00CFFF] font-bold">
+              <Coins className="w-4 h-4" />
+              <span>GENESIS NODE LAUNCH ECONOMICS SUMMARY</span>
+            </div>
+            <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-[#00CFFF]/10 border border-[#00CFFF]/30 text-[#00CFFF]">
+              Launch Standard V1.0
+            </span>
+          </div>
+
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs font-mono">
+            <div className="p-3 rounded-lg bg-[#07101D] border border-white/[0.06]">
+              <span className="text-[10px] text-[#98A2B3] block">Current Public Capacity</span>
+              <span className="text-sm font-bold text-white">10,000 Nodes</span>
+            </div>
+            <div className="p-3 rounded-lg bg-[#07101D] border border-white/[0.06]">
+              <span className="text-[10px] text-[#98A2B3] block">Node Price</span>
+              <span className="text-sm font-bold text-white">$1,000 USD</span>
+            </div>
+            <div className="p-3 rounded-lg bg-[#07101D] border border-white/[0.06]">
+              <span className="text-[10px] text-[#98A2B3] block">Reference PHIVO Price</span>
+              <span className="text-sm font-bold text-white">$0.10 USD</span>
+            </div>
+            <div className="p-3 rounded-lg bg-[#07101D] border border-white/[0.06]">
+              <span className="text-[10px] text-[#98A2B3] block">PHIVO Per Node</span>
+              <span className="text-sm font-bold text-[#00CFFF]">10,000 PHIVO</span>
+            </div>
+            <div className="p-3 rounded-lg bg-[#07101D] border border-white/[0.06]">
+              <span className="text-[10px] text-[#98A2B3] block">Daily PHIVO Emission</span>
+              <span className="text-sm font-bold text-[#32D583]">25 PHIVO / Day</span>
+            </div>
+            <div className="p-3 rounded-lg bg-[#07101D] border border-white/[0.06]">
+              <span className="text-[10px] text-[#98A2B3] block">Node Term</span>
+              <span className="text-sm font-bold text-white">400 Days</span>
+            </div>
+            <div className="p-3 rounded-lg bg-[#07101D] border border-white/[0.06] col-span-2">
+              <span className="text-[10px] text-[#98A2B3] block">Max Genesis Allocation at Capacity</span>
+              <span className="text-sm font-bold text-[#00CFFF]">100,000,000 PHIVO (100% Supply)</span>
+            </div>
+          </div>
+        </div>
       </div>
 
       {/* SECTION 2: DIRECT REFERRAL COMMISSION */}

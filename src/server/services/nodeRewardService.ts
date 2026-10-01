@@ -5,6 +5,7 @@ import { getConfiguredRewardPerNode, REWARD_CURRENCY } from '../config/rewardCon
 import { postLedgerCredit, postLedgerReversal } from './walletLedgerService';
 import { isNodeRewardsEnabled, getNodeRewardRatePerEpoch } from './economicService';
 import { notifyPhivoReward } from './notificationService';
+import { getUtcBusinessDate } from '../utils/timezone';
 
 export interface RewardEpoch {
   id: string;
@@ -73,8 +74,11 @@ export async function createRewardEpoch(params?: {
   const publicEpochId = generateEpochPublicId(epochNumber);
 
   const id = uuidv4();
-  const startAt = params?.startAt || new Date();
-  const endAt = params?.endAt || new Date(startAt.getTime() + 24 * 60 * 60 * 1000);
+  const baseDate = params?.startAt || new Date();
+  const utcDateStr = getUtcBusinessDate(baseDate);
+  const [year, month, day] = utcDateStr.split('-').map(Number);
+  const startAt = new Date(Date.UTC(year, month - 1, day, 0, 0, 0, 0));
+  const endAt = new Date(Date.UTC(year, month - 1, day, 23, 59, 59, 999));
 
   const res = await db.query<any>(
     `
@@ -147,7 +151,7 @@ export async function getOrCreateCurrentOpenEpoch(rewardPerNodeOverride?: number
  */
 export async function closeAndSettleEpoch(
   epochId: string,
-  options?: { configuredRewardPerNode?: number }
+  options?: { configuredRewardPerNode?: number; targetNodeId?: string }
 ): Promise<EpochSettlementResult> {
   const db = await getDb();
 
@@ -237,20 +241,26 @@ export async function closeAndSettleEpoch(
     [effectiveRate, now, epochId]
   );
 
-  // 4. Query all ACTIVE nodes with valid owners
-  // AVAILABLE, RESERVED, RETIRED are strictly excluded
+  // 4. Query all ACTIVE or EMITTING nodes with valid owners that haven't reached lifetime cap
   const activeNodesRes = await db.query<{
     id: string;
     public_node_id: string;
     node_number: number;
     owner_user_id: string;
+    daily_phivo_emission: string | number;
+    lifetime_phivo_allocation: string | number;
+    distributed_phivo: string | number;
   }>(
     `
-    SELECT id, public_node_id, node_number, owner_user_id
+    SELECT id, public_node_id, node_number, owner_user_id, daily_phivo_emission, lifetime_phivo_allocation, distributed_phivo
     FROM nodes
-    WHERE status = 'ACTIVE' AND owner_user_id IS NOT NULL
+    WHERE (status = 'ACTIVE' OR status = 'EMITTING') 
+      AND owner_user_id IS NOT NULL 
+      AND (distributed_phivo IS NULL OR distributed_phivo < COALESCE(lifetime_phivo_allocation, 10000.00))
+      AND ($1::text IS NULL OR id::text = $1 OR public_node_id = $1)
     ORDER BY node_number ASC
-    `
+    `,
+    [options?.targetNodeId || null]
   );
 
   const eligibleNodes = activeNodesRes.rows;
@@ -258,6 +268,20 @@ export async function closeAndSettleEpoch(
   let totalDistributed = 0;
 
   for (const node of eligibleNodes) {
+    const dailyEmission = Number(node.daily_phivo_emission || effectiveRate || 25);
+    const lifetimeCap = Number(node.lifetime_phivo_allocation || 10000);
+    const currentDist = Number(node.distributed_phivo || 0);
+    const actualEmission = Math.min(dailyEmission, Math.max(0, lifetimeCap - currentDist));
+
+    if (actualEmission <= 0) {
+      // Node has already distributed full allocation: mark MATURED
+      await db.query(
+        `UPDATE nodes SET status = 'MATURED', remaining_phivo = 0, updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
+        [node.id]
+      );
+      continue;
+    }
+
     const rewardId = uuidv4();
     const publicRewardId = generateRewardPublicId();
 
@@ -271,7 +295,7 @@ export async function closeAndSettleEpoch(
       ON CONFLICT (node_id, epoch_id) DO NOTHING
       RETURNING *
       `,
-      [rewardId, publicRewardId, epochId, node.id, node.owner_user_id, effectiveRate, now]
+      [rewardId, publicRewardId, epochId, node.id, node.owner_user_id, actualEmission, now]
     );
 
     let actualRewardId: string;
@@ -284,6 +308,20 @@ export async function closeAndSettleEpoch(
       actualAmount = Number(insRes.rows[0].amount);
       rewardsCreated++;
       totalDistributed += actualAmount;
+
+      // Update node distribution accounting and status
+      const newDist = currentDist + actualAmount;
+      const newRem = Math.max(0, lifetimeCap - newDist);
+      const newStatus = newDist >= lifetimeCap ? 'MATURED' : 'EMITTING';
+
+      await db.query(
+        `
+        UPDATE nodes
+        SET distributed_phivo = $1, remaining_phivo = $2, status = $3, updated_at = CURRENT_TIMESTAMP
+        WHERE id = $4
+        `,
+        [newDist, newRem, newStatus, node.id]
+      );
     } else {
       // Already existed: fetch existing
       const existing = await db.query<any>(
@@ -321,32 +359,26 @@ export async function closeAndSettleEpoch(
       console.warn('[Notification] Error triggering node reward notification:', notifErr);
     }
 
-    // Task #23.4: Send REWARD email and trigger potential automation rules
-    try {
-      const userRes = await db.query<{ email: string; full_name: string; public_id: string }>(
-        `SELECT email, full_name, public_id FROM users WHERE id = $1`,
-        [node.owner_user_id]
-      );
-      if (userRes.rowCount > 0) {
+    // Task #23.4: Send REWARD email and trigger potential automation rules (non-blocking)
+    db.query<{ email: string; full_name: string; public_id: string }>(
+      `SELECT email, full_name, public_id FROM users WHERE id = $1`,
+      [node.owner_user_id]
+    ).then(async (userRes) => {
+      if (userRes.rows.length > 0) {
         const user = userRes.rows[0];
         const { queueEventEmail, triggerAutomationRule } = await import('./emailService');
-        
         await queueEventEmail(user.email, 'REWARD', {
           displayName: user.full_name,
           publicId: user.public_id,
           amount: String(actualAmount),
           epochId,
           publicEpochId
-        });
-
-        // Trigger matching activity automation rule
+        }).catch(() => {});
         await triggerAutomationRule(node.owner_user_id, 'MATCHING_ACTIVITY', {
           amount: String(actualAmount)
-        });
+        }).catch(() => {});
       }
-    } catch (emailErr) {
-      console.warn('[EmailEngine] Failed to send Reward email:', emailErr);
-    }
+    }).catch(() => {});
   }
 
   return {

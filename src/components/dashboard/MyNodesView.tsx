@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import { UserProfile } from '../../context/AuthContext';
 import { GENESIS_NODE_CAP, NODE_BASE_PRICE_USD } from '../../config/nodeConfig';
+import { GenesisEngineAnimation } from '../GenesisEngineAnimation';
 
 interface MyNodesViewProps {
   user: UserProfile;
@@ -29,7 +30,19 @@ interface NodeItem {
   publicNodeId: string;
   nodeNumber: number;
   status: string;
+  productVersion?: string;
+  purchasePriceUsd?: number;
+  phivoReferencePriceAtPurchase?: number;
+  lifetimePhivoAllocation?: number;
+  termDays?: number;
+  dailyPhivoEmission?: number;
+  purchaseTimestamp?: string | null;
   activatedAt: string | null;
+  maturityTimestamp?: string | null;
+  distributedPhivo?: number;
+  remainingPhivo?: number;
+  progressPercent?: number;
+  currentDay?: number;
   totalRewards?: number;
   currentRewardState?: 'ACCRUED' | 'CLAIMED' | 'READY';
   latestRewardEpoch?: string | null;
@@ -474,15 +487,41 @@ export const MyNodesView: React.FC<MyNodesViewProps> = ({ user: _user, onNavigat
             </div>
           </div>
         ) : (
-          /* Owned Node Cards Grid */
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          <div className="space-y-6">
+            {/* Primary Genesis Engine Machinery Visualization */}
+            {nodes[0] && (
+              <GenesisEngineAnimation
+                nodeNumber={nodes[0].nodeNumber}
+                publicNodeId={nodes[0].publicNodeId}
+                distributedPhivo={nodes[0].distributedPhivo ?? 0}
+                remainingPhivo={nodes[0].remainingPhivo ?? 10000}
+                currentDay={nodes[0].currentDay ?? 1}
+                totalDays={nodes[0].termDays ?? 400}
+                status={nodes[0].status}
+                isEmitting={nodes[0].status === 'ACTIVE' || nodes[0].status === 'EMITTING'}
+              />
+            )}
+
+            {/* Owned Node Cards Grid */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {nodes.map((node) => {
-              const isActive = node.status === 'ACTIVE';
+              const isActive = node.status === 'ACTIVE' || node.status === 'EMITTING';
+              const isMatured = node.status === 'MATURED';
               const isPending = node.status === 'PENDING' || node.status === 'RESERVED';
+
+              const price = node.purchasePriceUsd || 1000;
+              const allocation = node.lifetimePhivoAllocation || 10000;
+              const daily = node.dailyPhivoEmission || 25;
+              const term = node.termDays || 400;
+              const dist = node.distributedPhivo ?? 0;
+              const rem = node.remainingPhivo ?? Math.max(0, allocation - dist);
+              const progress = node.progressPercent ?? Math.min(100, Number(((dist / allocation) * 100).toFixed(2)));
+              const day = node.currentDay ?? (isMatured ? 400 : Math.min(400, Math.floor(dist / daily) + 1));
+
               return (
                 <div
                   key={node.publicNodeId}
-                  className="p-4 sm:p-5 rounded-xl bg-[#05070B] border border-white/[0.08] hover:border-[#00CFFF]/40 transition-all space-y-3 flex flex-col justify-between"
+                  className="p-4 sm:p-5 rounded-2xl bg-[#05070B] border border-white/[0.08] hover:border-[#00CFFF]/40 transition-all space-y-4 flex flex-col justify-between"
                 >
                   {/* Top: Public ID & Status */}
                   <div className="flex items-start justify-between gap-2">
@@ -502,7 +541,9 @@ export const MyNodesView: React.FC<MyNodesViewProps> = ({ user: _user, onNavigat
 
                     <span
                       className={`text-[10px] font-mono uppercase px-2 py-0.5 rounded-full flex items-center gap-1 border shrink-0 ${
-                        isActive
+                        isMatured
+                          ? 'bg-[#FDB022]/10 text-[#FDB022] border-[#FDB022]/30'
+                          : isActive
                           ? 'bg-[#32D583]/10 text-[#32D583] border-[#32D583]/30'
                           : isPending
                           ? 'bg-[#F59E0B]/10 text-[#F59E0B] border-[#F59E0B]/30'
@@ -511,40 +552,74 @@ export const MyNodesView: React.FC<MyNodesViewProps> = ({ user: _user, onNavigat
                     >
                       <span
                         className={`w-1.5 h-1.5 rounded-full ${
-                          isActive ? 'bg-[#32D583] animate-pulse' : isPending ? 'bg-[#F59E0B]' : 'bg-[#98A2B3]'
+                          isMatured ? 'bg-[#FDB022]' : isActive ? 'bg-[#32D583] animate-pulse' : 'bg-[#98A2B3]'
                         }`}
                       />
-                      {isActive ? 'ACTIVE' : node.status}
+                      {isMatured ? 'MATURED' : isActive ? 'ACTIVE' : node.status}
                     </span>
                   </div>
 
-                  {/* Node Metrics */}
-                  <div className="py-2 border-t border-b border-white/[0.04] space-y-1.5 text-xs font-mono">
-                    <div className="flex items-center justify-between text-[11px]">
-                      <span className="text-[#98A2B3]">Reward Status:</span>
-                      <span
-                        className={`text-[10px] px-1.5 py-0.5 rounded border ${
-                          node.currentRewardState === 'ACCRUED'
-                            ? 'bg-[#00CFFF]/10 text-[#00CFFF] border-[#00CFFF]/30'
-                            : node.currentRewardState === 'CLAIMED'
-                            ? 'bg-[#32D583]/10 text-[#32D583] border-[#32D583]/30'
-                            : 'bg-white/[0.04] text-[#98A2B3] border-white/[0.08]'
-                        }`}
-                      >
-                        {node.currentRewardState || 'READY'}
-                      </span>
+                  {/* Node Launch Economics Telemetry (Section 11) */}
+                  <div className="py-2.5 border-t border-b border-white/[0.06] space-y-2 text-xs font-mono">
+                    <div className="grid grid-cols-2 gap-2 text-[11px]">
+                      <div>
+                        <span className="text-[#98A2B3] text-[10px] block">PURCHASE PRICE</span>
+                        <span className="text-white font-bold">${price.toLocaleString()} USD</span>
+                      </div>
+                      <div className="text-right">
+                        <span className="text-[#98A2B3] text-[10px] block">LIFETIME ALLOC</span>
+                        <span className="text-[#00CFFF] font-bold">{allocation.toLocaleString()} PHIVO</span>
+                      </div>
                     </div>
 
-                    <div className="flex items-center justify-between text-[11px]">
-                      <span className="text-[#98A2B3]">Total Rewards:</span>
-                      <span className="text-white font-bold tabular-nums">
-                        ${Number(node.totalRewards || 0).toFixed(2)} USD
-                      </span>
+                    <div className="grid grid-cols-2 gap-2 text-[11px]">
+                      <div>
+                        <span className="text-[#98A2B3] text-[10px] block">DAILY EMISSION</span>
+                        <span className="text-[#32D583] font-bold">{daily} PHIVO / Day</span>
+                      </div>
+                      <div className="text-right">
+                        <span className="text-[#98A2B3] text-[10px] block">REF DAILY VALUE</span>
+                        <span className="text-white font-bold">$2.50 @ $0.10</span>
+                      </div>
                     </div>
 
-                    <div className="flex items-center justify-between text-[11px]">
-                      <span className="text-[#98A2B3]">Activation Date:</span>
-                      <span className="text-white">{formatDate(node.activatedAt)}</span>
+                    <div className="grid grid-cols-2 gap-2 text-[11px] pt-1">
+                      <div>
+                        <span className="text-[#98A2B3] text-[10px] block">DISTRIBUTED</span>
+                        <span className="text-[#00CFFF] font-bold">{dist.toLocaleString()} PHIVO</span>
+                      </div>
+                      <div className="text-right">
+                        <span className="text-[#98A2B3] text-[10px] block">REMAINING</span>
+                        <span className="text-[#F7B27A] font-bold">{rem.toLocaleString()} PHIVO</span>
+                      </div>
+                    </div>
+
+                    {/* Progress Bar (Section 12) */}
+                    <div className="pt-2 space-y-1">
+                      <div className="flex items-center justify-between text-[10px] text-[#98A2B3]">
+                        <span>DAY {day} / {term}</span>
+                        <span className="font-bold text-[#00CFFF]">{progress}%</span>
+                      </div>
+                      <div className="w-full h-2 rounded-full bg-white/[0.08] overflow-hidden">
+                        <div
+                          className={`h-full transition-all duration-500 rounded-full ${
+                            isMatured ? 'bg-[#FDB022]' : 'bg-gradient-to-r from-[#00CFFF] to-[#32D583]'
+                          }`}
+                          style={{ width: `${progress}%` }}
+                        />
+                      </div>
+                      <div className="flex items-center justify-between text-[9px] text-[#667085] pt-0.5">
+                        <span>Day 1</span>
+                        <span>Day 100</span>
+                        <span>Day 200</span>
+                        <span>Day 300</span>
+                        <span>Day 400</span>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-between text-[10px] text-[#98A2B3] pt-1">
+                      <span>Activated: {formatDate(node.activatedAt)}</span>
+                      <span>Maturity: {formatDate(node.maturityTimestamp || node.activatedAt)}</span>
                     </div>
                   </div>
 
@@ -562,6 +637,7 @@ export const MyNodesView: React.FC<MyNodesViewProps> = ({ user: _user, onNavigat
                 </div>
               );
             })}
+            </div>
           </div>
         )}
       </div>

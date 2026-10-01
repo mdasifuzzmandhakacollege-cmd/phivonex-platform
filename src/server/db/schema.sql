@@ -88,14 +88,24 @@ CREATE TABLE IF NOT EXISTS nodes (
   status VARCHAR(50) NOT NULL,
   owner_user_id UUID NULL REFERENCES users(id) ON DELETE SET NULL,
   reserved_by_user_id UUID NULL REFERENCES users(id) ON DELETE SET NULL,
+  product_version VARCHAR(50) NOT NULL DEFAULT 'GENESIS_V1',
+  purchase_price_usd NUMERIC(12, 2) NOT NULL DEFAULT 1000.00,
+  phivo_reference_price_at_purchase NUMERIC(10, 4) NOT NULL DEFAULT 0.10,
+  lifetime_phivo_allocation NUMERIC(14, 2) NOT NULL DEFAULT 10000.00,
+  term_days INTEGER NOT NULL DEFAULT 400,
+  daily_phivo_emission NUMERIC(10, 2) NOT NULL DEFAULT 25.00,
+  purchase_timestamp TIMESTAMP WITH TIME ZONE NULL,
   reserved_at TIMESTAMP WITH TIME ZONE NULL,
   activated_at TIMESTAMP WITH TIME ZONE NULL,
+  maturity_timestamp TIMESTAMP WITH TIME ZONE NULL,
+  distributed_phivo NUMERIC(14, 2) NOT NULL DEFAULT 0.00,
+  remaining_phivo NUMERIC(14, 2) NOT NULL DEFAULT 10000.00,
   created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT chk_node_number_range CHECK (node_number >= 1 AND node_number <= 10000),
-  CONSTRAINT chk_node_status_valid CHECK (status IN ('AVAILABLE', 'RESERVED', 'ACTIVE', 'RETIRED')),
+  CONSTRAINT chk_node_status_valid CHECK (status IN ('AVAILABLE', 'RESERVED', 'PURCHASED', 'ACTIVE', 'EMITTING', 'MATURED', 'RETIRED')),
   CONSTRAINT chk_node_available_owner CHECK (status != 'AVAILABLE' OR owner_user_id IS NULL),
-  CONSTRAINT chk_node_active_owner CHECK (status != 'ACTIVE' OR owner_user_id IS NOT NULL)
+  CONSTRAINT chk_node_active_owner CHECK (status NOT IN ('ACTIVE', 'EMITTING', 'MATURED') OR owner_user_id IS NOT NULL)
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_nodes_node_number ON nodes (node_number);
@@ -341,7 +351,7 @@ CREATE TABLE IF NOT EXISTS financial_ledger_entries (
   status VARCHAR(20) NOT NULL DEFAULT 'SETTLED',
   created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT chk_fle_entry_type CHECK (entry_type IN ('CREDIT', 'DEBIT', 'REVERSAL')),
-  CONSTRAINT chk_fle_source_type CHECK (source_type IN ('REFERRAL_COMMISSION', 'MATCHING_BONUS', 'PROMOTION_BONUS', 'NODE_REWARD', 'NODE_PURCHASE', 'USDT_DEPOSIT', 'BNB_DEPOSIT', 'COIN_SWAP', 'WITHDRAWAL', 'BLOCKCHAIN_DEPOSIT', 'DEPOSIT_CREDIT')),
+  CONSTRAINT chk_fle_source_type CHECK (source_type IN ('REFERRAL_COMMISSION', 'MATCHING_BONUS', 'PROMOTION_BONUS', 'NODE_REWARD', 'NODE_PURCHASE', 'USDT_DEPOSIT', 'BNB_DEPOSIT', 'COIN_SWAP', 'WITHDRAWAL', 'BLOCKCHAIN_DEPOSIT', 'DEPOSIT_CREDIT', 'ADMIN_ADJUSTMENT')),
   CONSTRAINT chk_fle_status CHECK (status IN ('SETTLED', 'REVERSED', 'PENDING')),
   CONSTRAINT chk_fle_amount CHECK (amount > 0),
   CONSTRAINT uq_fle_source_entry_type UNIQUE (source_type, source_id, entry_type)

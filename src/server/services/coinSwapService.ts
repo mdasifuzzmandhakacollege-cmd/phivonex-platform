@@ -101,8 +101,26 @@ export async function getUserCoinBalance(userId: string): Promise<UserCoinBalanc
   );
   const totalSoldCoins = Number(soldRes.rows[0]?.total || 0);
 
-  const totalEarnedCoins = totalEarnedRewards + totalBoughtCoins;
-  const availableCoinBalance = Math.max(0, Number((totalEarnedCoins - totalSoldCoins).toFixed(6)));
+  // 4. Admin PHIVO credits & debits from financial_ledger_entries
+  const adminPhivoRes = await db.query<{ entry_type: string; total: string | number }>(
+    `
+    SELECT entry_type, COALESCE(SUM(amount), 0) AS total
+    FROM financial_ledger_entries
+    WHERE user_id = $1 AND currency = 'PHIVO' AND status = 'SETTLED'
+    GROUP BY entry_type
+    `,
+    [userId]
+  );
+
+  let adminPhivoCredits = 0;
+  let adminPhivoDebits = 0;
+  for (const row of adminPhivoRes.rows) {
+    if (row.entry_type === 'CREDIT') adminPhivoCredits += Number(row.total);
+    else if (row.entry_type === 'DEBIT' || row.entry_type === 'REVERSAL') adminPhivoDebits += Number(row.total);
+  }
+
+  const totalEarnedCoins = totalEarnedRewards + totalBoughtCoins + adminPhivoCredits;
+  const availableCoinBalance = Math.max(0, Number((totalEarnedCoins - totalSoldCoins - adminPhivoDebits).toFixed(6)));
 
   return {
     availableCoinBalance,

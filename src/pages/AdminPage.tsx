@@ -41,6 +41,7 @@ import {
   Edit3,
   Trophy,
   Mail,
+  User,
 } from 'lucide-react';
 import { PhivonexLogo } from '../components/brand/PhivonexLogo';
 import { WithdrawalManagement } from '../components/admin/WithdrawalManagement';
@@ -53,6 +54,7 @@ import { OffersManagement } from '../components/admin/OffersManagement';
 import { WithdrawalStateLogsView } from '../components/admin/WithdrawalStateLogsView';
 import { LeadershipRankControl } from '../components/admin/LeadershipRankControl';
 import { AdminCommunicationsHub } from '../components/admin/AdminCommunicationsHub';
+import { User360View } from '../components/admin/User360View';
 import { AuditLogger, logAction, exportAuditLogsToCsv } from '../services/auditLogger';
 
 interface AdminPageProps {
@@ -147,6 +149,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onNavigate, currentPath = 
   const [editUserStatus, setEditUserStatus] = useState<'ACTIVE' | 'LOCKED' | 'SUSPENDED'>('ACTIVE');
   const [editUserReason, setEditUserReason] = useState<string>('');
   const [savingUserEdit, setSavingUserEdit] = useState<boolean>(false);
+  const [selectedUser360Id, setSelectedUser360Id] = useState<string | null>(null);
 
   const handleOpenUserEditModal = (u: any) => {
     setEditingUser(u);
@@ -1430,6 +1433,14 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onNavigate, currentPath = 
                         <td className="py-3 px-3 text-right">
                           <div className="flex items-center justify-end gap-1.5">
                             <button
+                              onClick={() => setSelectedUser360Id(u.id)}
+                              className="px-2.5 py-1 rounded bg-[#00CFFF] hover:bg-[#00b8e6] text-slate-950 text-[10px] font-bold flex items-center gap-1 cursor-pointer shadow"
+                              title="Open User 360° View & Wallet Control"
+                            >
+                              <User className="w-3 h-3" /> View 360°
+                            </button>
+
+                            <button
                               onClick={() => handleOpenUserEditModal(u)}
                               className="px-2 py-1 rounded bg-[#00CFFF]/10 hover:bg-[#00CFFF]/20 text-[#00CFFF] text-[10px] font-bold border border-[#00CFFF]/30 flex items-center gap-1 cursor-pointer"
                               title="Edit user profile safe fields (Audited)"
@@ -1707,6 +1718,15 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onNavigate, currentPath = 
             </div>
           </div>
         </div>
+      )}
+
+      {/* USER 360 COMPREHENSIVE VIEW OVERLAY */}
+      {selectedUser360Id && (
+        <User360View
+          userId={selectedUser360Id}
+          onClose={() => setSelectedUser360Id(null)}
+          onUserUpdated={fetchAdminData}
+        />
       )}
     </div>
   );

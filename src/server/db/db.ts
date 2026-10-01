@@ -358,14 +358,24 @@ async function initSchema(client: DatabaseClient) {
         status VARCHAR(50) NOT NULL,
         owner_user_id UUID NULL REFERENCES users(id) ON DELETE SET NULL,
         reserved_by_user_id UUID NULL REFERENCES users(id) ON DELETE SET NULL,
+        product_version VARCHAR(50) NOT NULL DEFAULT 'GENESIS_V1',
+        purchase_price_usd NUMERIC(12, 2) NOT NULL DEFAULT 1000.00,
+        phivo_reference_price_at_purchase NUMERIC(10, 4) NOT NULL DEFAULT 0.10,
+        lifetime_phivo_allocation NUMERIC(14, 2) NOT NULL DEFAULT 10000.00,
+        term_days INTEGER NOT NULL DEFAULT 400,
+        daily_phivo_emission NUMERIC(10, 2) NOT NULL DEFAULT 25.00,
+        purchase_timestamp TIMESTAMP WITH TIME ZONE NULL,
         reserved_at TIMESTAMP WITH TIME ZONE NULL,
         activated_at TIMESTAMP WITH TIME ZONE NULL,
+        maturity_timestamp TIMESTAMP WITH TIME ZONE NULL,
+        distributed_phivo NUMERIC(14, 2) NOT NULL DEFAULT 0.00,
+        remaining_phivo NUMERIC(14, 2) NOT NULL DEFAULT 10000.00,
         created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
         CONSTRAINT chk_node_number_range CHECK (node_number >= 1 AND node_number <= 10000),
-        CONSTRAINT chk_node_status_valid CHECK (status IN ('AVAILABLE', 'RESERVED', 'ACTIVE', 'RETIRED')),
+        CONSTRAINT chk_node_status_valid CHECK (status IN ('AVAILABLE', 'RESERVED', 'PURCHASED', 'ACTIVE', 'EMITTING', 'MATURED', 'RETIRED')),
         CONSTRAINT chk_node_available_owner CHECK (status != 'AVAILABLE' OR owner_user_id IS NULL),
-        CONSTRAINT chk_node_active_owner CHECK (status != 'ACTIVE' OR owner_user_id IS NOT NULL)
+        CONSTRAINT chk_node_active_owner CHECK (status NOT IN ('ACTIVE', 'EMITTING', 'MATURED') OR owner_user_id IS NOT NULL)
       );
 
       CREATE TABLE IF NOT EXISTS node_orders (
@@ -431,6 +441,23 @@ async function initSchema(client: DatabaseClient) {
         CONSTRAINT chk_placement_side CHECK (side IS NULL OR side IN ('LEFT', 'RIGHT')),
         CONSTRAINT chk_placement_status CHECK (status IN ('UNPLACED', 'PLACED'))
       );
+
+      ALTER TABLE nodes ADD COLUMN IF NOT EXISTS product_version VARCHAR(50) NOT NULL DEFAULT 'GENESIS_V1';
+      ALTER TABLE nodes ADD COLUMN IF NOT EXISTS purchase_price_usd NUMERIC(12, 2) NOT NULL DEFAULT 1000.00;
+      ALTER TABLE nodes ADD COLUMN IF NOT EXISTS phivo_reference_price_at_purchase NUMERIC(10, 4) NOT NULL DEFAULT 0.10;
+      ALTER TABLE nodes ADD COLUMN IF NOT EXISTS lifetime_phivo_allocation NUMERIC(14, 2) NOT NULL DEFAULT 10000.00;
+      ALTER TABLE nodes ADD COLUMN IF NOT EXISTS term_days INTEGER NOT NULL DEFAULT 400;
+      ALTER TABLE nodes ADD COLUMN IF NOT EXISTS daily_phivo_emission NUMERIC(10, 2) NOT NULL DEFAULT 25.00;
+      ALTER TABLE nodes ADD COLUMN IF NOT EXISTS purchase_timestamp TIMESTAMP WITH TIME ZONE NULL;
+      ALTER TABLE nodes ADD COLUMN IF NOT EXISTS maturity_timestamp TIMESTAMP WITH TIME ZONE NULL;
+      ALTER TABLE nodes ADD COLUMN IF NOT EXISTS distributed_phivo NUMERIC(14, 2) NOT NULL DEFAULT 0.00;
+      ALTER TABLE nodes ADD COLUMN IF NOT EXISTS remaining_phivo NUMERIC(14, 2) NOT NULL DEFAULT 10000.00;
+
+      ALTER TABLE nodes DROP CONSTRAINT IF EXISTS chk_node_status_valid;
+      ALTER TABLE nodes ADD CONSTRAINT chk_node_status_valid CHECK (status IN ('AVAILABLE', 'RESERVED', 'PURCHASED', 'ACTIVE', 'EMITTING', 'MATURED', 'RETIRED'));
+
+      ALTER TABLE nodes DROP CONSTRAINT IF EXISTS chk_node_active_owner;
+      ALTER TABLE nodes ADD CONSTRAINT chk_node_active_owner CHECK (status NOT IN ('ACTIVE', 'EMITTING', 'MATURED') OR owner_user_id IS NOT NULL);
 
       -- Task #10: Binary Volume Engine Tables
       CREATE TABLE IF NOT EXISTS binary_volume_events (
@@ -801,7 +828,7 @@ async function initSchema(client: DatabaseClient) {
     try {
       await client.exec(`
         ALTER TABLE financial_ledger_entries DROP CONSTRAINT IF EXISTS chk_fle_source_type;
-        ALTER TABLE financial_ledger_entries ADD CONSTRAINT chk_fle_source_type CHECK (source_type IN ('REFERRAL_COMMISSION', 'MATCHING_BONUS', 'PROMOTION_BONUS', 'NODE_REWARD', 'WITHDRAWAL', 'NODE_PURCHASE', 'USDT_DEPOSIT', 'BNB_DEPOSIT', 'COIN_SWAP', 'BLOCKCHAIN_DEPOSIT', 'DEPOSIT_CREDIT'));
+        ALTER TABLE financial_ledger_entries ADD CONSTRAINT chk_fle_source_type CHECK (source_type IN ('REFERRAL_COMMISSION', 'MATCHING_BONUS', 'PROMOTION_BONUS', 'NODE_REWARD', 'WITHDRAWAL', 'NODE_PURCHASE', 'USDT_DEPOSIT', 'BNB_DEPOSIT', 'COIN_SWAP', 'BLOCKCHAIN_DEPOSIT', 'DEPOSIT_CREDIT', 'ADMIN_ADJUSTMENT'));
       `);
     } catch {
       // Constraint update ignored if already applied or table structure matches
@@ -952,7 +979,7 @@ async function initSchema(client: DatabaseClient) {
       // Update financial_ledger_entries constraint to support BLOCKCHAIN_DEPOSIT & COIN_SWAP & NODE_PURCHASE
       await client.exec(`
         ALTER TABLE financial_ledger_entries DROP CONSTRAINT IF EXISTS chk_fle_source_type;
-        ALTER TABLE financial_ledger_entries ADD CONSTRAINT chk_fle_source_type CHECK (source_type IN ('REFERRAL_COMMISSION', 'MATCHING_BONUS', 'PROMOTION_BONUS', 'NODE_REWARD', 'WITHDRAWAL', 'BLOCKCHAIN_DEPOSIT', 'COIN_SWAP', 'NODE_PURCHASE', 'USDT_DEPOSIT', 'BNB_DEPOSIT', 'DEPOSIT_CREDIT'));
+        ALTER TABLE financial_ledger_entries ADD CONSTRAINT chk_fle_source_type CHECK (source_type IN ('REFERRAL_COMMISSION', 'MATCHING_BONUS', 'PROMOTION_BONUS', 'NODE_REWARD', 'WITHDRAWAL', 'BLOCKCHAIN_DEPOSIT', 'COIN_SWAP', 'NODE_PURCHASE', 'USDT_DEPOSIT', 'BNB_DEPOSIT', 'DEPOSIT_CREDIT', 'ADMIN_ADJUSTMENT'));
       `);
     } catch (task171Err) {
       console.warn('[DB Migration] Task #17.1 BSC schema migration warning:', task171Err);
@@ -1041,9 +1068,9 @@ async function initSchema(client: DatabaseClient) {
 
         ALTER TABLE coin_swap_transactions ADD COLUMN IF NOT EXISTS direction VARCHAR(20) NOT NULL DEFAULT 'COIN_TO_USDT';
 
-        -- Update financial_ledger_entries constraint to support COIN_SWAP
+        -- Update financial_ledger_entries constraint to support COIN_SWAP & ADMIN_ADJUSTMENT
         ALTER TABLE financial_ledger_entries DROP CONSTRAINT IF EXISTS chk_fle_source_type;
-        ALTER TABLE financial_ledger_entries ADD CONSTRAINT chk_fle_source_type CHECK (source_type IN ('REFERRAL_COMMISSION', 'MATCHING_BONUS', 'PROMOTION_BONUS', 'NODE_REWARD', 'WITHDRAWAL', 'BLOCKCHAIN_DEPOSIT', 'COIN_SWAP', 'NODE_PURCHASE', 'USDT_DEPOSIT', 'BNB_DEPOSIT', 'DEPOSIT_CREDIT'));
+        ALTER TABLE financial_ledger_entries ADD CONSTRAINT chk_fle_source_type CHECK (source_type IN ('REFERRAL_COMMISSION', 'MATCHING_BONUS', 'PROMOTION_BONUS', 'NODE_REWARD', 'WITHDRAWAL', 'BLOCKCHAIN_DEPOSIT', 'COIN_SWAP', 'NODE_PURCHASE', 'USDT_DEPOSIT', 'BNB_DEPOSIT', 'DEPOSIT_CREDIT', 'ADMIN_ADJUSTMENT'));
       `);
     } catch (task191Err) {
       console.warn('[DB Migration] Task #19.1 Swap Transactions schema migration warning:', task191Err);

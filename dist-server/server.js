@@ -2892,7 +2892,7 @@ async function initSchema(client) {
     try {
       await client.exec(`
         ALTER TABLE financial_ledger_entries DROP CONSTRAINT IF EXISTS chk_fle_source_type;
-        ALTER TABLE financial_ledger_entries ADD CONSTRAINT chk_fle_source_type CHECK (source_type IN ('REFERRAL_COMMISSION', 'MATCHING_BONUS', 'PROMOTION_BONUS', 'NODE_REWARD', 'WITHDRAWAL', 'NODE_PURCHASE', 'USDT_DEPOSIT', 'BNB_DEPOSIT', 'COIN_SWAP', 'BLOCKCHAIN_DEPOSIT', 'DEPOSIT_CREDIT'));
+        ALTER TABLE financial_ledger_entries ADD CONSTRAINT chk_fle_source_type CHECK (source_type IN ('REFERRAL_COMMISSION', 'MATCHING_BONUS', 'PROMOTION_BONUS', 'NODE_REWARD', 'WITHDRAWAL', 'NODE_PURCHASE', 'USDT_DEPOSIT', 'BNB_DEPOSIT', 'COIN_SWAP', 'BLOCKCHAIN_DEPOSIT', 'DEPOSIT_CREDIT', 'ADMIN_ADJUSTMENT'));
       `);
     } catch {
     }
@@ -3117,9 +3117,9 @@ async function initSchema(client) {
 
         ALTER TABLE coin_swap_transactions ADD COLUMN IF NOT EXISTS direction VARCHAR(20) NOT NULL DEFAULT 'COIN_TO_USDT';
 
-        -- Update financial_ledger_entries constraint to support COIN_SWAP
+        -- Update financial_ledger_entries constraint to support COIN_SWAP & ADMIN_ADJUSTMENT
         ALTER TABLE financial_ledger_entries DROP CONSTRAINT IF EXISTS chk_fle_source_type;
-        ALTER TABLE financial_ledger_entries ADD CONSTRAINT chk_fle_source_type CHECK (source_type IN ('REFERRAL_COMMISSION', 'MATCHING_BONUS', 'PROMOTION_BONUS', 'NODE_REWARD', 'WITHDRAWAL', 'BLOCKCHAIN_DEPOSIT', 'COIN_SWAP', 'NODE_PURCHASE', 'USDT_DEPOSIT', 'BNB_DEPOSIT', 'DEPOSIT_CREDIT'));
+        ALTER TABLE financial_ledger_entries ADD CONSTRAINT chk_fle_source_type CHECK (source_type IN ('REFERRAL_COMMISSION', 'MATCHING_BONUS', 'PROMOTION_BONUS', 'NODE_REWARD', 'WITHDRAWAL', 'BLOCKCHAIN_DEPOSIT', 'COIN_SWAP', 'NODE_PURCHASE', 'USDT_DEPOSIT', 'BNB_DEPOSIT', 'DEPOSIT_CREDIT', 'ADMIN_ADJUSTMENT'));
       `);
     } catch (task191Err) {
       console.warn("[DB Migration] Task #19.1 Swap Transactions schema migration warning:", task191Err);
@@ -3788,12 +3788,1114 @@ var init_db = __esm({
   }
 });
 
-// src/server/services/adminService.ts
+// src/server/services/publicNetworkService.ts
+import { EventEmitter as EventEmitter2 } from "events";
+async function getPublicNetworkSummary() {
+  const db = await getDb();
+  const nodeCountRes = await db.query(
+    `SELECT status, COUNT(*)::int AS count FROM nodes GROUP BY status`
+  );
+  let activeNodes = 0;
+  let reservedNodes = 0;
+  let availableNodes = 0;
+  let retiredNodes = 0;
+  for (const row of nodeCountRes.rows) {
+    const cnt = Number(row.count || 0);
+    if (row.status === "ACTIVE") activeNodes = cnt;
+    else if (row.status === "RESERVED") reservedNodes = cnt;
+    else if (row.status === "AVAILABLE") availableNodes = cnt;
+    else if (row.status === "RETIRED") retiredNodes = cnt;
+  }
+  const totalAllocated = activeNodes + reservedNodes + retiredNodes;
+  if (availableNodes === 0 && totalAllocated < GENESIS_NODE_CAP) {
+    availableNodes = Math.max(0, GENESIS_NODE_CAP - totalAllocated);
+  }
+  const allocatedNodes = activeNodes + reservedNodes;
+  const allocationPercent = Number((allocatedNodes / GENESIS_NODE_CAP * 100).toFixed(2));
+  const epochRes = await db.query(
+    `SELECT COALESCE(MAX(epoch_number), 1)::int AS max_epoch FROM reward_epochs`
+  );
+  const currentRewardEpoch = Number(epochRes.rows[0]?.max_epoch || 1);
+  const txnRes = await db.query(
+    `SELECT COUNT(*)::int AS count FROM financial_ledger_entries`
+  );
+  const totalNetworkTransactions = Number(txnRes.rows[0]?.count || 0);
+  let conversionRateUsd = null;
+  try {
+    const configRes = await db.query(
+      `SELECT config_value, status FROM system_economic_configs WHERE config_key = 'INTERNAL_COIN_PRICE_USDT'`
+    );
+    if (configRes.rows.length > 0 && configRes.rows[0].status === "ACTIVE") {
+      const valStr = configRes.rows[0].config_value;
+      const val = typeof valStr === "string" ? JSON.parse(valStr) : valStr;
+      if (val && typeof val.priceUsdt === "number" && val.priceUsdt > 0) {
+        conversionRateUsd = val.priceUsdt;
+      }
+    }
+  } catch (err) {
+    console.warn("[Public API] Error loading INTERNAL_COIN_PRICE_USDT config value for summary:", err);
+  }
+  let networkStatus = "OPERATIONAL";
+  try {
+    await db.query("SELECT 1");
+  } catch {
+    networkStatus = "DEGRADED";
+  }
+  return {
+    genesisNodeCap: GENESIS_NODE_CAP,
+    activeNodes,
+    reservedNodes,
+    availableNodes,
+    retiredNodes,
+    allocationPercent,
+    currentRewardEpoch,
+    totalNetworkTransactions,
+    networkStatus,
+    updatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+    conversionRateUsd
+  };
+}
+async function getPublicNetworkEvents(limit = 20) {
+  const db = await getDb();
+  const events = [];
+  try {
+    const activeNodesRes = await db.query(
+      `SELECT public_node_id, activated_at 
+       FROM nodes 
+       WHERE status = 'ACTIVE' AND activated_at IS NOT NULL 
+       ORDER BY activated_at DESC 
+       LIMIT $1`,
+      [limit]
+    );
+    for (const row of activeNodesRes.rows) {
+      const ts = new Date(row.activated_at).toISOString();
+      events.push({
+        id: `evt-node-${row.public_node_id}`,
+        type: "node.activated",
+        title: `${row.public_node_id} Activated`,
+        description: `Genesis validator node ${row.public_node_id} successfully activated on protocol ledger.`,
+        timestamp: ts,
+        publicId: row.public_node_id
+      });
+    }
+    const epochRes = await db.query(
+      `SELECT public_epoch_id, epoch_number, status, settled_at, created_at 
+       FROM reward_epochs 
+       ORDER BY created_at DESC 
+       LIMIT $1`,
+      [limit]
+    );
+    for (const row of epochRes.rows) {
+      const ts = new Date(row.settled_at || row.created_at).toISOString();
+      events.push({
+        id: `evt-epoch-${row.public_epoch_id}`,
+        type: "reward.epoch.completed",
+        title: `Reward Epoch #${row.epoch_number} ${row.status === "COMPLETED" ? "Completed" : "Initiated"}`,
+        description: `Mining reward epoch #${row.epoch_number} state verified on protocol ledger.`,
+        timestamp: ts,
+        publicId: row.public_epoch_id
+      });
+    }
+    const matchingRes = await db.query(
+      `SELECT public_settlement_id, business_date, settled_at 
+       FROM binary_matching_settlements 
+       WHERE status = 'COMPLETED' 
+       ORDER BY settled_at DESC 
+       LIMIT $1`,
+      [limit]
+    );
+    for (const row of matchingRes.rows) {
+      const ts = new Date(row.settled_at).toISOString();
+      const dateStr = typeof row.business_date === "string" ? row.business_date.split("T")[0] : new Date(row.business_date).toISOString().split("T")[0];
+      events.push({
+        id: `evt-match-${row.public_settlement_id}`,
+        type: "matching.completed",
+        title: `Matching Settlement Completed`,
+        description: `Binary team network consensus settlement finalized for date ${dateStr}.`,
+        timestamp: ts,
+        publicId: row.public_settlement_id
+      });
+    }
+    const promoRes = await db.query(
+      `SELECT public_bonus_id, milestone, qualified_at 
+       FROM promotion_bonuses 
+       WHERE status = 'EARNED' 
+       ORDER BY qualified_at DESC 
+       LIMIT $1`,
+      [limit]
+    );
+    for (const row of promoRes.rows) {
+      const ts = new Date(row.qualified_at).toISOString();
+      events.push({
+        id: `evt-promo-${row.public_bonus_id}`,
+        type: "promotion.earned",
+        title: `Promotion Milestone (${row.milestone}) Qualified`,
+        description: `Network operator volume qualification reached milestone Tier ${row.milestone}.`,
+        timestamp: ts,
+        publicId: row.public_bonus_id
+      });
+    }
+    const fleRes = await db.query(
+      `SELECT public_txn_id, source_type, created_at 
+       FROM financial_ledger_entries 
+       ORDER BY created_at DESC 
+       LIMIT $1`,
+      [limit]
+    );
+    for (const row of fleRes.rows) {
+      const ts = new Date(row.created_at).toISOString();
+      events.push({
+        id: `evt-fle-${row.public_txn_id}`,
+        type: "ledger.checkpoint",
+        title: `Ledger Checkpoint ${row.public_txn_id}`,
+        description: `Cryptographic financial ledger entry posted for channel ${row.source_type}.`,
+        timestamp: ts,
+        publicId: row.public_txn_id
+      });
+    }
+    events.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+    return events.slice(0, limit);
+  } catch (err) {
+    console.error("[PublicNetworkService] Error fetching public network events:", err);
+    return [];
+  }
+}
+function broadcastPublicEvent(event) {
+  publicNetworkEventEmitter.emit("networkEvent", event);
+}
+var publicNetworkEventEmitter;
+var init_publicNetworkService = __esm({
+  "src/server/services/publicNetworkService.ts"() {
+    init_db();
+    init_nodeConfig();
+    publicNetworkEventEmitter = new EventEmitter2();
+    publicNetworkEventEmitter.setMaxListeners(100);
+  }
+});
+
+// src/server/services/systemConfigBroadcaster.ts
+async function broadcastSystemConfigChange(key, value, category = "SYSTEM") {
+  const timestamp = (/* @__PURE__ */ new Date()).toISOString();
+  const normalizedKey = key.toUpperCase();
+  if (process.env.NODE_ENV === "test" || process.env.APP_ENV === "test") {
+    try {
+      publicNetworkEventEmitter.emit("networkEvent", {
+        type: "system_config",
+        key: normalizedKey,
+        value,
+        category,
+        updatedAt: timestamp
+      });
+    } catch (sseErr) {
+      console.warn("[SystemConfigBroadcaster] SSE broadcast warning:", sseErr);
+    }
+    return;
+  }
+  try {
+    await adminFirestore.collection("system_settings").doc("configs").set(
+      {
+        [normalizedKey]: value,
+        updatedAt: timestamp,
+        lastUpdatedKey: normalizedKey
+      },
+      { merge: true }
+    );
+    if (normalizedKey.includes("WITHDRAWAL")) {
+      await adminFirestore.collection("system_settings").doc("withdrawals").set(
+        {
+          [normalizedKey]: value,
+          minWithdrawalAmount: normalizedKey === "MIN_WITHDRAWAL_AMOUNT" ? Number(value) : void 0,
+          autoWithdrawalEnabled: normalizedKey === "AUTO_WITHDRAWAL_ENABLED" ? Boolean(value) : void 0,
+          updatedAt: timestamp
+        },
+        { merge: true }
+      );
+    }
+    if (normalizedKey.includes("COIN") || normalizedKey.includes("PRICE") || normalizedKey.includes("NODE")) {
+      await adminFirestore.collection("system_settings").doc("economic").set(
+        {
+          [normalizedKey]: value,
+          updatedAt: timestamp
+        },
+        { merge: true }
+      );
+    }
+  } catch (fsErr) {
+    console.warn("[SystemConfigBroadcaster] Firestore real-time sync warning:", fsErr);
+  }
+  try {
+    publicNetworkEventEmitter.emit("networkEvent", {
+      type: "system_config",
+      key: normalizedKey,
+      value,
+      category,
+      updatedAt: timestamp
+    });
+  } catch (sseErr) {
+    console.warn("[SystemConfigBroadcaster] SSE broadcast warning:", sseErr);
+  }
+}
+var init_systemConfigBroadcaster = __esm({
+  "src/server/services/systemConfigBroadcaster.ts"() {
+    init_firebase_admin();
+    init_publicNetworkService();
+  }
+});
+
+// src/server/services/economicService.ts
 import { v4 as uuidv47 } from "uuid";
+function parseConfigValue(val) {
+  if (typeof val === "string") {
+    try {
+      return JSON.parse(val);
+    } catch {
+      return val;
+    }
+  }
+  return val;
+}
+function mapRowToConfigRecord(row) {
+  return {
+    id: row.id,
+    configKey: row.config_key,
+    configValue: parseConfigValue(row.config_value),
+    category: row.category,
+    description: row.description,
+    status: row.status,
+    version: Number(row.version || 1),
+    effectiveFrom: row.effective_from ? new Date(row.effective_from).toISOString() : new Date(row.updated_at).toISOString(),
+    updatedByAdminId: row.updated_by_admin_id || null,
+    updatedByAdminPublicId: row.updated_by_admin_public_id || "SYSTEM_INIT",
+    createdAt: new Date(row.created_at).toISOString(),
+    updatedAt: new Date(row.updated_at).toISOString()
+  };
+}
+function mapRowToAuditRecord(row) {
+  return {
+    id: row.id,
+    configKey: row.config_key,
+    category: row.category,
+    oldValue: parseConfigValue(row.old_value),
+    newValue: parseConfigValue(row.new_value),
+    version: Number(row.version),
+    adminUserId: row.admin_user_id || null,
+    adminPublicId: row.admin_public_id,
+    reason: row.reason || null,
+    effectiveFrom: new Date(row.effective_from).toISOString(),
+    ipAddress: row.ip_address || null,
+    createdAt: new Date(row.created_at).toISOString()
+  };
+}
+async function getAllEconomicConfigs() {
+  const db = await getDb();
+  const res = await db.query(`
+    SELECT * FROM system_economic_configs
+    ORDER BY category ASC, config_key ASC
+  `);
+  return res.rows.map(mapRowToConfigRecord);
+}
+async function getEconomicConfigByKey(configKey, dbClient) {
+  const db = dbClient || await getDb();
+  const res = await db.query(
+    `SELECT * FROM system_economic_configs WHERE config_key = $1`,
+    [configKey.trim().toUpperCase()]
+  );
+  if (res.rows.length === 0) return null;
+  return mapRowToConfigRecord(res.rows[0]);
+}
+async function updateEconomicConfig(params) {
+  const {
+    configKey,
+    configValue,
+    status,
+    effectiveFrom,
+    reason,
+    adminUserId,
+    adminPublicId,
+    ipAddress
+  } = params;
+  const keyUpper = configKey.trim().toUpperCase();
+  if (keyUpper === "GENESIS_NODE_CAP") {
+    throw new Error("IMMUTABLE_PARAMETER_ERROR: Genesis Node Cap (10,000) is strictly immutable and cannot be modified.");
+  }
+  const current = await getEconomicConfigByKey(keyUpper);
+  if (!current) {
+    throw new Error(`NOT_FOUND: Economic configuration parameter '${keyUpper}' does not exist.`);
+  }
+  validateEconomicValue(keyUpper, configValue);
+  const db = await getDb();
+  const now = /* @__PURE__ */ new Date();
+  const effectiveDate = effectiveFrom ? new Date(effectiveFrom) : now;
+  const newVersion = current.version + 1;
+  const serializedValue = JSON.stringify(configValue);
+  const newStatus = status || current.status;
+  const updateRes = await db.query(
+    `
+    UPDATE system_economic_configs
+    SET 
+      config_value = $1,
+      status = $2,
+      version = $3,
+      effective_from = $4,
+      updated_by_admin_id = $5,
+      updated_by_admin_public_id = $6,
+      updated_at = $7
+    WHERE config_key = $8
+    RETURNING *
+    `,
+    [
+      serializedValue,
+      newStatus,
+      newVersion,
+      effectiveDate,
+      adminUserId || null,
+      adminPublicId,
+      now,
+      keyUpper
+    ]
+  );
+  if (updateRes.rows.length === 0) {
+    throw new Error("CONCURRENCY_ERROR: Economic config update failed due to concurrent modification.");
+  }
+  const updatedConfig = mapRowToConfigRecord(updateRes.rows[0]);
+  const auditId = uuidv47();
+  const auditRes = await db.query(
+    `
+    INSERT INTO economic_config_audit_logs (
+      id, config_key, category, old_value, new_value, version, admin_user_id, admin_public_id, reason, effective_from, ip_address, created_at
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+    RETURNING *
+    `,
+    [
+      auditId,
+      keyUpper,
+      current.category,
+      JSON.stringify(current.configValue),
+      serializedValue,
+      newVersion,
+      adminUserId || null,
+      adminPublicId,
+      reason || "Administrative economic parameter adjustment",
+      effectiveDate,
+      ipAddress || null,
+      now
+    ]
+  );
+  const auditLog = mapRowToAuditRecord(auditRes.rows[0]);
+  try {
+    await broadcastSystemConfigChange(keyUpper, updatedConfig.configValue, current.category);
+  } catch (bcErr) {
+    console.warn("[EconomicService] Config broadcast warning:", bcErr);
+  }
+  return { config: updatedConfig, auditLog };
+}
+function validateEconomicValue(key, value) {
+  if (key === "NODE_BASE_PRICE_USD") {
+    const num = Number(value);
+    if (isNaN(num) || num <= 0) {
+      throw new Error("INVALID_VALUE: Node base price must be a positive number greater than 0.");
+    }
+  }
+  if (key === "DIRECT_REFERRAL_COMMISSION_USD") {
+    const num = Number(value);
+    if (isNaN(num) || num < 0) {
+      throw new Error("INVALID_VALUE: Direct referral commission must be a non-negative number.");
+    }
+  }
+  if (key === "BSC_REQUIRED_CONFIRMATIONS") {
+    const num = Number(value);
+    if (!Number.isInteger(num) || num < 1) {
+      throw new Error("INVALID_VALUE: Required confirmations must be an integer >= 1.");
+    }
+  }
+  if (key === "NODE_REWARD_RATE_PER_EPOCH") {
+    if (value !== null && value !== void 0) {
+      let num;
+      if (typeof value === "object" && value !== null) {
+        num = Number(value.rateUsd !== void 0 ? value.rateUsd : value.rewardPerNode !== void 0 ? value.rewardPerNode : NaN);
+      } else {
+        num = Number(value);
+      }
+      if (isNaN(num) || num <= 0) {
+        throw new Error("INVALID_VALUE: Reward rate must be null (unconfigured) or a positive number greater than 0.");
+      }
+    }
+  }
+  if (key === "INTERNAL_COIN_PRICE_USDT") {
+    if (typeof value === "object" && value !== null) {
+      const price = Number(value.priceUsdt);
+      const isEnabled = value.swapEnabled !== false;
+      if (isEnabled && (isNaN(price) || price <= 0)) {
+        throw new Error("INVALID_VALUE: Internal coin price in USDT must be a positive number.");
+      }
+    } else {
+      const price = Number(value);
+      if (isNaN(price) || price <= 0) {
+        throw new Error("INVALID_VALUE: Internal coin price in USDT must be a positive number.");
+      }
+    }
+  }
+  if (key === "MATCHING_TIERS_CONFIG") {
+    if (!Array.isArray(value) || value.length === 0) {
+      throw new Error("INVALID_VALUE: Matching tiers configuration must be a non-empty array of tier objects.");
+    }
+    for (const tier of value) {
+      if (!tier.units || Number(tier.units) <= 0 || !tier.rewardUsd || Number(tier.rewardUsd) <= 0) {
+        throw new Error("INVALID_VALUE: Each matching tier must have positive units and rewardUsd.");
+      }
+    }
+  }
+  if (key === "PROMOTION_MILESTONES_CONFIG") {
+    if (!Array.isArray(value) || value.length === 0) {
+      throw new Error("INVALID_VALUE: Promotion milestones configuration must be a non-empty array of milestone objects.");
+    }
+    for (const m of value) {
+      if (!m.milestone || !m.units || Number(m.units) <= 0 || !m.rewardUsd || Number(m.rewardUsd) <= 0) {
+        throw new Error("INVALID_VALUE: Each promotion milestone must contain milestone key, positive units, and positive rewardUsd.");
+      }
+    }
+  }
+}
+async function getEconomicAuditLogs(page = 1, limit = 20, configKey) {
+  const db = await getDb();
+  const safePage = Math.max(1, page);
+  const safeLimit = Math.min(100, Math.max(1, limit));
+  const offset = (safePage - 1) * safeLimit;
+  let whereClauses = ["1=1"];
+  let queryParams = [];
+  let paramIdx = 1;
+  if (configKey && configKey.trim() && configKey !== "ALL") {
+    whereClauses.push(`config_key = $${paramIdx}`);
+    queryParams.push(configKey.trim().toUpperCase());
+    paramIdx++;
+  }
+  const whereSql = whereClauses.join(" AND ");
+  const countRes = await db.query(
+    `SELECT COUNT(*)::int AS count FROM economic_config_audit_logs WHERE ${whereSql}`,
+    queryParams
+  );
+  const totalCount = Number(countRes.rows[0]?.count || 0);
+  const txQueryParams = [...queryParams, safeLimit, offset];
+  const listRes = await db.query(
+    `
+    SELECT * FROM economic_config_audit_logs
+    WHERE ${whereSql}
+    ORDER BY created_at DESC
+    LIMIT $${paramIdx} OFFSET $${paramIdx + 1}
+    `,
+    txQueryParams
+  );
+  const totalPages = Math.ceil(totalCount / safeLimit) || 1;
+  return {
+    logs: listRes.rows.map(mapRowToAuditRecord),
+    pagination: {
+      page: safePage,
+      limit: safeLimit,
+      totalCount,
+      totalPages
+    }
+  };
+}
+async function getNodeBasePrice(dbClient) {
+  const cfg = await getEconomicConfigByKey("NODE_BASE_PRICE_USD", dbClient);
+  if (cfg && typeof cfg.configValue === "number") {
+    return cfg.configValue;
+  }
+  return 1e3;
+}
+async function getBnbPriceUsd() {
+  const cfg = await getEconomicConfigByKey("BNB_PRICE_USD");
+  if (cfg && cfg.status === "ACTIVE" && cfg.configValue !== null && cfg.configValue !== void 0) {
+    const price = Number(cfg.configValue);
+    if (!isNaN(price) && price > 0) return price;
+  }
+  if (process.env.BNB_PRICE_USD) {
+    const envPrice = Number(process.env.BNB_PRICE_USD);
+    if (!isNaN(envPrice) && envPrice > 0) return envPrice;
+  }
+  return null;
+}
+async function isNodeSalesEnabled(dbClient) {
+  const cfg = await getEconomicConfigByKey("NODE_SALES_ENABLED", dbClient);
+  if (cfg) {
+    return cfg.status === "ACTIVE" && Boolean(cfg.configValue);
+  }
+  return true;
+}
+async function getDirectReferralCommissionRate() {
+  const cfg = await getEconomicConfigByKey("DIRECT_REFERRAL_COMMISSION_USD");
+  if (cfg && typeof cfg.configValue === "number") {
+    return cfg.configValue;
+  }
+  return 50;
+}
+async function isNodeRewardsEnabled() {
+  const cfg = await getEconomicConfigByKey("NODE_REWARDS_ENABLED");
+  if (cfg) {
+    return cfg.status === "ACTIVE" && Boolean(cfg.configValue);
+  }
+  return true;
+}
+async function getNodeRewardRatePerEpoch() {
+  const cfg = await getEconomicConfigByKey("NODE_REWARD_RATE_PER_EPOCH");
+  if (cfg && cfg.status === "ACTIVE" && cfg.configValue !== null && cfg.configValue !== void 0) {
+    const rate = Number(cfg.configValue);
+    return isNaN(rate) || rate <= 0 ? null : rate;
+  }
+  return null;
+}
+async function getInternalCoinPrice() {
+  const cfg = await getEconomicConfigByKey("INTERNAL_COIN_PRICE_USDT");
+  if (cfg && cfg.status === "ACTIVE" && typeof cfg.configValue === "object" && cfg.configValue !== null) {
+    const price = Number(cfg.configValue.priceUsdt);
+    if (!isNaN(price) && price > 0) {
+      return {
+        coinSymbol: "PHIVO",
+        priceUsdt: price,
+        effectiveFrom: cfg.configValue.effectiveFrom || cfg.effectiveFrom,
+        swapEnabled: cfg.configValue.swapEnabled !== false,
+        configured: true
+      };
+    }
+  }
+  return {
+    coinSymbol: "PHIVO",
+    priceUsdt: null,
+    effectiveFrom: null,
+    swapEnabled: false,
+    configured: false
+  };
+}
+async function isCoinSwapEnabled() {
+  const cfg = await getEconomicConfigByKey("INTERNAL_COIN_SWAP_ENABLED");
+  if (cfg) {
+    return cfg.status === "ACTIVE" && Boolean(cfg.configValue);
+  }
+  return true;
+}
+async function getTokenPriceTrend(timeframe = "24h") {
+  const db = await getDb();
+  const coinConfig = await getInternalCoinPrice();
+  const supplyRes = await db.query(
+    `SELECT COALESCE(SUM(amount), 0)::float AS sum 
+     FROM financial_ledger_entries 
+     WHERE currency = 'PHIVO' AND entry_type = 'CREDIT' AND status = 'SETTLED'`
+  );
+  const circulatingSupply = Math.max(0, Number(supplyRes.rows[0]?.sum || 0));
+  if (!coinConfig.configured || coinConfig.priceUsdt === null || coinConfig.priceUsdt <= 0) {
+    return {
+      tokenSymbol: "PHIVO",
+      tokenName: "PHIVONEX Protocol Token",
+      currentPrice: null,
+      open24h: null,
+      high24h: null,
+      low24h: null,
+      change24h: 0,
+      change24hPercent: 0,
+      volume24h: 0,
+      marketCap: 0,
+      circulatingSupply,
+      timeframe,
+      updatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+      points: [],
+      configured: false
+    };
+  }
+  const currentPrice = coinConfig.priceUsdt;
+  const marketCap = Math.round(circulatingSupply * currentPrice);
+  const swapVolRes = await db.query(
+    `SELECT COALESCE(SUM(amount), 0)::float AS vol 
+     FROM financial_ledger_entries 
+     WHERE source_type = 'COIN_SWAP' AND entry_type = 'DEBIT' AND currency = 'PHIVO' AND status = 'SETTLED'`
+  );
+  const totalSwapPhivo = Number(swapVolRes.rows[0]?.vol || 0);
+  const volume24h = Number((totalSwapPhivo * currentPrice).toFixed(2));
+  const now = Date.now();
+  let stepMinutes = 60;
+  let numSteps = 24;
+  if (timeframe === "1h") {
+    stepMinutes = 2.5;
+    numSteps = 24;
+  } else if (timeframe === "6h") {
+    stepMinutes = 15;
+    numSteps = 24;
+  } else if (timeframe === "7d") {
+    stepMinutes = 7 * 60;
+    numSteps = 24;
+  }
+  const points = [];
+  for (let i = 0; i < numSteps; i++) {
+    const pointTime = new Date(now - (numSteps - 1 - i) * stepMinutes * 60 * 1e3);
+    const timeLabel = timeframe === "1h" || timeframe === "6h" || timeframe === "24h" ? pointTime.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : pointTime.toLocaleDateString([], { month: "short", day: "numeric" });
+    points.push({
+      timestamp: pointTime.toISOString(),
+      timeLabel,
+      price: currentPrice,
+      open: currentPrice,
+      high: currentPrice,
+      low: currentPrice,
+      close: currentPrice,
+      volume: Math.round(totalSwapPhivo / numSteps),
+      volumeUsd: Number((totalSwapPhivo / numSteps * currentPrice).toFixed(2)),
+      change: 0,
+      changePercent: 0
+    });
+  }
+  return {
+    tokenSymbol: "PHIVO",
+    tokenName: "PHIVONEX Protocol Token",
+    currentPrice: Number(currentPrice.toFixed(4)),
+    open24h: Number(currentPrice.toFixed(4)),
+    high24h: Number(currentPrice.toFixed(4)),
+    low24h: Number(currentPrice.toFixed(4)),
+    change24h: 0,
+    change24hPercent: 0,
+    volume24h,
+    marketCap,
+    circulatingSupply,
+    timeframe,
+    updatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+    points,
+    configured: true
+  };
+}
+var init_economicService = __esm({
+  "src/server/services/economicService.ts"() {
+    init_db();
+    init_systemConfigBroadcaster();
+  }
+});
+
+// src/server/services/coinSwapService.ts
+import { v4 as uuidv48 } from "uuid";
+async function runWithUserLock(userId, fn) {
+  const currentLock = userSwapLocks.get(userId) || Promise.resolve();
+  let releaseLock;
+  const newLock = new Promise((resolve) => {
+    releaseLock = resolve;
+  });
+  userSwapLocks.set(userId, currentLock.then(() => newLock));
+  try {
+    await currentLock;
+    return await fn();
+  } finally {
+    releaseLock();
+    if (userSwapLocks.get(userId) === newLock) {
+      userSwapLocks.delete(userId);
+    }
+  }
+}
+async function getUserCoinBalance(userId) {
+  const db = await getDb();
+  const rewardsRes = await db.query(
+    `
+    SELECT COALESCE(SUM(amount), 0) AS total
+    FROM node_rewards
+    WHERE owner_user_id = $1 AND status != 'REVERSED'
+    `,
+    [userId]
+  );
+  const totalEarnedRewards = Number(rewardsRes.rows[0]?.total || 0);
+  const boughtRes = await db.query(
+    `
+    SELECT COALESCE(SUM(coin_amount), 0) AS total
+    FROM coin_swap_transactions
+    WHERE user_id = $1 AND status = 'COMPLETED' AND direction = 'USDT_TO_COIN' AND coin_amount > 0
+    `,
+    [userId]
+  );
+  const totalBoughtCoins = Number(boughtRes.rows[0]?.total || 0);
+  const soldRes = await db.query(
+    `
+    SELECT COALESCE(SUM(coin_amount), 0) AS total
+    FROM coin_swap_transactions
+    WHERE user_id = $1 AND status = 'COMPLETED' AND (direction = 'COIN_TO_USDT' OR direction IS NULL) AND coin_amount > 0
+    `,
+    [userId]
+  );
+  const totalSoldCoins = Number(soldRes.rows[0]?.total || 0);
+  const adminPhivoRes = await db.query(
+    `
+    SELECT entry_type, COALESCE(SUM(amount), 0) AS total
+    FROM financial_ledger_entries
+    WHERE user_id = $1 AND currency = 'PHIVO' AND status = 'SETTLED'
+    GROUP BY entry_type
+    `,
+    [userId]
+  );
+  let adminPhivoCredits = 0;
+  let adminPhivoDebits = 0;
+  for (const row of adminPhivoRes.rows) {
+    if (row.entry_type === "CREDIT") adminPhivoCredits += Number(row.total);
+    else if (row.entry_type === "DEBIT" || row.entry_type === "REVERSAL") adminPhivoDebits += Number(row.total);
+  }
+  const totalEarnedCoins = totalEarnedRewards + totalBoughtCoins + adminPhivoCredits;
+  const availableCoinBalance = Math.max(0, Number((totalEarnedCoins - totalSoldCoins - adminPhivoDebits).toFixed(6)));
+  return {
+    availableCoinBalance,
+    totalEarnedCoins,
+    totalSwappedCoins: totalSoldCoins,
+    coinSymbol: "PHIVO"
+  };
+}
+async function getSwapQuote(coinAmount) {
+  if (isNaN(coinAmount) || coinAmount <= 0) {
+    throw new Error("INVALID_COIN_AMOUNT: Coin amount must be greater than zero.");
+  }
+  const coinConfig = await getEconomicConfigByKey("INTERNAL_COIN_PRICE_USDT");
+  const globalSwapActive = await isCoinSwapEnabled();
+  if (!coinConfig || coinConfig.status !== "ACTIVE") {
+    throw new Error("SWAP_RATE_NOT_CONFIGURED: Internal coin conversion rate is not configured.");
+  }
+  const val = coinConfig.configValue || {};
+  const rateUsdt = Number(val.priceUsdt);
+  if (isNaN(rateUsdt) || rateUsdt <= 0) {
+    throw new Error("SWAP_RATE_NOT_CONFIGURED: Invalid coin conversion rate configured.");
+  }
+  const swapEnabled = globalSwapActive && val.swapEnabled !== false;
+  const usdtAmount = Number((coinAmount * rateUsdt).toFixed(4));
+  const rateVersion = coinConfig.version;
+  const effectiveFrom = val.effectiveFrom || coinConfig.effectiveFrom;
+  return {
+    coinAmount,
+    rate: rateUsdt,
+    usdtAmount,
+    rateVersion,
+    swapEnabled,
+    coinSymbol: "PHIVO",
+    effectiveFrom
+  };
+}
+async function executeCoinToUsdtSwap(params) {
+  const { userId, coinAmount, idempotencyKey } = params;
+  if (isNaN(coinAmount) || coinAmount <= 0) {
+    throw new Error("INVALID_COIN_AMOUNT: Coin amount must be a positive number.");
+  }
+  return runWithUserLock(userId, async () => {
+    const db = await getDb();
+    if (idempotencyKey && idempotencyKey.trim()) {
+      const cleanKey = idempotencyKey.trim();
+      const existingRes = await db.query(
+        `SELECT * FROM coin_swap_transactions WHERE user_id = $1 AND idempotency_key = $2`,
+        [userId, cleanKey]
+      );
+      if (existingRes.rows.length > 0) {
+        const row = existingRes.rows[0];
+        const currentBal2 = await getUserCoinBalance(userId);
+        return {
+          success: true,
+          swap: {
+            id: row.id,
+            publicSwapId: row.public_swap_id,
+            userId: row.user_id,
+            coinAmount: Number(row.coin_amount),
+            rateUsdt: Number(row.rate_usdt),
+            usdtAmount: Number(row.usdt_amount),
+            status: row.status,
+            rateVersion: Number(row.rate_version),
+            idempotencyKey: row.idempotency_key,
+            createdAt: new Date(row.created_at).toISOString(),
+            completedAt: row.completed_at ? new Date(row.completed_at).toISOString() : null
+          },
+          balances: {
+            remainingCoinBalance: currentBal2.availableCoinBalance,
+            usdtCredited: Number(row.usdt_amount)
+          }
+        };
+      }
+    }
+    const coinConfig = await getEconomicConfigByKey("INTERNAL_COIN_PRICE_USDT");
+    const globalSwapActive = await isCoinSwapEnabled();
+    if (!coinConfig || coinConfig.status !== "ACTIVE") {
+      const err = new Error("SWAP_RATE_NOT_CONFIGURED: Internal coin conversion rate is not configured.");
+      err.code = "SWAP_RATE_NOT_CONFIGURED";
+      throw err;
+    }
+    const val = coinConfig.configValue || {};
+    const rateUsdt = Number(val.priceUsdt);
+    if (isNaN(rateUsdt) || rateUsdt <= 0) {
+      const err = new Error("SWAP_RATE_NOT_CONFIGURED: Active coin conversion rate is invalid or missing.");
+      err.code = "SWAP_RATE_NOT_CONFIGURED";
+      throw err;
+    }
+    const isEnabled = globalSwapActive && val.swapEnabled !== false;
+    if (!isEnabled) {
+      const err = new Error("SWAP_DISABLED: Internal coin swapping is currently disabled by administration.");
+      err.code = "SWAP_DISABLED";
+      throw err;
+    }
+    const rateVersion = coinConfig.version;
+    const currentBal = await getUserCoinBalance(userId);
+    if (coinAmount > currentBal.availableCoinBalance) {
+      const err = new Error(
+        `INSUFFICIENT_COIN_BALANCE: Requested swap of ${coinAmount} PHIVO exceeds available balance of ${currentBal.availableCoinBalance} PHIVO.`
+      );
+      err.code = "INSUFFICIENT_COIN_BALANCE";
+      throw err;
+    }
+    const usdtAmount = Number((coinAmount * rateUsdt).toFixed(4));
+    if (usdtAmount <= 0) {
+      throw new Error("INVALID_SWAP_CALCULATION: Resulting USDT amount must be greater than zero.");
+    }
+    const id = uuidv48();
+    const publicSwapId = generateSwapPublicId();
+    const now = /* @__PURE__ */ new Date();
+    const insertRes = await db.query(
+      `
+      INSERT INTO coin_swap_transactions (
+        id, public_swap_id, user_id, coin_amount, rate_usdt, usdt_amount,
+        status, rate_version, idempotency_key, created_at, completed_at, direction
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, 'COMPLETED', $7, $8, $9, $9, 'COIN_TO_USDT')
+      RETURNING *
+      `,
+      [
+        id,
+        publicSwapId,
+        userId,
+        coinAmount,
+        rateUsdt,
+        usdtAmount,
+        rateVersion,
+        idempotencyKey ? idempotencyKey.trim() : null,
+        now
+      ]
+    );
+    const swapRow = insertRes.rows[0];
+    await postLedgerCredit({
+      userId,
+      sourceType: "COIN_SWAP",
+      sourceId: swapRow.id,
+      sourceRef: swapRow.public_swap_id,
+      amount: usdtAmount,
+      currency: "USDT",
+      description: `Internal Coin Swap - ${coinAmount} PHIVO @ $${rateUsdt.toFixed(2)} USDT (${publicSwapId})`,
+      createdAt: now
+    });
+    const newBalance = await getUserCoinBalance(userId);
+    try {
+      await notifyPhivoSwapCompleted({
+        userId,
+        coinAmount,
+        usdtAmount,
+        rateUsdt,
+        swapId: swapRow.id
+      });
+    } catch (notifErr) {
+      console.warn("[Notification] Error triggering coin swap notification:", notifErr);
+    }
+    try {
+      const userRes = await db.query(
+        `SELECT email, full_name, public_id FROM users WHERE id = $1`,
+        [userId]
+      );
+      if (userRes.rowCount > 0) {
+        const user = userRes.rows[0];
+        const { queueEventEmail: queueEventEmail2 } = await Promise.resolve().then(() => (init_emailService(), emailService_exports));
+        await queueEventEmail2(user.email, "SWAP_COMPLETE", {
+          displayName: user.full_name,
+          publicId: user.public_id,
+          fromAmount: String(coinAmount),
+          toAmount: String(usdtAmount),
+          rate: String(rateUsdt)
+        });
+      }
+    } catch (emailErr) {
+      console.warn("[EmailEngine] Failed to send Swap Complete email:", emailErr);
+    }
+    return {
+      success: true,
+      swap: {
+        id: swapRow.id,
+        publicSwapId: swapRow.public_swap_id,
+        userId: swapRow.user_id,
+        coinAmount: Number(swapRow.coin_amount),
+        rateUsdt: Number(swapRow.rate_usdt),
+        usdtAmount: Number(swapRow.usdt_amount),
+        status: swapRow.status,
+        rateVersion: Number(swapRow.rate_version),
+        idempotencyKey: swapRow.idempotency_key,
+        createdAt: new Date(swapRow.created_at).toISOString(),
+        completedAt: swapRow.completed_at ? new Date(swapRow.completed_at).toISOString() : null
+      },
+      balances: {
+        remainingCoinBalance: newBalance.availableCoinBalance,
+        usdtCredited: usdtAmount
+      }
+    };
+  });
+}
+async function getUserSwapHistory(userId, options) {
+  const db = await getDb();
+  const limit = Math.min(100, Math.max(1, options?.limit || 20));
+  const offset = Math.max(0, options?.offset || 0);
+  const aggRes = await db.query(
+    `
+    SELECT 
+      COUNT(*) as count,
+      COALESCE(SUM(coin_amount), 0) as total_coins,
+      COALESCE(SUM(usdt_amount), 0) as total_usdt
+    FROM coin_swap_transactions
+    WHERE user_id = $1 AND status = 'COMPLETED'
+    `,
+    [userId]
+  );
+  const totalSwapsCount = Number(aggRes.rows[0]?.count || 0);
+  const totalSwappedCoins = Number(aggRes.rows[0]?.total_coins || 0);
+  const totalUsdtReceived = Number(aggRes.rows[0]?.total_usdt || 0);
+  const rowsRes = await db.query(
+    `
+    SELECT * FROM coin_swap_transactions
+    WHERE user_id = $1
+    ORDER BY created_at DESC
+    LIMIT $2 OFFSET $3
+    `,
+    [userId, limit, offset]
+  );
+  const swaps = rowsRes.rows.map((r) => ({
+    id: r.id,
+    publicSwapId: r.public_swap_id,
+    userId: r.user_id,
+    coinAmount: Number(r.coin_amount),
+    rateUsdt: Number(r.rate_usdt),
+    usdtAmount: Number(r.usdt_amount),
+    status: r.status,
+    rateVersion: Number(r.rate_version),
+    idempotencyKey: r.idempotency_key,
+    createdAt: new Date(r.created_at).toISOString(),
+    completedAt: r.completed_at ? new Date(r.completed_at).toISOString() : null
+  }));
+  return {
+    swaps,
+    summary: {
+      totalSwappedCoins,
+      totalUsdtReceived,
+      totalSwapsCount
+    },
+    pagination: {
+      limit,
+      offset,
+      totalCount: totalSwapsCount
+    }
+  };
+}
+async function executeUsdtToCoinSwap(params) {
+  const { userId, usdtAmount, idempotencyKey } = params;
+  if (isNaN(usdtAmount) || usdtAmount <= 0) {
+    throw new Error("INVALID_USDT_AMOUNT: USDT amount must be a positive number.");
+  }
+  return runWithUserLock(userId, async () => {
+    const db = await getDb();
+    const coinConfig = await getEconomicConfigByKey("INTERNAL_COIN_PRICE_USDT");
+    const globalSwapActive = await isCoinSwapEnabled();
+    if (!coinConfig || coinConfig.status !== "ACTIVE") {
+      const err = new Error("SWAP_RATE_NOT_CONFIGURED: Internal coin conversion rate is not configured.");
+      err.code = "SWAP_RATE_NOT_CONFIGURED";
+      throw err;
+    }
+    const val = coinConfig.configValue || {};
+    const rateUsdt = Number(val.priceUsdt);
+    if (isNaN(rateUsdt) || rateUsdt <= 0) {
+      const err = new Error("SWAP_RATE_NOT_CONFIGURED: Active coin conversion rate is invalid or missing.");
+      err.code = "SWAP_RATE_NOT_CONFIGURED";
+      throw err;
+    }
+    const isEnabled = globalSwapActive && val.swapEnabled !== false;
+    if (!isEnabled) {
+      const err = new Error("SWAP_DISABLED: Internal coin swapping is currently disabled by administration.");
+      err.code = "SWAP_DISABLED";
+      throw err;
+    }
+    const { getWalletSummary: getWalletSummary3, postLedgerDebit: postLedgerDebit2 } = await Promise.resolve().then(() => (init_walletLedgerService(), walletLedgerService_exports));
+    const wallet = await getWalletSummary3(userId);
+    if (usdtAmount > wallet.availableBalance) {
+      const err = new Error(
+        `INSUFFICIENT_USDT_BALANCE: Requested swap of $${usdtAmount.toFixed(2)} USDT exceeds available balance of $${wallet.availableBalance.toFixed(2)} USDT.`
+      );
+      err.code = "INSUFFICIENT_USDT_BALANCE";
+      throw err;
+    }
+    const coinAmount = Number((usdtAmount / rateUsdt).toFixed(4));
+    if (coinAmount <= 0) {
+      throw new Error("INVALID_SWAP_CALCULATION: Resulting coin amount must be greater than zero.");
+    }
+    const id = uuidv48();
+    const publicSwapId = generateSwapPublicId();
+    const now = /* @__PURE__ */ new Date();
+    await postLedgerDebit2({
+      userId,
+      sourceType: "COIN_SWAP",
+      sourceId: id,
+      sourceRef: publicSwapId,
+      amount: usdtAmount,
+      currency: "USDT",
+      description: `Internal Swap USDT -> PHIVO (${coinAmount} PHIVO @ $${rateUsdt.toFixed(2)} USDT)`,
+      createdAt: now
+    });
+    const insertRes = await db.query(
+      `
+      INSERT INTO coin_swap_transactions (
+        id, public_swap_id, user_id, coin_amount, rate_usdt, usdt_amount,
+        status, rate_version, idempotency_key, created_at, completed_at, direction
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, 'COMPLETED', $7, $8, $9, $9, 'USDT_TO_COIN')
+      RETURNING *
+      `,
+      [
+        id,
+        publicSwapId,
+        userId,
+        coinAmount,
+        rateUsdt,
+        usdtAmount,
+        coinConfig.version,
+        idempotencyKey ? idempotencyKey.trim() : null,
+        now
+      ]
+    );
+    const updatedWallet = await getWalletSummary3(userId);
+    const updatedCoinBal = await getUserCoinBalance(userId);
+    const swapRow = insertRes.rows[0];
+    return {
+      success: true,
+      swap: {
+        id: swapRow.id,
+        publicSwapId: swapRow.public_swap_id,
+        userId: swapRow.user_id,
+        coinAmount: Number(swapRow.coin_amount),
+        rateUsdt: Number(swapRow.rate_usdt),
+        usdtAmount: Number(swapRow.usdt_amount),
+        status: swapRow.status,
+        rateVersion: Number(swapRow.rate_version),
+        idempotencyKey: swapRow.idempotency_key,
+        createdAt: new Date(swapRow.created_at).toISOString(),
+        completedAt: swapRow.completed_at ? new Date(swapRow.completed_at).toISOString() : null
+      },
+      balances: {
+        remainingUsdtBalance: updatedWallet.availableBalance,
+        coinsCredited: coinAmount
+      }
+    };
+  });
+}
+var userSwapLocks;
+var init_coinSwapService = __esm({
+  "src/server/services/coinSwapService.ts"() {
+    init_db();
+    init_idGenerator();
+    init_economicService();
+    init_walletLedgerService();
+    init_notificationService();
+    userSwapLocks = /* @__PURE__ */ new Map();
+  }
+});
+
+// src/server/services/adminService.ts
+import { v4 as uuidv49 } from "uuid";
 async function logAdminAction(params) {
   try {
     const db = await getDb();
-    const id = uuidv47();
+    const id = uuidv49();
     const metaStr = params.metadata ? JSON.stringify(params.metadata) : null;
     await db.query(
       `
@@ -4502,10 +5604,495 @@ async function updateAdminUserProfile(params) {
   });
   return { user: updatedUser };
 }
+async function getUser360Details(targetUserIdOrPublicId) {
+  const db = await getDb();
+  const userRes = await db.query(
+    `SELECT id, public_id, full_name, email, phone, country, status, COALESCE(role, 'USER') AS role, email_verified_at, created_at, last_login_at FROM users WHERE id::text = $1 OR public_id = $1 OR LOWER(email) = LOWER($1)`,
+    [targetUserIdOrPublicId]
+  );
+  if (userRes.rows.length === 0) {
+    const err = new Error(`Target user '${targetUserIdOrPublicId}' not found.`);
+    err.statusCode = 404;
+    throw err;
+  }
+  const u = userRes.rows[0];
+  const userId = u.id;
+  const sponsorRes = await db.query(
+    `
+    SELECT ur.referral_code, sp.id AS sponsor_id, sp.public_id AS sponsor_public_id, sp.full_name AS sponsor_full_name, sp.email AS sponsor_email
+    FROM user_referrals ur
+    LEFT JOIN users sp ON ur.sponsor_user_id = sp.id
+    WHERE ur.user_id = $1
+    `,
+    [userId]
+  );
+  const sponsor = sponsorRes.rows[0] || null;
+  const [usdtWallet, phivoWallet, depositAgg, withdrawalAgg, swapAgg, orderAgg, adminAdjAgg] = await Promise.all([
+    getWalletSummary(userId),
+    getUserCoinBalance(userId),
+    db.query(`
+      SELECT COALESCE(SUM(amount), 0)::float AS total, COUNT(*)::int AS count
+      FROM blockchain_deposits
+      WHERE user_id = $1 AND status IN ('CREDITED', 'CONFIRMED', 'SWEPT')
+    `, [userId]),
+    db.query(`
+      SELECT 
+        COALESCE(SUM(amount), 0)::float AS total,
+        COUNT(*)::int AS count,
+        COALESCE(SUM(CASE WHEN status = 'COMPLETED' THEN amount ELSE 0 END), 0)::float AS completed_total,
+        COALESCE(SUM(CASE WHEN status = 'PENDING' THEN amount ELSE 0 END), 0)::float AS pending_total
+      FROM withdrawals
+      WHERE user_id = $1
+    `, [userId]),
+    db.query(`
+      SELECT 
+        COALESCE(SUM(usdt_amount), 0)::float AS total_usdt,
+        COALESCE(SUM(coin_amount), 0)::float AS total_phivo,
+        COUNT(*)::int AS count
+      FROM coin_swap_transactions
+      WHERE user_id = $1 AND status = 'COMPLETED'
+    `, [userId]),
+    db.query(`
+      SELECT COALESCE(SUM(amount_usd), 0)::float AS total, COUNT(*)::int AS count
+      FROM node_orders
+      WHERE user_id = $1 AND status = 'COMPLETED'
+    `, [userId]),
+    db.query(`
+      SELECT 
+        COALESCE(SUM(CASE WHEN entry_type = 'CREDIT' THEN amount ELSE 0 END), 0)::float AS credit_total,
+        COALESCE(SUM(CASE WHEN entry_type = 'DEBIT' THEN amount ELSE 0 END), 0)::float AS debit_total,
+        COUNT(*)::int AS count
+      FROM financial_ledger_entries
+      WHERE user_id = $1 AND source_type = 'ADMIN_ADJUSTMENT' AND status = 'SETTLED'
+    `, [userId])
+  ]);
+  const depRow = depositAgg.rows[0] || {};
+  const wRow = withdrawalAgg.rows[0] || {};
+  const swRow = swapAgg.rows[0] || {};
+  const ordRow = orderAgg.rows[0] || {};
+  const admRow = adminAdjAgg.rows[0] || {};
+  const [depositAddressesRes, recentWithdrawalsRes] = await Promise.all([
+    db.query(`SELECT id, chain_id, asset, address, derivation_index, created_at FROM user_deposit_addresses WHERE user_id = $1`, [userId]),
+    db.query(`SELECT id, public_withdrawal_id, amount, currency, destination_type, destination_reference, status, created_at, completed_at FROM withdrawals WHERE user_id = $1 ORDER BY created_at DESC LIMIT 20`, [userId])
+  ]);
+  const [nodesRes, ordersRes] = await Promise.all([
+    db.query(`SELECT id, node_number, public_node_id, status, reserved_at, activated_at, created_at FROM nodes WHERE owner_user_id = $1 ORDER BY node_number ASC`, [userId]),
+    db.query(`SELECT id, public_order_id, node_number, amount_usd, currency, status, payment_method, payment_reference, created_at, completed_at FROM node_orders WHERE user_id = $1 ORDER BY created_at DESC LIMIT 20`, [userId])
+  ]);
+  const ledgerRes = await db.query(
+    `SELECT id, public_txn_id, entry_type, source_type, source_id, source_ref, description, amount, currency, status, created_at FROM financial_ledger_entries WHERE user_id = $1 ORDER BY created_at DESC LIMIT 50`,
+    [userId]
+  );
+  const [sessionsRes, securityEventsRes] = await Promise.all([
+    db.query(`SELECT id, user_agent, ip_address, created_at, expires_at, last_used_at, revoked_at FROM sessions WHERE user_id = $1 ORDER BY created_at DESC LIMIT 20`, [userId]),
+    db.query(`SELECT id, event_type, description, user_agent_summary, created_at FROM security_events WHERE user_id = $1 ORDER BY created_at DESC LIMIT 20`, [userId])
+  ]);
+  const adminAuditRes = await db.query(
+    `
+    SELECT id, admin_user_id, admin_public_id, action, target_type, target_id, details, metadata, ip_address, created_at
+    FROM admin_audit_logs
+    WHERE target_id = $1 OR target_id = $2 OR (metadata IS NOT NULL AND metadata::text LIKE '%' || $1 || '%')
+    ORDER BY created_at DESC
+    LIMIT 30
+    `,
+    [u.public_id, userId]
+  );
+  return {
+    profile: {
+      id: u.id,
+      publicId: u.public_id,
+      fullName: u.full_name,
+      email: u.email,
+      phone: u.phone || null,
+      country: u.country,
+      status: u.status,
+      role: u.role,
+      emailVerified: !!u.email_verified_at,
+      emailVerifiedAt: u.email_verified_at ? new Date(u.email_verified_at).toISOString() : null,
+      createdAt: new Date(u.created_at).toISOString(),
+      lastLoginAt: u.last_login_at ? new Date(u.last_login_at).toISOString() : null,
+      sponsor: sponsor ? {
+        referralCode: sponsor.referral_code,
+        sponsorPublicId: sponsor.sponsor_public_id || null,
+        sponsorFullName: sponsor.sponsor_full_name || null,
+        sponsorEmail: sponsor.sponsor_email || null
+      } : null
+    },
+    walletOverview: {
+      usdtAvailableBalance: usdtWallet.availableBalance,
+      phivoAvailableBalance: phivoWallet.availableCoinBalance,
+      totalDepositsUsdt: Number(depRow.total || 0),
+      depositCount: Number(depRow.count || 0),
+      totalWithdrawalsUsdt: Number(wRow.total || 0),
+      completedWithdrawalsUsdt: Number(wRow.completed_total || 0),
+      pendingWithdrawalsUsdt: Number(wRow.pending_total || 0),
+      withdrawalCount: Number(wRow.count || 0),
+      totalSwapsUsdt: Number(swRow.total_usdt || 0),
+      totalSwapsPhivo: Number(swRow.total_phivo || 0),
+      swapCount: Number(swRow.count || 0),
+      nodePurchasesUsdt: Number(ordRow.total || 0),
+      orderCount: Number(ordRow.count || 0),
+      rewardsEarnedPhivo: phivoWallet.totalEarnedCoins,
+      referralCommissionsUsdt: usdtWallet.breakdown.referral,
+      matchingRewardsUsdt: usdtWallet.breakdown.matching,
+      promotionBonusesUsdt: usdtWallet.breakdown.promotion,
+      adminAdjustments: {
+        totalCreditsUsdt: Number(admRow.credit_total || 0),
+        totalDebitsUsdt: Number(admRow.debit_total || 0),
+        netUsdt: Number(admRow.credit_total || 0) - Number(admRow.debit_total || 0),
+        count: Number(admRow.count || 0)
+      }
+    },
+    addresses: depositAddressesRes.rows.map((a) => ({
+      id: a.id,
+      chainId: a.chain_id,
+      asset: a.asset,
+      address: a.address,
+      derivationIndex: a.derivation_index,
+      createdAt: new Date(a.created_at).toISOString()
+    })),
+    recentWithdrawals: recentWithdrawalsRes.rows.map((w) => ({
+      id: w.id,
+      publicWithdrawalId: w.public_withdrawal_id,
+      amount: Number(w.amount),
+      currency: w.currency,
+      destinationType: w.destination_type,
+      destinationReference: w.destination_reference,
+      status: w.status,
+      createdAt: new Date(w.created_at).toISOString(),
+      completedAt: w.completed_at ? new Date(w.completed_at).toISOString() : null
+    })),
+    nodes: nodesRes.rows.map((n) => ({
+      id: n.id,
+      nodeNumber: n.node_number,
+      publicNodeId: n.public_node_id,
+      status: n.status,
+      reservedAt: n.reserved_at ? new Date(n.reserved_at).toISOString() : null,
+      activatedAt: n.activated_at ? new Date(n.activated_at).toISOString() : null,
+      createdAt: new Date(n.created_at).toISOString()
+    })),
+    orders: ordersRes.rows.map((o) => ({
+      id: o.id,
+      publicOrderId: o.public_order_id,
+      nodeNumber: o.node_number,
+      amountUsd: Number(o.amount_usd),
+      currency: o.currency,
+      status: o.status,
+      paymentMethod: o.payment_method,
+      paymentReference: o.payment_reference,
+      createdAt: new Date(o.created_at).toISOString(),
+      completedAt: o.completed_at ? new Date(o.completed_at).toISOString() : null
+    })),
+    transactions: ledgerRes.rows.map((r) => ({
+      id: r.id,
+      publicTxnId: r.public_txn_id,
+      entryType: r.entry_type,
+      sourceType: r.source_type,
+      sourceId: r.source_id,
+      sourceRef: r.source_ref,
+      description: r.description,
+      amount: Number(r.amount),
+      currency: r.currency,
+      status: r.status,
+      createdAt: new Date(r.created_at).toISOString()
+    })),
+    sessions: sessionsRes.rows.map((s) => ({
+      id: s.id,
+      userAgent: s.user_agent,
+      ipAddress: s.ip_address,
+      createdAt: new Date(s.created_at).toISOString(),
+      expiresAt: new Date(s.expires_at).toISOString(),
+      lastUsedAt: new Date(s.last_used_at).toISOString(),
+      revokedAt: s.revoked_at ? new Date(s.revoked_at).toISOString() : null,
+      isActive: !s.revoked_at && new Date(s.expires_at).getTime() > Date.now()
+    })),
+    securityEvents: securityEventsRes.rows.map((se) => ({
+      id: se.id,
+      eventType: se.event_type,
+      description: se.description,
+      userAgentSummary: se.user_agent_summary,
+      createdAt: new Date(se.created_at).toISOString()
+    })),
+    auditLogs: adminAuditRes.rows.map((al) => ({
+      id: al.id,
+      adminUserId: al.admin_user_id,
+      adminPublicId: al.admin_public_id,
+      action: al.action,
+      targetType: al.target_type,
+      targetId: al.target_id,
+      details: al.details,
+      metadata: al.metadata ? typeof al.metadata === "string" ? JSON.parse(al.metadata) : al.metadata : null,
+      ipAddress: al.ip_address,
+      createdAt: new Date(al.created_at).toISOString()
+    }))
+  };
+}
+async function executeAdminWalletAdjustment(params) {
+  const db = await getDb();
+  const cleanAsset = (params.asset || "").toUpperCase().trim();
+  if (cleanAsset !== "USDT" && cleanAsset !== "PHIVO") {
+    const err = new Error("Invalid asset specified. Supported assets: USDT, PHIVO.");
+    err.statusCode = 400;
+    throw err;
+  }
+  const cleanDirection = (params.direction || "").toUpperCase().trim();
+  if (cleanDirection !== "CREDIT" && cleanDirection !== "DEBIT") {
+    const err = new Error("Invalid direction specified. Supported directions: CREDIT, DEBIT.");
+    err.statusCode = 400;
+    throw err;
+  }
+  const numAmount = Number(params.amount);
+  if (isNaN(numAmount) || !isFinite(numAmount) || numAmount <= 0) {
+    const err = new Error("Adjustment amount must be a positive, finite number strictly greater than 0.");
+    err.statusCode = 400;
+    throw err;
+  }
+  if (!params.reason || params.reason.trim().length < 5) {
+    const err = new Error("Administrative reason is mandatory (minimum 5 characters) for wallet adjustment.");
+    err.statusCode = 400;
+    throw err;
+  }
+  const cleanReason = params.reason.trim();
+  const idempotencyKey = params.idempotencyKey ? params.idempotencyKey.trim() : null;
+  if (idempotencyKey) {
+    const existingTx = await db.query(
+      `
+      SELECT f.*, u.public_id AS target_public_id
+      FROM financial_ledger_entries f
+      JOIN users u ON f.user_id = u.id
+      WHERE f.source_type = 'ADMIN_ADJUSTMENT' AND f.source_ref = $1
+      LIMIT 1
+      `,
+      [idempotencyKey]
+    );
+    if (existingTx.rows.length > 0) {
+      const row = existingTx.rows[0];
+      return {
+        success: true,
+        isDuplicate: true,
+        transaction: {
+          publicTxnId: row.public_txn_id,
+          targetUserId: row.user_id,
+          targetPublicId: row.target_public_id,
+          asset: row.currency,
+          direction: row.entry_type,
+          amount: Number(row.amount),
+          reason: row.description,
+          createdAt: new Date(row.created_at).toISOString()
+        }
+      };
+    }
+  }
+  return await db.transaction(async (txClient) => {
+    const targetUserRes = await txClient.query(
+      `SELECT id, public_id, full_name, email, status, COALESCE(role, 'USER') AS role FROM users WHERE id::text = $1 OR public_id = $1 FOR UPDATE`,
+      [params.targetUserId]
+    );
+    if (targetUserRes.rows.length === 0) {
+      const err = new Error(`Target user '${params.targetUserId}' not found.`);
+      err.statusCode = 404;
+      throw err;
+    }
+    const targetUser = targetUserRes.rows[0];
+    let currentBalance = 0;
+    if (cleanAsset === "USDT") {
+      const usdtSummary = await getWalletSummary(targetUser.id);
+      currentBalance = usdtSummary.availableBalance;
+    } else {
+      const phivoSummary = await getUserCoinBalance(targetUser.id);
+      currentBalance = phivoSummary.availableCoinBalance;
+    }
+    if (cleanDirection === "DEBIT" && currentBalance < numAmount) {
+      const err = new Error(
+        `INSUFFICIENT_BALANCE: Cannot DEBIT ${numAmount} ${cleanAsset} from user ${targetUser.public_id}. Current available balance: ${currentBalance} ${cleanAsset}.`
+      );
+      err.statusCode = 400;
+      throw err;
+    }
+    const ledgerId = uuidv49();
+    const sourceId = uuidv49();
+    const publicTxnId = generateLedgerTransactionPublicId();
+    const sourceRef = idempotencyKey || params.adminPublicId;
+    const description = `Admin Adjustment (${cleanDirection}): ${cleanReason}`;
+    await txClient.query(
+      `
+      INSERT INTO financial_ledger_entries (
+        id, public_txn_id, user_id, entry_type, source_type, source_id,
+        source_ref, description, amount, currency, status, created_at
+      )
+      VALUES ($1, $2, $3, $4, 'ADMIN_ADJUSTMENT', $5, $6, $7, $8, $9, 'SETTLED', CURRENT_TIMESTAMP)
+      `,
+      [ledgerId, publicTxnId, targetUser.id, cleanDirection, sourceId, sourceRef, description, numAmount, cleanAsset]
+    );
+    const newBalance = cleanDirection === "CREDIT" ? currentBalance + numAmount : currentBalance - numAmount;
+    await txClient.query(
+      `
+      INSERT INTO admin_audit_logs (
+        id, admin_user_id, admin_public_id, action, target_type, target_id, details, metadata, ip_address, created_at
+      )
+      VALUES ($1, $2, $3, $4, 'USER', $5, $6, $7, $8, CURRENT_TIMESTAMP)
+      `,
+      [
+        uuidv49(),
+        params.adminUserId,
+        params.adminPublicId,
+        cleanDirection === "CREDIT" ? "ADMIN_WALLET_CREDIT" : "ADMIN_WALLET_DEBIT",
+        targetUser.public_id,
+        `Admin ${params.adminPublicId} executed ${cleanDirection} of ${numAmount} ${cleanAsset} for user ${targetUser.public_id}. Reason: ${cleanReason}`,
+        JSON.stringify({
+          adminUserId: params.adminUserId,
+          adminPublicId: params.adminPublicId,
+          targetUserId: targetUser.id,
+          targetPublicId: targetUser.public_id,
+          asset: cleanAsset,
+          direction: cleanDirection,
+          amount: numAmount,
+          reason: cleanReason,
+          publicTxnId,
+          idempotencyKey,
+          previousBalance: currentBalance,
+          newBalance
+        }),
+        params.ipAddress || null
+      ]
+    );
+    createNotification({
+      userId: targetUser.id,
+      type: "SECURITY_ALERT",
+      title: `Wallet Adjustment (${cleanDirection})`,
+      message: `An administrative ${cleanDirection.toLowerCase()} of ${numAmount} ${cleanAsset} was applied to your wallet balance. Reason: ${cleanReason}`,
+      sourceType: "ADMIN_ADJUSTMENT",
+      sourceId: publicTxnId
+    }).catch(console.error);
+    try {
+      notificationEmitter.emit(`notification:${targetUser.id}`, {
+        type: "WALLET_UPDATED",
+        asset: cleanAsset,
+        direction: cleanDirection,
+        amount: numAmount,
+        newBalance,
+        publicTxnId
+      });
+    } catch {
+    }
+    return {
+      success: true,
+      isDuplicate: false,
+      transaction: {
+        publicTxnId,
+        targetUserId: targetUser.id,
+        targetPublicId: targetUser.public_id,
+        asset: cleanAsset,
+        direction: cleanDirection,
+        amount: numAmount,
+        reason: cleanReason,
+        previousBalance: currentBalance,
+        newBalance,
+        createdAt: (/* @__PURE__ */ new Date()).toISOString()
+      }
+    };
+  });
+}
+async function setUserAccountStatus(params) {
+  const db = await getDb();
+  if (!params.reason || params.reason.trim().length < 5) {
+    const err = new Error("Admin reason is mandatory (minimum 5 characters) for account status updates.");
+    err.statusCode = 400;
+    throw err;
+  }
+  const targetRes = await db.query(`SELECT id, public_id, full_name, email, status FROM users WHERE id::text = $1 OR public_id = $1`, [params.targetUserId]);
+  if (targetRes.rows.length === 0) {
+    const err = new Error("Target user account not found.");
+    err.statusCode = 404;
+    throw err;
+  }
+  const targetUser = targetRes.rows[0];
+  if (targetUser.id === params.adminUserId && params.status !== "ACTIVE") {
+    const err = new Error("You cannot lock or suspend your own active administrator account.");
+    err.statusCode = 400;
+    throw err;
+  }
+  await db.query(`UPDATE users SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`, [params.status, targetUser.id]);
+  if (params.status === "LOCKED" || params.status === "SUSPENDED") {
+    await db.query(`UPDATE sessions SET revoked_at = CURRENT_TIMESTAMP WHERE user_id = $1 AND revoked_at IS NULL`, [targetUser.id]);
+  }
+  const actionType = params.status === "LOCKED" ? "ADMIN_USER_LOCK" : params.status === "ACTIVE" ? "ADMIN_USER_UNLOCK" : "ADMIN_USER_SUSPEND";
+  await logAdminAction({
+    adminUserId: params.adminUserId,
+    adminPublicId: params.adminPublicId,
+    action: actionType,
+    targetType: "USER",
+    targetId: targetUser.public_id,
+    details: `Admin ${params.adminPublicId} set account status to ${params.status} for user ${targetUser.public_id}. Reason: ${params.reason}`,
+    metadata: {
+      targetUserId: targetUser.id,
+      targetPublicId: targetUser.public_id,
+      previousStatus: targetUser.status,
+      newStatus: params.status,
+      reason: params.reason
+    },
+    ipAddress: params.ipAddress
+  });
+  try {
+    notificationEmitter.emit(`notification:${targetUser.id}`, {
+      type: "USER_STATUS_UPDATED",
+      status: params.status
+    });
+  } catch {
+  }
+  return { success: true, targetPublicId: targetUser.public_id, status: params.status };
+}
+async function revokeUserSessions(params) {
+  const db = await getDb();
+  if (!params.reason || params.reason.trim().length < 5) {
+    const err = new Error("Admin reason is mandatory (minimum 5 characters) for session revocation.");
+    err.statusCode = 400;
+    throw err;
+  }
+  const targetRes = await db.query(`SELECT id, public_id FROM users WHERE id::text = $1 OR public_id = $1`, [params.targetUserId]);
+  if (targetRes.rows.length === 0) {
+    const err = new Error("Target user account not found.");
+    err.statusCode = 404;
+    throw err;
+  }
+  const targetUser = targetRes.rows[0];
+  const revokeRes = await db.query(
+    `UPDATE sessions SET revoked_at = CURRENT_TIMESTAMP WHERE user_id = $1 AND revoked_at IS NULL RETURNING id`,
+    [targetUser.id]
+  );
+  const revokedCount = revokeRes.rowCount || 0;
+  await logAdminAction({
+    adminUserId: params.adminUserId,
+    adminPublicId: params.adminPublicId,
+    action: "ADMIN_SESSION_REVOKE",
+    targetType: "USER",
+    targetId: targetUser.public_id,
+    details: `Admin ${params.adminPublicId} revoked ${revokedCount} active sessions for user ${targetUser.public_id}. Reason: ${params.reason}`,
+    metadata: {
+      targetUserId: targetUser.id,
+      targetPublicId: targetUser.public_id,
+      revokedCount,
+      reason: params.reason
+    },
+    ipAddress: params.ipAddress
+  });
+  try {
+    notificationEmitter.emit(`notification:${targetUser.id}`, {
+      type: "SESSION_REVOKED",
+      revokedCount
+    });
+  } catch {
+  }
+  return { success: true, targetPublicId: targetUser.public_id, revokedCount };
+}
 var init_adminService = __esm({
   "src/server/services/adminService.ts"() {
     init_db();
     init_nodeConfig();
+    init_idGenerator();
+    init_walletLedgerService();
+    init_coinSwapService();
+    init_notificationService();
   }
 });
 
@@ -4531,7 +6118,7 @@ __export(emailService_exports, {
   updateAutomationRule: () => updateAutomationRule,
   updateEmailTemplate: () => updateEmailTemplate
 });
-import { v4 as uuidv48 } from "uuid";
+import { v4 as uuidv410 } from "uuid";
 function getEmailProvider() {
   const apiKey = process.env.RESEND_API_KEY;
   if (apiKey && apiKey.trim() !== "" && !apiKey.includes("your_resend_api_key")) {
@@ -4557,7 +6144,7 @@ async function queueEventEmail(toEmail, eventName, templateData, scheduledSendAt
     subject = subject.replace(regex, val);
     bodyHtml = bodyHtml.replace(regex, val);
   }
-  const queueId = uuidv48();
+  const queueId = uuidv410();
   await db.query(
     `
     INSERT INTO email_queue (id, to_email, subject, body_html, status, scheduled_send_at)
@@ -4662,7 +6249,7 @@ async function triggerAutomationRule(userId, criteria, templateData) {
       ON CONFLICT (user_id, rule_id) 
       DO UPDATE SET last_triggered_at = CURRENT_TIMESTAMP
       `,
-      [uuidv48(), userId, rule.id]
+      [uuidv410(), userId, rule.id]
     );
     triggeredAny = true;
   }
@@ -4732,7 +6319,7 @@ async function sendBroadcastCampaign(adminUserId, adminPublicId, campaign) {
     let bodyHtml = campaign.bodyHtml;
     subject = subject.replace(/{{displayName}}/g, user.full_name).replace(/{{publicId}}/g, user.public_id);
     bodyHtml = bodyHtml.replace(/{{displayName}}/g, user.full_name).replace(/{{publicId}}/g, user.public_id);
-    const queueId = uuidv48();
+    const queueId = uuidv410();
     await db.query(
       `
       INSERT INTO email_queue (id, to_email, subject, body_html, status)
@@ -4857,7 +6444,7 @@ async function getAutomationRules() {
 }
 async function createAutomationRule(adminUserId, adminPublicId, rule) {
   const db = await getDb();
-  const id = uuidv48();
+  const id = uuidv410();
   await db.query(
     `
     INSERT INTO automation_rules (id, name, enabled, trigger_criteria, delay_hours, cooldown_days, template_id)
@@ -4995,7 +6582,7 @@ var init_emailService = __esm({
     MockEmailProvider = class {
       async sendEmail(to, subject, html) {
         console.log(`[MockEmailProvider] Sending email to ${to}: "${subject}"`);
-        return { providerMessageId: `mock_msg_${uuidv48()}` };
+        return { providerMessageId: `mock_msg_${uuidv410()}` };
       }
     };
     ResendEmailProvider = class {
@@ -5055,7 +6642,7 @@ __export(promotionalService_exports, {
   updatePromotionalBanner: () => updatePromotionalBanner,
   updatePromotionalOffer: () => updatePromotionalOffer
 });
-import { v4 as uuidv413 } from "uuid";
+import { v4 as uuidv414 } from "uuid";
 async function getPromotionalOffers(adminOnly = false) {
   const db = await getDb();
   let query = `
@@ -5090,7 +6677,7 @@ async function getPromotionalOffers(adminOnly = false) {
 }
 async function createPromotionalOffer(adminUserId, adminPublicId, offer) {
   const db = await getDb();
-  const id = uuidv413();
+  const id = uuidv414();
   await db.query(
     `
     INSERT INTO promotional_offers (
@@ -5222,7 +6809,7 @@ async function getPromotionalBanners(adminOnly = false) {
 }
 async function createPromotionalBanner(adminUserId, adminPublicId, banner) {
   const db = await getDb();
-  const id = uuidv413();
+  const id = uuidv414();
   await db.query(
     `
     INSERT INTO promotional_banners (id, content, image_url, cta_text, cta_destination, display_order, status, start_date, end_date)
@@ -5462,7 +7049,7 @@ var init_promotionalService = __esm({
 });
 
 // src/server/services/withdrawalService.ts
-import { v4 as uuidv420 } from "uuid";
+import { v4 as uuidv421 } from "uuid";
 function mapRowToWithdrawalRecord(row) {
   return {
     id: row.id,
@@ -5488,7 +7075,7 @@ function mapRowToWithdrawalRecord(row) {
 async function logWithdrawalStateTransition(params) {
   try {
     const db = await getDb();
-    const id = uuidv420();
+    const id = uuidv421();
     const now = /* @__PURE__ */ new Date();
     const userRes = await db.query(
       `SELECT email, full_name FROM users WHERE id = $1 LIMIT 1`,
@@ -5661,7 +7248,7 @@ async function createWithdrawalRequest(params) {
         err.availableBalance = availableBalance;
         throw err;
       }
-      const id = uuidv420();
+      const id = uuidv421();
       const publicWithdrawalId = generateWithdrawalPublicId();
       const now = /* @__PURE__ */ new Date();
       const insertRes = await trx.query(
@@ -6274,7 +7861,7 @@ async function backfillMissingWithdrawalStateLogs() {
           transition_timestamp, created_at
         ) VALUES ($1, $2, $3, $4, $5, $6, NULL, 'PENDING', 'USER', 'Withdrawal requested by user', $7, $8, $9, $10, $10)
       `, [
-        uuidv420(),
+        uuidv421(),
         w.id,
         w.public_withdrawal_id,
         w.user_id,
@@ -6293,7 +7880,7 @@ async function backfillMissingWithdrawalStateLogs() {
             transition_timestamp, created_at
           ) VALUES ($1, $2, $3, $4, $5, $6, 'PENDING', 'APPROVED', 'ADMIN', 'Withdrawal request approved', $7, $8, $9, $10, $10)
         `, [
-          uuidv420(),
+          uuidv421(),
           w.id,
           w.public_withdrawal_id,
           w.user_id,
@@ -6314,7 +7901,7 @@ async function backfillMissingWithdrawalStateLogs() {
             transition_timestamp, created_at
           ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'COMPLETED', 'SYSTEM', 'Payout disbursement completed on-chain', $8, $9, $10, $11, $11)
         `, [
-          uuidv420(),
+          uuidv421(),
           w.id,
           w.public_withdrawal_id,
           w.user_id,
@@ -6334,7 +7921,7 @@ async function backfillMissingWithdrawalStateLogs() {
             transition_timestamp, created_at
           ) VALUES ($1, $2, $3, $4, $5, $6, 'PENDING', 'REJECTED', 'ADMIN', $7, $8, $9, $10, $11, $11)
         `, [
-          uuidv420(),
+          uuidv421(),
           w.id,
           w.public_withdrawal_id,
           w.user_id,
@@ -6354,7 +7941,7 @@ async function backfillMissingWithdrawalStateLogs() {
             transition_timestamp, created_at
           ) VALUES ($1, $2, $3, $4, $5, $6, 'PENDING', 'CANCELLED', 'USER', 'Withdrawal request cancelled by user', $7, $8, $9, $10, $10)
         `, [
-          uuidv420(),
+          uuidv421(),
           w.id,
           w.public_withdrawal_id,
           w.user_id,
@@ -6373,7 +7960,7 @@ async function backfillMissingWithdrawalStateLogs() {
             transition_timestamp, created_at
           ) VALUES ($1, $2, $3, $4, $5, $6, 'PENDING', 'FAILED', 'SYSTEM', $7, $8, $9, $10, $11, $11)
         `, [
-          uuidv420(),
+          uuidv421(),
           w.id,
           w.public_withdrawal_id,
           w.user_id,
@@ -6633,7 +8220,7 @@ __export(bscSignerService_exports, {
   broadcastBnbWithdrawal: () => broadcastBnbWithdrawal
 });
 import { ethers as ethers3 } from "ethers";
-import { v4 as uuidv421 } from "uuid";
+import { v4 as uuidv422 } from "uuid";
 function withNonceLock(fn) {
   const res = nonceLockPromise.then(
     () => fn(),
@@ -6774,7 +8361,7 @@ async function broadcastBnbWithdrawal(params) {
       }
     }
     const nonce = await getNextTreasuryNonce(provider, activePayoutAddress);
-    const bcwId = uuidv421();
+    const bcwId = uuidv422();
     let txHash = "";
     if (payoutKey && !isMockRpc && process.env.NODE_ENV !== "test") {
       try {
@@ -6791,7 +8378,7 @@ async function broadcastBnbWithdrawal(params) {
         console.log(`[Secure Signer] Live withdrawal broadcast successful! TxHash: ${txHash}`);
       } catch (sendErr) {
         console.error("[Secure Signer] Live broadcast failed, recording hash fallback:", sendErr);
-        txHash = `0x${uuidv421().replace(/-/g, "")}${uuidv421().replace(/-/g, "")}`.slice(0, 66);
+        txHash = `0x${uuidv422().replace(/-/g, "")}${uuidv422().replace(/-/g, "")}`.slice(0, 66);
       }
     } else if (isMockRpc || process.env.NODE_ENV === "test") {
       const dummySign = ethers3.keccak256(
@@ -6801,7 +8388,7 @@ async function broadcastBnbWithdrawal(params) {
     } else {
       const signerRef = BSC_CONFIG.SIGNER_SECRET_REFERENCE;
       console.log(`[Secure Signer] Signing withdrawal ${withdrawalPublicId} via signer reference: ${signerRef}`);
-      txHash = `0x${uuidv421().replace(/-/g, "")}${uuidv421().replace(/-/g, "")}`.slice(0, 66);
+      txHash = `0x${uuidv422().replace(/-/g, "")}${uuidv422().replace(/-/g, "")}`.slice(0, 66);
     }
     const now = /* @__PURE__ */ new Date();
     const insertRes = await db.query(
@@ -6882,7 +8469,7 @@ import { fileURLToPath } from "url";
 // src/server/routes/authRoutes.ts
 init_db();
 import { Router } from "express";
-import { v4 as uuidv49 } from "uuid";
+import { v4 as uuidv411 } from "uuid";
 
 // src/server/utils/crypto.ts
 import argon2 from "argon2";
@@ -7248,7 +8835,7 @@ async function getUniquePublicId(db) {
     if (res.rowCount === 0) return candidate;
     attempts++;
   }
-  return `PHX-${uuidv49().slice(0, 6).toUpperCase()}`;
+  return `PHX-${uuidv411().slice(0, 6).toUpperCase()}`;
 }
 async function getUniqueReferralCode(db) {
   let attempts = 0;
@@ -7258,7 +8845,7 @@ async function getUniqueReferralCode(db) {
     if (res.rowCount === 0) return candidate;
     attempts++;
   }
-  return `PHX${uuidv49().slice(0, 6).toUpperCase()}`;
+  return `PHX${uuidv411().slice(0, 6).toUpperCase()}`;
 }
 async function syncUserToFirebase(userData) {
   try {
@@ -7467,7 +9054,7 @@ router.post("/register/verify-email", registrationLimiter, async (req, res) => {
       });
       return;
     }
-    const verificationToken = uuidv49();
+    const verificationToken = uuidv411();
     await db.query(
       `UPDATE pending_registrations SET
         is_verified = TRUE,
@@ -7518,7 +9105,7 @@ router.post("/register/complete", registrationLimiter, async (req, res) => {
       res.status(409).json({ error: "EMAIL_EXISTS", message: "An account with this email address already exists." });
       return;
     }
-    const userId = uuidv49();
+    const userId = uuidv411();
     const publicId = await getUniquePublicId(db);
     const newReferralCode = await getUniqueReferralCode(db);
     await db.query(
@@ -7556,7 +9143,7 @@ router.post("/register/complete", registrationLimiter, async (req, res) => {
     await db.query(
       `INSERT INTO sessions (id, user_id, token_hash, user_agent, expires_at, created_at, last_used_at)
        VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
-      [uuidv49(), userId, sessionTokenHash, userAgent, sessionExpiresAt]
+      [uuidv411(), userId, sessionTokenHash, userAgent, sessionExpiresAt]
     );
     await logSecurityEvent(db, {
       userId,
@@ -7675,7 +9262,7 @@ router.post("/register", registrationLimiter, async (req, res) => {
       }
     }
     const passwordHash = await hashPassword(password);
-    const userId = uuidv49();
+    const userId = uuidv411();
     const publicId = await getUniquePublicId(db);
     const newReferralCode = await getUniqueReferralCode(db);
     await db.query(
@@ -7712,7 +9299,7 @@ router.post("/register", registrationLimiter, async (req, res) => {
     await db.query(
       `INSERT INTO sessions (id, user_id, token_hash, user_agent, expires_at, created_at, last_used_at)
        VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
-      [uuidv49(), userId, sessionTokenHash, userAgent, sessionExpiresAt]
+      [uuidv411(), userId, sessionTokenHash, userAgent, sessionExpiresAt]
     );
     await logSecurityEvent(db, {
       userId,
@@ -7783,7 +9370,7 @@ router.post("/google", authLimiter, async (req, res) => {
       }
       await db.query(`UPDATE users SET last_login_at = CURRENT_TIMESTAMP WHERE id = $1`, [userId]);
     } else {
-      userId = uuidv49();
+      userId = uuidv411();
       const publicId = await getUniquePublicId(db);
       const newReferralCode = await getUniqueReferralCode(db);
       let sponsorUserId = null;
@@ -7838,7 +9425,7 @@ router.post("/google", authLimiter, async (req, res) => {
     await db.query(
       `INSERT INTO sessions (id, user_id, token_hash, user_agent, expires_at, created_at, last_used_at)
        VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
-      [uuidv49(), userId, sessionTokenHash, userAgent, sessionExpiresAt]
+      [uuidv411(), userId, sessionTokenHash, userAgent, sessionExpiresAt]
     );
     syncUserToFirebase({
       id: userId,
@@ -7997,7 +9584,7 @@ router.post("/login", loginLimiter, async (req, res) => {
     await db.query(
       `INSERT INTO sessions (id, user_id, token_hash, user_agent, expires_at, created_at, last_used_at)
        VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
-      [uuidv49(), user.id, sessionTokenHash, userAgent, sessionExpiresAt]
+      [uuidv411(), user.id, sessionTokenHash, userAgent, sessionExpiresAt]
     );
     await logSecurityEvent(db, {
       userId: user.id,
@@ -8145,7 +9732,7 @@ router.post("/change-password", requireAuth, async (req, res) => {
         userId: user.id,
         title: "Security Alert: Password Changed",
         message: "Your account password was updated. All other active sessions have been terminated.",
-        sourceId: `pwd-rot-${uuidv49()}`
+        sourceId: `pwd-rot-${uuidv411()}`
       });
     } catch {
     }
@@ -8345,7 +9932,7 @@ router.post("/resend-verification", async (req, res) => {
       await db.query(
         `INSERT INTO auth_tokens (id, user_id, type, token_hash, expires_at, created_at)
          VALUES ($1, $2, 'EMAIL_VERIFY', $3, $4, CURRENT_TIMESTAMP)`,
-        [uuidv49(), targetUserId, verifyTokenHash, expiresAt]
+        [uuidv411(), targetUserId, verifyTokenHash, expiresAt]
       );
       await logSecurityEvent(db, {
         userId: targetUserId,
@@ -8382,7 +9969,7 @@ router.post("/forgot-password", passwordResetLimiter, async (req, res) => {
       await db.query(
         `INSERT INTO auth_tokens (id, user_id, type, token_hash, expires_at, created_at)
          VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)`,
-        [uuidv49(), user.id, "PASSWORD_RESET", tokenHash, expiresAt]
+        [uuidv411(), user.id, "PASSWORD_RESET", tokenHash, expiresAt]
       );
     }
     res.status(200).json({
@@ -8869,11 +10456,11 @@ init_nodeConfig();
 init_db();
 init_idGenerator();
 init_nodeConfig();
-import { v4 as uuidv414 } from "uuid";
+import { v4 as uuidv415 } from "uuid";
 
 // src/server/services/referralCommissionService.ts
 init_db();
-import { v4 as uuidv411 } from "uuid";
+import { v4 as uuidv412 } from "uuid";
 
 // src/config/referralConfig.ts
 function formatPublicCommissionId(seq) {
@@ -8885,675 +10472,7 @@ function formatPublicCommissionId(seq) {
 // src/server/services/referralCommissionService.ts
 init_idGenerator();
 init_walletLedgerService();
-
-// src/server/services/economicService.ts
-init_db();
-import { v4 as uuidv410 } from "uuid";
-
-// src/server/services/systemConfigBroadcaster.ts
-init_firebase_admin();
-
-// src/server/services/publicNetworkService.ts
-init_db();
-init_nodeConfig();
-import { EventEmitter as EventEmitter2 } from "events";
-var publicNetworkEventEmitter = new EventEmitter2();
-publicNetworkEventEmitter.setMaxListeners(100);
-async function getPublicNetworkSummary() {
-  const db = await getDb();
-  const nodeCountRes = await db.query(
-    `SELECT status, COUNT(*)::int AS count FROM nodes GROUP BY status`
-  );
-  let activeNodes = 0;
-  let reservedNodes = 0;
-  let availableNodes = 0;
-  let retiredNodes = 0;
-  for (const row of nodeCountRes.rows) {
-    const cnt = Number(row.count || 0);
-    if (row.status === "ACTIVE") activeNodes = cnt;
-    else if (row.status === "RESERVED") reservedNodes = cnt;
-    else if (row.status === "AVAILABLE") availableNodes = cnt;
-    else if (row.status === "RETIRED") retiredNodes = cnt;
-  }
-  const totalAllocated = activeNodes + reservedNodes + retiredNodes;
-  if (availableNodes === 0 && totalAllocated < GENESIS_NODE_CAP) {
-    availableNodes = Math.max(0, GENESIS_NODE_CAP - totalAllocated);
-  }
-  const allocatedNodes = activeNodes + reservedNodes;
-  const allocationPercent = Number((allocatedNodes / GENESIS_NODE_CAP * 100).toFixed(2));
-  const epochRes = await db.query(
-    `SELECT COALESCE(MAX(epoch_number), 1)::int AS max_epoch FROM reward_epochs`
-  );
-  const currentRewardEpoch = Number(epochRes.rows[0]?.max_epoch || 1);
-  const txnRes = await db.query(
-    `SELECT COUNT(*)::int AS count FROM financial_ledger_entries`
-  );
-  const totalNetworkTransactions = Number(txnRes.rows[0]?.count || 0);
-  let conversionRateUsd = null;
-  try {
-    const configRes = await db.query(
-      `SELECT config_value, status FROM system_economic_configs WHERE config_key = 'INTERNAL_COIN_PRICE_USDT'`
-    );
-    if (configRes.rows.length > 0 && configRes.rows[0].status === "ACTIVE") {
-      const valStr = configRes.rows[0].config_value;
-      const val = typeof valStr === "string" ? JSON.parse(valStr) : valStr;
-      if (val && typeof val.priceUsdt === "number" && val.priceUsdt > 0) {
-        conversionRateUsd = val.priceUsdt;
-      }
-    }
-  } catch (err) {
-    console.warn("[Public API] Error loading INTERNAL_COIN_PRICE_USDT config value for summary:", err);
-  }
-  let networkStatus = "OPERATIONAL";
-  try {
-    await db.query("SELECT 1");
-  } catch {
-    networkStatus = "DEGRADED";
-  }
-  return {
-    genesisNodeCap: GENESIS_NODE_CAP,
-    activeNodes,
-    reservedNodes,
-    availableNodes,
-    retiredNodes,
-    allocationPercent,
-    currentRewardEpoch,
-    totalNetworkTransactions,
-    networkStatus,
-    updatedAt: (/* @__PURE__ */ new Date()).toISOString(),
-    conversionRateUsd
-  };
-}
-async function getPublicNetworkEvents(limit = 20) {
-  const db = await getDb();
-  const events = [];
-  try {
-    const activeNodesRes = await db.query(
-      `SELECT public_node_id, activated_at 
-       FROM nodes 
-       WHERE status = 'ACTIVE' AND activated_at IS NOT NULL 
-       ORDER BY activated_at DESC 
-       LIMIT $1`,
-      [limit]
-    );
-    for (const row of activeNodesRes.rows) {
-      const ts = new Date(row.activated_at).toISOString();
-      events.push({
-        id: `evt-node-${row.public_node_id}`,
-        type: "node.activated",
-        title: `${row.public_node_id} Activated`,
-        description: `Genesis validator node ${row.public_node_id} successfully activated on protocol ledger.`,
-        timestamp: ts,
-        publicId: row.public_node_id
-      });
-    }
-    const epochRes = await db.query(
-      `SELECT public_epoch_id, epoch_number, status, settled_at, created_at 
-       FROM reward_epochs 
-       ORDER BY created_at DESC 
-       LIMIT $1`,
-      [limit]
-    );
-    for (const row of epochRes.rows) {
-      const ts = new Date(row.settled_at || row.created_at).toISOString();
-      events.push({
-        id: `evt-epoch-${row.public_epoch_id}`,
-        type: "reward.epoch.completed",
-        title: `Reward Epoch #${row.epoch_number} ${row.status === "COMPLETED" ? "Completed" : "Initiated"}`,
-        description: `Mining reward epoch #${row.epoch_number} state verified on protocol ledger.`,
-        timestamp: ts,
-        publicId: row.public_epoch_id
-      });
-    }
-    const matchingRes = await db.query(
-      `SELECT public_settlement_id, business_date, settled_at 
-       FROM binary_matching_settlements 
-       WHERE status = 'COMPLETED' 
-       ORDER BY settled_at DESC 
-       LIMIT $1`,
-      [limit]
-    );
-    for (const row of matchingRes.rows) {
-      const ts = new Date(row.settled_at).toISOString();
-      const dateStr = typeof row.business_date === "string" ? row.business_date.split("T")[0] : new Date(row.business_date).toISOString().split("T")[0];
-      events.push({
-        id: `evt-match-${row.public_settlement_id}`,
-        type: "matching.completed",
-        title: `Matching Settlement Completed`,
-        description: `Binary team network consensus settlement finalized for date ${dateStr}.`,
-        timestamp: ts,
-        publicId: row.public_settlement_id
-      });
-    }
-    const promoRes = await db.query(
-      `SELECT public_bonus_id, milestone, qualified_at 
-       FROM promotion_bonuses 
-       WHERE status = 'EARNED' 
-       ORDER BY qualified_at DESC 
-       LIMIT $1`,
-      [limit]
-    );
-    for (const row of promoRes.rows) {
-      const ts = new Date(row.qualified_at).toISOString();
-      events.push({
-        id: `evt-promo-${row.public_bonus_id}`,
-        type: "promotion.earned",
-        title: `Promotion Milestone (${row.milestone}) Qualified`,
-        description: `Network operator volume qualification reached milestone Tier ${row.milestone}.`,
-        timestamp: ts,
-        publicId: row.public_bonus_id
-      });
-    }
-    const fleRes = await db.query(
-      `SELECT public_txn_id, source_type, created_at 
-       FROM financial_ledger_entries 
-       ORDER BY created_at DESC 
-       LIMIT $1`,
-      [limit]
-    );
-    for (const row of fleRes.rows) {
-      const ts = new Date(row.created_at).toISOString();
-      events.push({
-        id: `evt-fle-${row.public_txn_id}`,
-        type: "ledger.checkpoint",
-        title: `Ledger Checkpoint ${row.public_txn_id}`,
-        description: `Cryptographic financial ledger entry posted for channel ${row.source_type}.`,
-        timestamp: ts,
-        publicId: row.public_txn_id
-      });
-    }
-    events.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-    return events.slice(0, limit);
-  } catch (err) {
-    console.error("[PublicNetworkService] Error fetching public network events:", err);
-    return [];
-  }
-}
-function broadcastPublicEvent(event) {
-  publicNetworkEventEmitter.emit("networkEvent", event);
-}
-
-// src/server/services/systemConfigBroadcaster.ts
-async function broadcastSystemConfigChange(key, value, category = "SYSTEM") {
-  const timestamp = (/* @__PURE__ */ new Date()).toISOString();
-  const normalizedKey = key.toUpperCase();
-  if (process.env.NODE_ENV === "test" || process.env.APP_ENV === "test") {
-    try {
-      publicNetworkEventEmitter.emit("networkEvent", {
-        type: "system_config",
-        key: normalizedKey,
-        value,
-        category,
-        updatedAt: timestamp
-      });
-    } catch (sseErr) {
-      console.warn("[SystemConfigBroadcaster] SSE broadcast warning:", sseErr);
-    }
-    return;
-  }
-  try {
-    await adminFirestore.collection("system_settings").doc("configs").set(
-      {
-        [normalizedKey]: value,
-        updatedAt: timestamp,
-        lastUpdatedKey: normalizedKey
-      },
-      { merge: true }
-    );
-    if (normalizedKey.includes("WITHDRAWAL")) {
-      await adminFirestore.collection("system_settings").doc("withdrawals").set(
-        {
-          [normalizedKey]: value,
-          minWithdrawalAmount: normalizedKey === "MIN_WITHDRAWAL_AMOUNT" ? Number(value) : void 0,
-          autoWithdrawalEnabled: normalizedKey === "AUTO_WITHDRAWAL_ENABLED" ? Boolean(value) : void 0,
-          updatedAt: timestamp
-        },
-        { merge: true }
-      );
-    }
-    if (normalizedKey.includes("COIN") || normalizedKey.includes("PRICE") || normalizedKey.includes("NODE")) {
-      await adminFirestore.collection("system_settings").doc("economic").set(
-        {
-          [normalizedKey]: value,
-          updatedAt: timestamp
-        },
-        { merge: true }
-      );
-    }
-  } catch (fsErr) {
-    console.warn("[SystemConfigBroadcaster] Firestore real-time sync warning:", fsErr);
-  }
-  try {
-    publicNetworkEventEmitter.emit("networkEvent", {
-      type: "system_config",
-      key: normalizedKey,
-      value,
-      category,
-      updatedAt: timestamp
-    });
-  } catch (sseErr) {
-    console.warn("[SystemConfigBroadcaster] SSE broadcast warning:", sseErr);
-  }
-}
-
-// src/server/services/economicService.ts
-function parseConfigValue(val) {
-  if (typeof val === "string") {
-    try {
-      return JSON.parse(val);
-    } catch {
-      return val;
-    }
-  }
-  return val;
-}
-function mapRowToConfigRecord(row) {
-  return {
-    id: row.id,
-    configKey: row.config_key,
-    configValue: parseConfigValue(row.config_value),
-    category: row.category,
-    description: row.description,
-    status: row.status,
-    version: Number(row.version || 1),
-    effectiveFrom: row.effective_from ? new Date(row.effective_from).toISOString() : new Date(row.updated_at).toISOString(),
-    updatedByAdminId: row.updated_by_admin_id || null,
-    updatedByAdminPublicId: row.updated_by_admin_public_id || "SYSTEM_INIT",
-    createdAt: new Date(row.created_at).toISOString(),
-    updatedAt: new Date(row.updated_at).toISOString()
-  };
-}
-function mapRowToAuditRecord(row) {
-  return {
-    id: row.id,
-    configKey: row.config_key,
-    category: row.category,
-    oldValue: parseConfigValue(row.old_value),
-    newValue: parseConfigValue(row.new_value),
-    version: Number(row.version),
-    adminUserId: row.admin_user_id || null,
-    adminPublicId: row.admin_public_id,
-    reason: row.reason || null,
-    effectiveFrom: new Date(row.effective_from).toISOString(),
-    ipAddress: row.ip_address || null,
-    createdAt: new Date(row.created_at).toISOString()
-  };
-}
-async function getAllEconomicConfigs() {
-  const db = await getDb();
-  const res = await db.query(`
-    SELECT * FROM system_economic_configs
-    ORDER BY category ASC, config_key ASC
-  `);
-  return res.rows.map(mapRowToConfigRecord);
-}
-async function getEconomicConfigByKey(configKey, dbClient) {
-  const db = dbClient || await getDb();
-  const res = await db.query(
-    `SELECT * FROM system_economic_configs WHERE config_key = $1`,
-    [configKey.trim().toUpperCase()]
-  );
-  if (res.rows.length === 0) return null;
-  return mapRowToConfigRecord(res.rows[0]);
-}
-async function updateEconomicConfig(params) {
-  const {
-    configKey,
-    configValue,
-    status,
-    effectiveFrom,
-    reason,
-    adminUserId,
-    adminPublicId,
-    ipAddress
-  } = params;
-  const keyUpper = configKey.trim().toUpperCase();
-  if (keyUpper === "GENESIS_NODE_CAP") {
-    throw new Error("IMMUTABLE_PARAMETER_ERROR: Genesis Node Cap (10,000) is strictly immutable and cannot be modified.");
-  }
-  const current = await getEconomicConfigByKey(keyUpper);
-  if (!current) {
-    throw new Error(`NOT_FOUND: Economic configuration parameter '${keyUpper}' does not exist.`);
-  }
-  validateEconomicValue(keyUpper, configValue);
-  const db = await getDb();
-  const now = /* @__PURE__ */ new Date();
-  const effectiveDate = effectiveFrom ? new Date(effectiveFrom) : now;
-  const newVersion = current.version + 1;
-  const serializedValue = JSON.stringify(configValue);
-  const newStatus = status || current.status;
-  const updateRes = await db.query(
-    `
-    UPDATE system_economic_configs
-    SET 
-      config_value = $1,
-      status = $2,
-      version = $3,
-      effective_from = $4,
-      updated_by_admin_id = $5,
-      updated_by_admin_public_id = $6,
-      updated_at = $7
-    WHERE config_key = $8
-    RETURNING *
-    `,
-    [
-      serializedValue,
-      newStatus,
-      newVersion,
-      effectiveDate,
-      adminUserId || null,
-      adminPublicId,
-      now,
-      keyUpper
-    ]
-  );
-  if (updateRes.rows.length === 0) {
-    throw new Error("CONCURRENCY_ERROR: Economic config update failed due to concurrent modification.");
-  }
-  const updatedConfig = mapRowToConfigRecord(updateRes.rows[0]);
-  const auditId = uuidv410();
-  const auditRes = await db.query(
-    `
-    INSERT INTO economic_config_audit_logs (
-      id, config_key, category, old_value, new_value, version, admin_user_id, admin_public_id, reason, effective_from, ip_address, created_at
-    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-    RETURNING *
-    `,
-    [
-      auditId,
-      keyUpper,
-      current.category,
-      JSON.stringify(current.configValue),
-      serializedValue,
-      newVersion,
-      adminUserId || null,
-      adminPublicId,
-      reason || "Administrative economic parameter adjustment",
-      effectiveDate,
-      ipAddress || null,
-      now
-    ]
-  );
-  const auditLog = mapRowToAuditRecord(auditRes.rows[0]);
-  try {
-    await broadcastSystemConfigChange(keyUpper, updatedConfig.configValue, current.category);
-  } catch (bcErr) {
-    console.warn("[EconomicService] Config broadcast warning:", bcErr);
-  }
-  return { config: updatedConfig, auditLog };
-}
-function validateEconomicValue(key, value) {
-  if (key === "NODE_BASE_PRICE_USD") {
-    const num = Number(value);
-    if (isNaN(num) || num <= 0) {
-      throw new Error("INVALID_VALUE: Node base price must be a positive number greater than 0.");
-    }
-  }
-  if (key === "DIRECT_REFERRAL_COMMISSION_USD") {
-    const num = Number(value);
-    if (isNaN(num) || num < 0) {
-      throw new Error("INVALID_VALUE: Direct referral commission must be a non-negative number.");
-    }
-  }
-  if (key === "BSC_REQUIRED_CONFIRMATIONS") {
-    const num = Number(value);
-    if (!Number.isInteger(num) || num < 1) {
-      throw new Error("INVALID_VALUE: Required confirmations must be an integer >= 1.");
-    }
-  }
-  if (key === "NODE_REWARD_RATE_PER_EPOCH") {
-    if (value !== null && value !== void 0) {
-      let num;
-      if (typeof value === "object" && value !== null) {
-        num = Number(value.rateUsd !== void 0 ? value.rateUsd : value.rewardPerNode !== void 0 ? value.rewardPerNode : NaN);
-      } else {
-        num = Number(value);
-      }
-      if (isNaN(num) || num <= 0) {
-        throw new Error("INVALID_VALUE: Reward rate must be null (unconfigured) or a positive number greater than 0.");
-      }
-    }
-  }
-  if (key === "INTERNAL_COIN_PRICE_USDT") {
-    if (typeof value === "object" && value !== null) {
-      const price = Number(value.priceUsdt);
-      const isEnabled = value.swapEnabled !== false;
-      if (isEnabled && (isNaN(price) || price <= 0)) {
-        throw new Error("INVALID_VALUE: Internal coin price in USDT must be a positive number.");
-      }
-    } else {
-      const price = Number(value);
-      if (isNaN(price) || price <= 0) {
-        throw new Error("INVALID_VALUE: Internal coin price in USDT must be a positive number.");
-      }
-    }
-  }
-  if (key === "MATCHING_TIERS_CONFIG") {
-    if (!Array.isArray(value) || value.length === 0) {
-      throw new Error("INVALID_VALUE: Matching tiers configuration must be a non-empty array of tier objects.");
-    }
-    for (const tier of value) {
-      if (!tier.units || Number(tier.units) <= 0 || !tier.rewardUsd || Number(tier.rewardUsd) <= 0) {
-        throw new Error("INVALID_VALUE: Each matching tier must have positive units and rewardUsd.");
-      }
-    }
-  }
-  if (key === "PROMOTION_MILESTONES_CONFIG") {
-    if (!Array.isArray(value) || value.length === 0) {
-      throw new Error("INVALID_VALUE: Promotion milestones configuration must be a non-empty array of milestone objects.");
-    }
-    for (const m of value) {
-      if (!m.milestone || !m.units || Number(m.units) <= 0 || !m.rewardUsd || Number(m.rewardUsd) <= 0) {
-        throw new Error("INVALID_VALUE: Each promotion milestone must contain milestone key, positive units, and positive rewardUsd.");
-      }
-    }
-  }
-}
-async function getEconomicAuditLogs(page = 1, limit = 20, configKey) {
-  const db = await getDb();
-  const safePage = Math.max(1, page);
-  const safeLimit = Math.min(100, Math.max(1, limit));
-  const offset = (safePage - 1) * safeLimit;
-  let whereClauses = ["1=1"];
-  let queryParams = [];
-  let paramIdx = 1;
-  if (configKey && configKey.trim() && configKey !== "ALL") {
-    whereClauses.push(`config_key = $${paramIdx}`);
-    queryParams.push(configKey.trim().toUpperCase());
-    paramIdx++;
-  }
-  const whereSql = whereClauses.join(" AND ");
-  const countRes = await db.query(
-    `SELECT COUNT(*)::int AS count FROM economic_config_audit_logs WHERE ${whereSql}`,
-    queryParams
-  );
-  const totalCount = Number(countRes.rows[0]?.count || 0);
-  const txQueryParams = [...queryParams, safeLimit, offset];
-  const listRes = await db.query(
-    `
-    SELECT * FROM economic_config_audit_logs
-    WHERE ${whereSql}
-    ORDER BY created_at DESC
-    LIMIT $${paramIdx} OFFSET $${paramIdx + 1}
-    `,
-    txQueryParams
-  );
-  const totalPages = Math.ceil(totalCount / safeLimit) || 1;
-  return {
-    logs: listRes.rows.map(mapRowToAuditRecord),
-    pagination: {
-      page: safePage,
-      limit: safeLimit,
-      totalCount,
-      totalPages
-    }
-  };
-}
-async function getNodeBasePrice(dbClient) {
-  const cfg = await getEconomicConfigByKey("NODE_BASE_PRICE_USD", dbClient);
-  if (cfg && typeof cfg.configValue === "number") {
-    return cfg.configValue;
-  }
-  return 1e3;
-}
-async function getBnbPriceUsd() {
-  const cfg = await getEconomicConfigByKey("BNB_PRICE_USD");
-  if (cfg && cfg.status === "ACTIVE" && cfg.configValue !== null && cfg.configValue !== void 0) {
-    const price = Number(cfg.configValue);
-    if (!isNaN(price) && price > 0) return price;
-  }
-  if (process.env.BNB_PRICE_USD) {
-    const envPrice = Number(process.env.BNB_PRICE_USD);
-    if (!isNaN(envPrice) && envPrice > 0) return envPrice;
-  }
-  return null;
-}
-async function isNodeSalesEnabled(dbClient) {
-  const cfg = await getEconomicConfigByKey("NODE_SALES_ENABLED", dbClient);
-  if (cfg) {
-    return cfg.status === "ACTIVE" && Boolean(cfg.configValue);
-  }
-  return true;
-}
-async function getDirectReferralCommissionRate() {
-  const cfg = await getEconomicConfigByKey("DIRECT_REFERRAL_COMMISSION_USD");
-  if (cfg && typeof cfg.configValue === "number") {
-    return cfg.configValue;
-  }
-  return 50;
-}
-async function isNodeRewardsEnabled() {
-  const cfg = await getEconomicConfigByKey("NODE_REWARDS_ENABLED");
-  if (cfg) {
-    return cfg.status === "ACTIVE" && Boolean(cfg.configValue);
-  }
-  return true;
-}
-async function getNodeRewardRatePerEpoch() {
-  const cfg = await getEconomicConfigByKey("NODE_REWARD_RATE_PER_EPOCH");
-  if (cfg && cfg.status === "ACTIVE" && cfg.configValue !== null && cfg.configValue !== void 0) {
-    const rate = Number(cfg.configValue);
-    return isNaN(rate) || rate <= 0 ? null : rate;
-  }
-  return null;
-}
-async function getInternalCoinPrice() {
-  const cfg = await getEconomicConfigByKey("INTERNAL_COIN_PRICE_USDT");
-  if (cfg && cfg.status === "ACTIVE" && typeof cfg.configValue === "object" && cfg.configValue !== null) {
-    const price = Number(cfg.configValue.priceUsdt);
-    if (!isNaN(price) && price > 0) {
-      return {
-        coinSymbol: "PHIVO",
-        priceUsdt: price,
-        effectiveFrom: cfg.configValue.effectiveFrom || cfg.effectiveFrom,
-        swapEnabled: cfg.configValue.swapEnabled !== false,
-        configured: true
-      };
-    }
-  }
-  return {
-    coinSymbol: "PHIVO",
-    priceUsdt: null,
-    effectiveFrom: null,
-    swapEnabled: false,
-    configured: false
-  };
-}
-async function isCoinSwapEnabled() {
-  const cfg = await getEconomicConfigByKey("INTERNAL_COIN_SWAP_ENABLED");
-  if (cfg) {
-    return cfg.status === "ACTIVE" && Boolean(cfg.configValue);
-  }
-  return true;
-}
-async function getTokenPriceTrend(timeframe = "24h") {
-  const db = await getDb();
-  const coinConfig = await getInternalCoinPrice();
-  const supplyRes = await db.query(
-    `SELECT COALESCE(SUM(amount), 0)::float AS sum 
-     FROM financial_ledger_entries 
-     WHERE currency = 'PHIVO' AND entry_type = 'CREDIT' AND status = 'SETTLED'`
-  );
-  const circulatingSupply = Math.max(0, Number(supplyRes.rows[0]?.sum || 0));
-  if (!coinConfig.configured || coinConfig.priceUsdt === null || coinConfig.priceUsdt <= 0) {
-    return {
-      tokenSymbol: "PHIVO",
-      tokenName: "PHIVONEX Protocol Token",
-      currentPrice: null,
-      open24h: null,
-      high24h: null,
-      low24h: null,
-      change24h: 0,
-      change24hPercent: 0,
-      volume24h: 0,
-      marketCap: 0,
-      circulatingSupply,
-      timeframe,
-      updatedAt: (/* @__PURE__ */ new Date()).toISOString(),
-      points: [],
-      configured: false
-    };
-  }
-  const currentPrice = coinConfig.priceUsdt;
-  const marketCap = Math.round(circulatingSupply * currentPrice);
-  const swapVolRes = await db.query(
-    `SELECT COALESCE(SUM(amount), 0)::float AS vol 
-     FROM financial_ledger_entries 
-     WHERE source_type = 'COIN_SWAP' AND entry_type = 'DEBIT' AND currency = 'PHIVO' AND status = 'SETTLED'`
-  );
-  const totalSwapPhivo = Number(swapVolRes.rows[0]?.vol || 0);
-  const volume24h = Number((totalSwapPhivo * currentPrice).toFixed(2));
-  const now = Date.now();
-  let stepMinutes = 60;
-  let numSteps = 24;
-  if (timeframe === "1h") {
-    stepMinutes = 2.5;
-    numSteps = 24;
-  } else if (timeframe === "6h") {
-    stepMinutes = 15;
-    numSteps = 24;
-  } else if (timeframe === "7d") {
-    stepMinutes = 7 * 60;
-    numSteps = 24;
-  }
-  const points = [];
-  for (let i = 0; i < numSteps; i++) {
-    const pointTime = new Date(now - (numSteps - 1 - i) * stepMinutes * 60 * 1e3);
-    const timeLabel = timeframe === "1h" || timeframe === "6h" || timeframe === "24h" ? pointTime.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : pointTime.toLocaleDateString([], { month: "short", day: "numeric" });
-    points.push({
-      timestamp: pointTime.toISOString(),
-      timeLabel,
-      price: currentPrice,
-      open: currentPrice,
-      high: currentPrice,
-      low: currentPrice,
-      close: currentPrice,
-      volume: Math.round(totalSwapPhivo / numSteps),
-      volumeUsd: Number((totalSwapPhivo / numSteps * currentPrice).toFixed(2)),
-      change: 0,
-      changePercent: 0
-    });
-  }
-  return {
-    tokenSymbol: "PHIVO",
-    tokenName: "PHIVONEX Protocol Token",
-    currentPrice: Number(currentPrice.toFixed(4)),
-    open24h: Number(currentPrice.toFixed(4)),
-    high24h: Number(currentPrice.toFixed(4)),
-    low24h: Number(currentPrice.toFixed(4)),
-    change24h: 0,
-    change24hPercent: 0,
-    volume24h,
-    marketCap,
-    circulatingSupply,
-    timeframe,
-    updatedAt: (/* @__PURE__ */ new Date()).toISOString(),
-    points,
-    configured: true
-  };
-}
-
-// src/server/services/referralCommissionService.ts
+init_economicService();
 init_notificationService();
 async function processNodeActivationCommission(db, orderId, nodeId, buyerUserId) {
   const sponsorRes = await db.query(
@@ -9617,7 +10536,7 @@ async function processNodeActivationCommission(db, orderId, nodeId, buyerUserId)
   if (collisionCheck.rows.length > 0) {
     publicCommissionId = `PHX-COM-${Math.floor(1e5 + Math.random() * 9e5)}`;
   }
-  const commissionId = uuidv411();
+  const commissionId = uuidv412();
   const commissionRate = await getDirectReferralCommissionRate();
   const insertRes = await db.query(
     `
@@ -9662,7 +10581,7 @@ async function processNodeActivationCommission(db, orderId, nodeId, buyerUserId)
       VALUES ($1, $2, 'DIRECT_REFERRAL_COMMISSION_EARNED', $3, CURRENT_TIMESTAMP)
       `,
       [
-        uuidv411(),
+        uuidv412(),
         sponsorUserId,
         `Direct referral commission ${publicCommissionId} ($50.00 USD) credited for referred buyer ${buyerPublicId} activating Genesis Node ${nodePublicId}.`
       ]
@@ -9736,7 +10655,7 @@ async function getUserCommissions(sponsorUserId) {
 // src/server/services/binaryVolumeService.ts
 init_db();
 init_idGenerator();
-import { v4 as uuidv412 } from "uuid";
+import { v4 as uuidv413 } from "uuid";
 
 // src/server/utils/timezone.ts
 var PHIVONEX_BUSINESS_TIMEZONE = "Asia/Dhaka";
@@ -9859,7 +10778,7 @@ async function propagateNodeSalesVolume(dbClient, sourceNodeId, buyerUserId, occ
   const businessDate = getDhakaBusinessDate(effectiveTimestamp);
   let eventsCreated = 0;
   for (const step of ancestors) {
-    const eventId = uuidv412();
+    const eventId = uuidv413();
     const publicEventId = generateVolumeEventPublicId();
     const insertRes = await db.query(
       `
@@ -9884,7 +10803,7 @@ async function propagateNodeSalesVolume(dbClient, sourceNodeId, buyerUserId, occ
     );
     if (insertRes.rows.length > 0) {
       eventsCreated++;
-      const dailyId = uuidv412();
+      const dailyId = uuidv413();
       await db.query(
         `
         INSERT INTO binary_daily_volumes (
@@ -10049,6 +10968,8 @@ async function getVolumeHistory(userId, page = 1, limit = 20) {
 }
 
 // src/server/services/nodeOrderService.ts
+init_publicNetworkService();
+init_economicService();
 init_notificationService();
 async function cleanupExpiredReservations(dbClient) {
   if (dbClient) {
@@ -10239,7 +11160,7 @@ async function executeReservation(db, userId, idempotencyKey, paymentMethod = "S
     if (reserveNodeRes.rows.length === 0) {
       continue;
     }
-    const orderId = uuidv414();
+    const orderId = uuidv415();
     const publicOrderId = generateOrderPublicId();
     const cleanIdempotencyKey = idempotencyKey && idempotencyKey.trim().length > 0 ? idempotencyKey.trim() : null;
     const expiresAt = new Date(Date.now() + RESERVATION_EXPIRY_MINUTES * 60 * 1e3);
@@ -10468,7 +11389,7 @@ async function settleNodeOrder(userId, orderIdentifier, paymentReference, dbClie
             VALUES ($1, $2, $3, 'PROMOTIONAL_BONUS', CURRENT_TIMESTAMP, TRUE)
             ON CONFLICT (node_id, user_id) DO UPDATE SET is_current_owner = TRUE, acquired_via = 'PROMOTIONAL_BONUS'
             `,
-            [uuidv414(), bonusNode.id, order.user_id]
+            [uuidv415(), bonusNode.id, order.user_id]
           );
           console.log(`[PromotionEngine] Allocated Free Bonus Promo Node #${bonusNode.node_number} (${bonusNode.public_node_id}) to user ${order.user_id} under offer "${bogoOffer.title}"`);
         }
@@ -10484,7 +11405,7 @@ async function settleNodeOrder(userId, orderIdentifier, paymentReference, dbClie
       VALUES ($1, $2, 'NODE_PURCHASE_COMPLETED', $3, CURRENT_TIMESTAMP)
       `,
       [
-        uuidv414(),
+        uuidv415(),
         order.user_id,
         `Acquired Genesis Node ${finalNode.public_node_id} (Node #${finalNode.node_number}) for $1,000 USD via order ${finalOrder.public_order_id}.`
       ]
@@ -10727,7 +11648,7 @@ async function purchaseNodeWithDepositBalance(userId, preferredAsset = "USDT") {
       }
       let reservation;
       try {
-        reservation = await createNodeReservation(userId, `dep_node_${userId}_${uuidv414()}`, `DEPOSIT_${preferredAsset}`, trx);
+        reservation = await createNodeReservation(userId, `dep_node_${userId}_${uuidv415()}`, `DEPOSIT_${preferredAsset}`, trx);
       } catch (err) {
         const existingOrders = await getUserOrders(userId, trx);
         const pending = existingOrders.find((o) => o.status === "PENDING" && o.secondsRemaining > 0);
@@ -10737,7 +11658,7 @@ async function purchaseNodeWithDepositBalance(userId, preferredAsset = "USDT") {
           throw err;
         }
       }
-      const debitTxnId = uuidv414();
+      const debitTxnId = uuidv415();
       const publicTxnId = generateLedgerTransactionPublicId();
       await trx.query(
         `
@@ -10781,7 +11702,7 @@ async function purchaseNodeWithDepositBalance(userId, preferredAsset = "USDT") {
 // src/server/services/nodeRewardService.ts
 init_db();
 init_idGenerator();
-import { v4 as uuidv415 } from "uuid";
+import { v4 as uuidv416 } from "uuid";
 
 // src/server/config/rewardConfig.ts
 var REWARD_CURRENCY = "USD";
@@ -10813,6 +11734,7 @@ function getConfiguredRewardPerNode(override) {
 
 // src/server/services/nodeRewardService.ts
 init_walletLedgerService();
+init_economicService();
 init_notificationService();
 async function createRewardEpoch(params) {
   const db = await getDb();
@@ -10822,7 +11744,7 @@ async function createRewardEpoch(params) {
   );
   const epochNumber = Number(maxRes.rows[0]?.next_num || 1);
   const publicEpochId = generateEpochPublicId(epochNumber);
-  const id = uuidv415();
+  const id = uuidv416();
   const startAt = params?.startAt || /* @__PURE__ */ new Date();
   const endAt = params?.endAt || new Date(startAt.getTime() + 24 * 60 * 60 * 1e3);
   const res = await db.query(
@@ -10932,7 +11854,7 @@ async function closeAndSettleEpoch(epochId, options) {
   let rewardsCreated = 0;
   let totalDistributed = 0;
   for (const node of eligibleNodes) {
-    const rewardId = uuidv415();
+    const rewardId = uuidv416();
     const publicRewardId = generateRewardPublicId();
     const insRes = await db.query(
       `
@@ -11307,7 +12229,8 @@ import { Router as Router5 } from "express";
 // src/server/services/nodePurchaseBalanceService.ts
 init_db();
 init_idGenerator();
-import { v4 as uuidv416 } from "uuid";
+init_economicService();
+import { v4 as uuidv417 } from "uuid";
 init_walletLedgerService();
 var userLocks = /* @__PURE__ */ new Map();
 function withUserLock(userId, fn) {
@@ -11413,7 +12336,7 @@ async function processNodePurchaseWithAssetBalance(userId, asset = "USDT") {
     try {
       reservation = await createNodeReservation(
         userId,
-        `node_bal_req_${selectedAsset}_${userId}_${uuidv416()}`,
+        `node_bal_req_${selectedAsset}_${userId}_${uuidv417()}`,
         `DEPOSIT_${selectedAsset}`
       );
     } catch (err) {
@@ -11444,7 +12367,7 @@ async function processNodePurchaseWithAssetBalance(userId, asset = "USDT") {
           `SELECT id FROM financial_ledger_entries WHERE source_id = $1 AND source_type = 'NODE_PURCHASE'`,
           [orderId]
         );
-        let debitTxnId = uuidv416();
+        let debitTxnId = uuidv417();
         let publicTxnId = generateLedgerTransactionPublicId();
         if (existingDebitRes.rows.length === 0) {
           await trx.query(
@@ -11786,7 +12709,7 @@ import { Router as Router7 } from "express";
 // src/server/services/binaryPlacementService.ts
 init_db();
 init_idGenerator();
-import { v4 as uuidv417 } from "uuid";
+import { v4 as uuidv418 } from "uuid";
 async function validateNoCycle(db, memberId, targetParentId) {
   if (memberId === targetParentId) {
     const error = new Error("Self-parenting is not permitted.");
@@ -11978,7 +12901,7 @@ async function placeMember(sponsorUserId, memberPublicId, preferredSide) {
       VALUES ($1, $2, 'BINARY_MEMBER_PLACED', $3, CURRENT_TIMESTAMP)
       `,
       [
-        uuidv417(),
+        uuidv418(),
         sponsorUserId,
         `Placed member ${member.public_id} into ${finalSide} leg under parent ${parentPublicId}.`
       ]
@@ -12262,7 +13185,7 @@ init_db();
 init_idGenerator();
 init_walletLedgerService();
 init_notificationService();
-import { v4 as uuidv418 } from "uuid";
+import { v4 as uuidv419 } from "uuid";
 async function getActiveMatchingConfig(dbClient) {
   const db = dbClient || await getDb();
   try {
@@ -12563,7 +13486,7 @@ async function settleUserMatchingForDate(dbClient, userId, businessDate) {
     const config = await getActiveMatchingConfig(db);
     const sponsorQualified = await checkSponsorQualification(db, userId);
     const decomposition = calculateDynamicMatchingDecomposition(availableLeft, availableRight, config, sponsorQualified);
-    const settlementId = uuidv418();
+    const settlementId = uuidv419();
     const publicSettlementId = generateSettlementPublicId();
     const settledAt = /* @__PURE__ */ new Date();
     const insertSettlementRes = await db.query(
@@ -12609,7 +13532,7 @@ async function settleUserMatchingForDate(dbClient, userId, businessDate) {
       return settleUserMatchingForDate(db, userId, businessDate);
     }
     for (const comp of decomposition.components) {
-      const compId = uuidv418();
+      const compId = uuidv419();
       await db.query(
         `
         INSERT INTO binary_matching_components (
@@ -12983,7 +13906,7 @@ async function updateMatchingConfig(adminUserId, params) {
   await db.query("BEGIN");
   try {
     const nextVersion = currentConfig.version + 1;
-    const configId = uuidv418();
+    const configId = uuidv419();
     await db.query(
       `
       INSERT INTO binary_matching_config (
@@ -13003,7 +13926,7 @@ async function updateMatchingConfig(adminUserId, params) {
         JSON.stringify(params.tiers)
       ]
     );
-    const auditId = uuidv418();
+    const auditId = uuidv419();
     await db.query(
       `
       INSERT INTO binary_matching_config_audit (
@@ -13124,7 +14047,7 @@ init_db();
 init_idGenerator();
 init_walletLedgerService();
 init_notificationService();
-import { v4 as uuidv419 } from "uuid";
+import { v4 as uuidv420 } from "uuid";
 var OFFICIAL_PROMOTIONS = [
   { milestone: "20/20", unitsRequired: 20, bonusUsd: 5e3 },
   { milestone: "50/50", unitsRequired: 50, bonusUsd: 1e4 },
@@ -13163,7 +14086,7 @@ async function evaluateUserPromotions(userId) {
     const isQualified = leftUnits >= promo.unitsRequired && rightUnits >= promo.unitsRequired;
     const isAlreadyEarned = earnedMilestonesSet.has(promo.milestone);
     if (isQualified && !isAlreadyEarned) {
-      const bonusId = uuidv419();
+      const bonusId = uuidv420();
       const publicBonusId = generatePromotionBonusPublicId();
       await db.query(
         `
@@ -13283,6 +14206,7 @@ async function evaluateUserPromotions(userId) {
 // src/server/routes/promotionRoutes.ts
 init_leadershipRankService();
 init_promotionalService();
+init_systemConfigBroadcaster();
 var promotionRouter = Router9();
 promotionRouter.get("/ranks/me", requireAuth, async (req, res) => {
   try {
@@ -13791,6 +14715,8 @@ rewardRouter.post("/epochs/:id/settle", requireAdmin, async (req, res) => {
 });
 
 // src/server/routes/publicNetworkRoutes.ts
+init_publicNetworkService();
+init_economicService();
 import { Router as Router12 } from "express";
 var publicNetworkRouter = Router12();
 publicNetworkRouter.get("/price-trend", async (req, res) => {
@@ -14003,6 +14929,7 @@ function sanitizeProductionErrors(err, req, res, next) {
 init_withdrawalService();
 init_bscSignerService();
 init_db();
+init_systemConfigBroadcaster();
 var withdrawalRouter = Router13();
 withdrawalRouter.post("/", requireAuth, withdrawalLimiter, async (req, res) => {
   try {
@@ -14397,10 +15324,10 @@ init_withdrawalService();
 // src/server/services/reconciliationService.ts
 init_db();
 init_idGenerator();
-import { v4 as uuidv422 } from "uuid";
+import { v4 as uuidv423 } from "uuid";
 async function runFinancialReconciliation(options) {
   const db = await getDb();
-  const runId = uuidv422();
+  const runId = uuidv423();
   const publicRunId = generateReconciliationPublicId();
   const startedAt = /* @__PURE__ */ new Date();
   await db.query(
@@ -14930,7 +15857,7 @@ async function runFinancialReconciliation(options) {
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'DETECTED', $9, $10, CURRENT_TIMESTAMP)
         `,
         [
-          uuidv422(),
+          uuidv423(),
           runId,
           iss.issueType,
           iss.sourceType,
@@ -15006,7 +15933,7 @@ async function runFinancialReconciliation(options) {
         VALUES ($1, $2, $3, 'FINANCIAL_RECONCILIATION_RUN', 'RECONCILIATION_RUN', $4, $5, CURRENT_TIMESTAMP)
         `,
         [
-          uuidv422(),
+          uuidv423(),
           options?.adminUserId || null,
           options?.adminPublicId || "SYSTEM_AUDITOR",
           publicRunId,
@@ -15813,6 +16740,118 @@ adminRouter.put("/users/:userId", async (req, res) => {
     });
   }
 });
+var handleGetUser360 = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const data = await getUser360Details(userId);
+    return res.status(200).json({
+      success: true,
+      ...data
+    });
+  } catch (err) {
+    console.error("[Admin API] Error fetching User 360 details:", err);
+    return res.status(err.statusCode || 500).json({
+      error: err.statusCode === 404 ? "USER_NOT_FOUND" : "SERVER_ERROR",
+      message: err.message || "Failed to retrieve User 360 details."
+    });
+  }
+};
+adminRouter.get("/users/:userId/360", handleGetUser360);
+adminRouter.get("/users/:userId/details", handleGetUser360);
+adminRouter.post("/users/:userId/wallet/adjustments", adminFinancialLimiter, async (req, res) => {
+  try {
+    const admin = req.user;
+    const { userId } = req.params;
+    const { asset, direction, amount, reason, idempotencyKey } = req.body || {};
+    const ipAddress = req.headers["x-forwarded-for"] || req.ip;
+    const result = await executeAdminWalletAdjustment({
+      adminUserId: admin.id,
+      adminPublicId: admin.public_id,
+      targetUserId: userId,
+      asset,
+      direction,
+      amount,
+      reason,
+      idempotencyKey,
+      ipAddress
+    });
+    return res.status(200).json(result);
+  } catch (err) {
+    console.error("[Admin API] Error executing wallet adjustment:", err);
+    return res.status(err.statusCode || 500).json({
+      error: err.statusCode === 400 ? "INVALID_ADJUSTMENT" : "SERVER_ERROR",
+      message: err.message || "Failed to execute administrative wallet adjustment."
+    });
+  }
+});
+adminRouter.post("/users/:userId/lock", async (req, res) => {
+  try {
+    const admin = req.user;
+    const { userId } = req.params;
+    const { reason } = req.body || {};
+    const ipAddress = req.headers["x-forwarded-for"] || req.ip;
+    const result = await setUserAccountStatus({
+      adminUserId: admin.id,
+      adminPublicId: admin.public_id,
+      targetUserId: userId,
+      status: "LOCKED",
+      reason: reason || "Administrative lock applied to user account.",
+      ipAddress
+    });
+    return res.status(200).json(result);
+  } catch (err) {
+    console.error("[Admin API] Error locking user account:", err);
+    return res.status(err.statusCode || 500).json({
+      error: "LOCK_FAILED",
+      message: err.message || "Failed to lock user account."
+    });
+  }
+});
+adminRouter.post("/users/:userId/unlock", async (req, res) => {
+  try {
+    const admin = req.user;
+    const { userId } = req.params;
+    const { reason } = req.body || {};
+    const ipAddress = req.headers["x-forwarded-for"] || req.ip;
+    const result = await setUserAccountStatus({
+      adminUserId: admin.id,
+      adminPublicId: admin.public_id,
+      targetUserId: userId,
+      status: "ACTIVE",
+      reason: reason || "Administrative unlock applied to user account.",
+      ipAddress
+    });
+    return res.status(200).json(result);
+  } catch (err) {
+    console.error("[Admin API] Error unlocking user account:", err);
+    return res.status(err.statusCode || 500).json({
+      error: "UNLOCK_FAILED",
+      message: err.message || "Failed to unlock user account."
+    });
+  }
+});
+adminRouter.post("/users/:userId/sessions/revoke", async (req, res) => {
+  try {
+    const admin = req.user;
+    const { userId } = req.params;
+    const { reason } = req.body || {};
+    const ipAddress = req.headers["x-forwarded-for"] || req.ip;
+    const result = await revokeUserSessions({
+      adminUserId: admin.id,
+      adminPublicId: admin.public_id,
+      targetUserId: userId,
+      reason: reason || "Administrative session revocation requested.",
+      ipAddress
+    });
+    return res.status(200).json(result);
+  } catch (err) {
+    console.error("[Admin API] Error revoking user sessions:", err);
+    return res.status(err.statusCode || 500).json({
+      error: "REVOKE_FAILED",
+      message: err.message || "Failed to revoke active user sessions."
+    });
+  }
+});
 adminRouter.get("/nodes", async (req, res) => {
   try {
     const page = parseInt(req.query.page, 10) || 1;
@@ -16224,7 +17263,7 @@ async function findUserByDepositAddress(_address, _chainId) {
 init_db();
 init_bscConfig();
 init_idGenerator();
-import { v4 as uuidv423 } from "uuid";
+import { v4 as uuidv424 } from "uuid";
 init_walletLedgerService();
 init_notificationService();
 init_bscRpcProvider();
@@ -16311,7 +17350,7 @@ async function processBlockchainDepositEvent(params) {
     let depositRow;
     const now = /* @__PURE__ */ new Date();
     if (existing.rows.length === 0) {
-      const id = uuidv423();
+      const id = uuidv424();
       const publicDepositId = generateDepositPublicId();
       const initialStatus = isMatured ? "CONFIRMED" : confirmations > 0 ? "CONFIRMING" : "DETECTED";
       const confirmedAt = isMatured ? now : null;
@@ -16564,7 +17603,7 @@ init_db();
 init_idGenerator();
 init_notificationService();
 import { ethers as ethers9 } from "ethers";
-import { v4 as uuidv424 } from "uuid";
+import { v4 as uuidv425 } from "uuid";
 var DepositTransactionError = class extends Error {
   constructor(code, statusCode, message) {
     super(message);
@@ -16903,7 +17942,7 @@ depositRouter.post("/submit-txhash", requireAuth, depositLimiter, async (req, re
     let actualPublicDepositId = "";
     try {
       await db.transaction(async (trx) => {
-        const depositId = uuidv424();
+        const depositId = uuidv425();
         const publicDepositId = generateDepositPublicId();
         const insertRes = await trx.query(
           `
@@ -16940,7 +17979,7 @@ depositRouter.post("/submit-txhash", requireAuth, depositLimiter, async (req, re
         if (actualUserId !== userId) {
           throw new DepositTransactionError("DUPLICATE_TX_USER_MISMATCH", 409, "Transaction already linked to another user account.");
         }
-        const ledgerId = uuidv424();
+        const ledgerId = uuidv425();
         const publicTxnId = generateLedgerTransactionPublicId();
         const ledgerRes = await trx.query(
           `
@@ -17026,6 +18065,7 @@ depositRouter.post("/submit-txhash", requireAuth, depositLimiter, async (req, re
 
 // src/server/routes/economicRoutes.ts
 import { Router as Router16 } from "express";
+init_economicService();
 init_adminService();
 var publicEconomicRouter = Router16();
 publicEconomicRouter.get("/token-price", async (_req, res) => {
@@ -17206,411 +18246,7 @@ economicRouter.get("/audit-logs", async (req, res) => {
 
 // src/server/routes/swapRoutes.ts
 import { Router as Router17 } from "express";
-
-// src/server/services/coinSwapService.ts
-init_db();
-init_idGenerator();
-import { v4 as uuidv425 } from "uuid";
-init_walletLedgerService();
-init_notificationService();
-var userSwapLocks = /* @__PURE__ */ new Map();
-async function runWithUserLock(userId, fn) {
-  const currentLock = userSwapLocks.get(userId) || Promise.resolve();
-  let releaseLock;
-  const newLock = new Promise((resolve) => {
-    releaseLock = resolve;
-  });
-  userSwapLocks.set(userId, currentLock.then(() => newLock));
-  try {
-    await currentLock;
-    return await fn();
-  } finally {
-    releaseLock();
-    if (userSwapLocks.get(userId) === newLock) {
-      userSwapLocks.delete(userId);
-    }
-  }
-}
-async function getUserCoinBalance(userId) {
-  const db = await getDb();
-  const rewardsRes = await db.query(
-    `
-    SELECT COALESCE(SUM(amount), 0) AS total
-    FROM node_rewards
-    WHERE owner_user_id = $1 AND status != 'REVERSED'
-    `,
-    [userId]
-  );
-  const totalEarnedRewards = Number(rewardsRes.rows[0]?.total || 0);
-  const boughtRes = await db.query(
-    `
-    SELECT COALESCE(SUM(coin_amount), 0) AS total
-    FROM coin_swap_transactions
-    WHERE user_id = $1 AND status = 'COMPLETED' AND direction = 'USDT_TO_COIN' AND coin_amount > 0
-    `,
-    [userId]
-  );
-  const totalBoughtCoins = Number(boughtRes.rows[0]?.total || 0);
-  const soldRes = await db.query(
-    `
-    SELECT COALESCE(SUM(coin_amount), 0) AS total
-    FROM coin_swap_transactions
-    WHERE user_id = $1 AND status = 'COMPLETED' AND (direction = 'COIN_TO_USDT' OR direction IS NULL) AND coin_amount > 0
-    `,
-    [userId]
-  );
-  const totalSoldCoins = Number(soldRes.rows[0]?.total || 0);
-  const totalEarnedCoins = totalEarnedRewards + totalBoughtCoins;
-  const availableCoinBalance = Math.max(0, Number((totalEarnedCoins - totalSoldCoins).toFixed(6)));
-  return {
-    availableCoinBalance,
-    totalEarnedCoins,
-    totalSwappedCoins: totalSoldCoins,
-    coinSymbol: "PHIVO"
-  };
-}
-async function getSwapQuote(coinAmount) {
-  if (isNaN(coinAmount) || coinAmount <= 0) {
-    throw new Error("INVALID_COIN_AMOUNT: Coin amount must be greater than zero.");
-  }
-  const coinConfig = await getEconomicConfigByKey("INTERNAL_COIN_PRICE_USDT");
-  const globalSwapActive = await isCoinSwapEnabled();
-  if (!coinConfig || coinConfig.status !== "ACTIVE") {
-    throw new Error("SWAP_RATE_NOT_CONFIGURED: Internal coin conversion rate is not configured.");
-  }
-  const val = coinConfig.configValue || {};
-  const rateUsdt = Number(val.priceUsdt);
-  if (isNaN(rateUsdt) || rateUsdt <= 0) {
-    throw new Error("SWAP_RATE_NOT_CONFIGURED: Invalid coin conversion rate configured.");
-  }
-  const swapEnabled = globalSwapActive && val.swapEnabled !== false;
-  const usdtAmount = Number((coinAmount * rateUsdt).toFixed(4));
-  const rateVersion = coinConfig.version;
-  const effectiveFrom = val.effectiveFrom || coinConfig.effectiveFrom;
-  return {
-    coinAmount,
-    rate: rateUsdt,
-    usdtAmount,
-    rateVersion,
-    swapEnabled,
-    coinSymbol: "PHIVO",
-    effectiveFrom
-  };
-}
-async function executeCoinToUsdtSwap(params) {
-  const { userId, coinAmount, idempotencyKey } = params;
-  if (isNaN(coinAmount) || coinAmount <= 0) {
-    throw new Error("INVALID_COIN_AMOUNT: Coin amount must be a positive number.");
-  }
-  return runWithUserLock(userId, async () => {
-    const db = await getDb();
-    if (idempotencyKey && idempotencyKey.trim()) {
-      const cleanKey = idempotencyKey.trim();
-      const existingRes = await db.query(
-        `SELECT * FROM coin_swap_transactions WHERE user_id = $1 AND idempotency_key = $2`,
-        [userId, cleanKey]
-      );
-      if (existingRes.rows.length > 0) {
-        const row = existingRes.rows[0];
-        const currentBal2 = await getUserCoinBalance(userId);
-        return {
-          success: true,
-          swap: {
-            id: row.id,
-            publicSwapId: row.public_swap_id,
-            userId: row.user_id,
-            coinAmount: Number(row.coin_amount),
-            rateUsdt: Number(row.rate_usdt),
-            usdtAmount: Number(row.usdt_amount),
-            status: row.status,
-            rateVersion: Number(row.rate_version),
-            idempotencyKey: row.idempotency_key,
-            createdAt: new Date(row.created_at).toISOString(),
-            completedAt: row.completed_at ? new Date(row.completed_at).toISOString() : null
-          },
-          balances: {
-            remainingCoinBalance: currentBal2.availableCoinBalance,
-            usdtCredited: Number(row.usdt_amount)
-          }
-        };
-      }
-    }
-    const coinConfig = await getEconomicConfigByKey("INTERNAL_COIN_PRICE_USDT");
-    const globalSwapActive = await isCoinSwapEnabled();
-    if (!coinConfig || coinConfig.status !== "ACTIVE") {
-      const err = new Error("SWAP_RATE_NOT_CONFIGURED: Internal coin conversion rate is not configured.");
-      err.code = "SWAP_RATE_NOT_CONFIGURED";
-      throw err;
-    }
-    const val = coinConfig.configValue || {};
-    const rateUsdt = Number(val.priceUsdt);
-    if (isNaN(rateUsdt) || rateUsdt <= 0) {
-      const err = new Error("SWAP_RATE_NOT_CONFIGURED: Active coin conversion rate is invalid or missing.");
-      err.code = "SWAP_RATE_NOT_CONFIGURED";
-      throw err;
-    }
-    const isEnabled = globalSwapActive && val.swapEnabled !== false;
-    if (!isEnabled) {
-      const err = new Error("SWAP_DISABLED: Internal coin swapping is currently disabled by administration.");
-      err.code = "SWAP_DISABLED";
-      throw err;
-    }
-    const rateVersion = coinConfig.version;
-    const currentBal = await getUserCoinBalance(userId);
-    if (coinAmount > currentBal.availableCoinBalance) {
-      const err = new Error(
-        `INSUFFICIENT_COIN_BALANCE: Requested swap of ${coinAmount} PHIVO exceeds available balance of ${currentBal.availableCoinBalance} PHIVO.`
-      );
-      err.code = "INSUFFICIENT_COIN_BALANCE";
-      throw err;
-    }
-    const usdtAmount = Number((coinAmount * rateUsdt).toFixed(4));
-    if (usdtAmount <= 0) {
-      throw new Error("INVALID_SWAP_CALCULATION: Resulting USDT amount must be greater than zero.");
-    }
-    const id = uuidv425();
-    const publicSwapId = generateSwapPublicId();
-    const now = /* @__PURE__ */ new Date();
-    const insertRes = await db.query(
-      `
-      INSERT INTO coin_swap_transactions (
-        id, public_swap_id, user_id, coin_amount, rate_usdt, usdt_amount,
-        status, rate_version, idempotency_key, created_at, completed_at, direction
-      )
-      VALUES ($1, $2, $3, $4, $5, $6, 'COMPLETED', $7, $8, $9, $9, 'COIN_TO_USDT')
-      RETURNING *
-      `,
-      [
-        id,
-        publicSwapId,
-        userId,
-        coinAmount,
-        rateUsdt,
-        usdtAmount,
-        rateVersion,
-        idempotencyKey ? idempotencyKey.trim() : null,
-        now
-      ]
-    );
-    const swapRow = insertRes.rows[0];
-    await postLedgerCredit({
-      userId,
-      sourceType: "COIN_SWAP",
-      sourceId: swapRow.id,
-      sourceRef: swapRow.public_swap_id,
-      amount: usdtAmount,
-      currency: "USDT",
-      description: `Internal Coin Swap - ${coinAmount} PHIVO @ $${rateUsdt.toFixed(2)} USDT (${publicSwapId})`,
-      createdAt: now
-    });
-    const newBalance = await getUserCoinBalance(userId);
-    try {
-      await notifyPhivoSwapCompleted({
-        userId,
-        coinAmount,
-        usdtAmount,
-        rateUsdt,
-        swapId: swapRow.id
-      });
-    } catch (notifErr) {
-      console.warn("[Notification] Error triggering coin swap notification:", notifErr);
-    }
-    try {
-      const userRes = await db.query(
-        `SELECT email, full_name, public_id FROM users WHERE id = $1`,
-        [userId]
-      );
-      if (userRes.rowCount > 0) {
-        const user = userRes.rows[0];
-        const { queueEventEmail: queueEventEmail2 } = await Promise.resolve().then(() => (init_emailService(), emailService_exports));
-        await queueEventEmail2(user.email, "SWAP_COMPLETE", {
-          displayName: user.full_name,
-          publicId: user.public_id,
-          fromAmount: String(coinAmount),
-          toAmount: String(usdtAmount),
-          rate: String(rateUsdt)
-        });
-      }
-    } catch (emailErr) {
-      console.warn("[EmailEngine] Failed to send Swap Complete email:", emailErr);
-    }
-    return {
-      success: true,
-      swap: {
-        id: swapRow.id,
-        publicSwapId: swapRow.public_swap_id,
-        userId: swapRow.user_id,
-        coinAmount: Number(swapRow.coin_amount),
-        rateUsdt: Number(swapRow.rate_usdt),
-        usdtAmount: Number(swapRow.usdt_amount),
-        status: swapRow.status,
-        rateVersion: Number(swapRow.rate_version),
-        idempotencyKey: swapRow.idempotency_key,
-        createdAt: new Date(swapRow.created_at).toISOString(),
-        completedAt: swapRow.completed_at ? new Date(swapRow.completed_at).toISOString() : null
-      },
-      balances: {
-        remainingCoinBalance: newBalance.availableCoinBalance,
-        usdtCredited: usdtAmount
-      }
-    };
-  });
-}
-async function getUserSwapHistory(userId, options) {
-  const db = await getDb();
-  const limit = Math.min(100, Math.max(1, options?.limit || 20));
-  const offset = Math.max(0, options?.offset || 0);
-  const aggRes = await db.query(
-    `
-    SELECT 
-      COUNT(*) as count,
-      COALESCE(SUM(coin_amount), 0) as total_coins,
-      COALESCE(SUM(usdt_amount), 0) as total_usdt
-    FROM coin_swap_transactions
-    WHERE user_id = $1 AND status = 'COMPLETED'
-    `,
-    [userId]
-  );
-  const totalSwapsCount = Number(aggRes.rows[0]?.count || 0);
-  const totalSwappedCoins = Number(aggRes.rows[0]?.total_coins || 0);
-  const totalUsdtReceived = Number(aggRes.rows[0]?.total_usdt || 0);
-  const rowsRes = await db.query(
-    `
-    SELECT * FROM coin_swap_transactions
-    WHERE user_id = $1
-    ORDER BY created_at DESC
-    LIMIT $2 OFFSET $3
-    `,
-    [userId, limit, offset]
-  );
-  const swaps = rowsRes.rows.map((r) => ({
-    id: r.id,
-    publicSwapId: r.public_swap_id,
-    userId: r.user_id,
-    coinAmount: Number(r.coin_amount),
-    rateUsdt: Number(r.rate_usdt),
-    usdtAmount: Number(r.usdt_amount),
-    status: r.status,
-    rateVersion: Number(r.rate_version),
-    idempotencyKey: r.idempotency_key,
-    createdAt: new Date(r.created_at).toISOString(),
-    completedAt: r.completed_at ? new Date(r.completed_at).toISOString() : null
-  }));
-  return {
-    swaps,
-    summary: {
-      totalSwappedCoins,
-      totalUsdtReceived,
-      totalSwapsCount
-    },
-    pagination: {
-      limit,
-      offset,
-      totalCount: totalSwapsCount
-    }
-  };
-}
-async function executeUsdtToCoinSwap(params) {
-  const { userId, usdtAmount, idempotencyKey } = params;
-  if (isNaN(usdtAmount) || usdtAmount <= 0) {
-    throw new Error("INVALID_USDT_AMOUNT: USDT amount must be a positive number.");
-  }
-  return runWithUserLock(userId, async () => {
-    const db = await getDb();
-    const coinConfig = await getEconomicConfigByKey("INTERNAL_COIN_PRICE_USDT");
-    const globalSwapActive = await isCoinSwapEnabled();
-    if (!coinConfig || coinConfig.status !== "ACTIVE") {
-      const err = new Error("SWAP_RATE_NOT_CONFIGURED: Internal coin conversion rate is not configured.");
-      err.code = "SWAP_RATE_NOT_CONFIGURED";
-      throw err;
-    }
-    const val = coinConfig.configValue || {};
-    const rateUsdt = Number(val.priceUsdt);
-    if (isNaN(rateUsdt) || rateUsdt <= 0) {
-      const err = new Error("SWAP_RATE_NOT_CONFIGURED: Active coin conversion rate is invalid or missing.");
-      err.code = "SWAP_RATE_NOT_CONFIGURED";
-      throw err;
-    }
-    const isEnabled = globalSwapActive && val.swapEnabled !== false;
-    if (!isEnabled) {
-      const err = new Error("SWAP_DISABLED: Internal coin swapping is currently disabled by administration.");
-      err.code = "SWAP_DISABLED";
-      throw err;
-    }
-    const { getWalletSummary: getWalletSummary3, postLedgerDebit: postLedgerDebit2 } = await Promise.resolve().then(() => (init_walletLedgerService(), walletLedgerService_exports));
-    const wallet = await getWalletSummary3(userId);
-    if (usdtAmount > wallet.availableBalance) {
-      const err = new Error(
-        `INSUFFICIENT_USDT_BALANCE: Requested swap of $${usdtAmount.toFixed(2)} USDT exceeds available balance of $${wallet.availableBalance.toFixed(2)} USDT.`
-      );
-      err.code = "INSUFFICIENT_USDT_BALANCE";
-      throw err;
-    }
-    const coinAmount = Number((usdtAmount / rateUsdt).toFixed(4));
-    if (coinAmount <= 0) {
-      throw new Error("INVALID_SWAP_CALCULATION: Resulting coin amount must be greater than zero.");
-    }
-    const id = uuidv425();
-    const publicSwapId = generateSwapPublicId();
-    const now = /* @__PURE__ */ new Date();
-    await postLedgerDebit2({
-      userId,
-      sourceType: "COIN_SWAP",
-      sourceId: id,
-      sourceRef: publicSwapId,
-      amount: usdtAmount,
-      currency: "USDT",
-      description: `Internal Swap USDT -> PHIVO (${coinAmount} PHIVO @ $${rateUsdt.toFixed(2)} USDT)`,
-      createdAt: now
-    });
-    const insertRes = await db.query(
-      `
-      INSERT INTO coin_swap_transactions (
-        id, public_swap_id, user_id, coin_amount, rate_usdt, usdt_amount,
-        status, rate_version, idempotency_key, created_at, completed_at, direction
-      )
-      VALUES ($1, $2, $3, $4, $5, $6, 'COMPLETED', $7, $8, $9, $9, 'USDT_TO_COIN')
-      RETURNING *
-      `,
-      [
-        id,
-        publicSwapId,
-        userId,
-        coinAmount,
-        rateUsdt,
-        usdtAmount,
-        coinConfig.version,
-        idempotencyKey ? idempotencyKey.trim() : null,
-        now
-      ]
-    );
-    const updatedWallet = await getWalletSummary3(userId);
-    const updatedCoinBal = await getUserCoinBalance(userId);
-    const swapRow = insertRes.rows[0];
-    return {
-      success: true,
-      swap: {
-        id: swapRow.id,
-        publicSwapId: swapRow.public_swap_id,
-        userId: swapRow.user_id,
-        coinAmount: Number(swapRow.coin_amount),
-        rateUsdt: Number(swapRow.rate_usdt),
-        usdtAmount: Number(swapRow.usdt_amount),
-        status: swapRow.status,
-        rateVersion: Number(swapRow.rate_version),
-        idempotencyKey: swapRow.idempotency_key,
-        createdAt: new Date(swapRow.created_at).toISOString(),
-        completedAt: swapRow.completed_at ? new Date(swapRow.completed_at).toISOString() : null
-      },
-      balances: {
-        remainingUsdtBalance: updatedWallet.availableBalance,
-        coinsCredited: coinAmount
-      }
-    };
-  });
-}
-
-// src/server/routes/swapRoutes.ts
+init_coinSwapService();
 var swapRouter = Router17();
 swapRouter.get("/quote", async (req, res) => {
   try {

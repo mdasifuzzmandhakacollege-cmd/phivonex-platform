@@ -1,6 +1,10 @@
 import { getDb } from '../db/db';
 import { v4 as uuidv4 } from 'uuid';
 import { GENESIS_NODE_CAP } from '../../config/nodeConfig';
+import { generateLedgerTransactionPublicId } from '../utils/idGenerator';
+import { getWalletSummary } from './walletLedgerService';
+import { getUserCoinBalance } from './coinSwapService';
+import { createNotification, notificationEmitter } from './notificationService';
 
 export interface AdminSummaryMetrics {
   totalUsers: number;
@@ -950,4 +954,606 @@ export async function updateAdminUserProfile(params: {
   });
 
   return { user: updatedUser };
+}
+
+/**
+ * User 360° Comprehensive Inspection:
+ * Retrieves complete server-authoritative details for an individual user:
+ * - Profile & Registration & Sponsor
+ * - Wallet Overview (USDT & PHIVO balances, deposits, withdrawals, swaps, purchases, commissions, admin adjustments)
+ * - Ledger Transactions
+ * - Nodes & Node Purchase Orders
+ * - Active Sessions & Security Logs
+ * - Admin Audit Trail targeting this user
+ */
+export async function getUser360Details(targetUserIdOrPublicId: string) {
+  const db = await getDb();
+
+  // 1. Fetch User Record
+  const userRes = await db.query<any>(
+    `SELECT id, public_id, full_name, email, phone, country, status, COALESCE(role, 'USER') AS role, email_verified_at, created_at, last_login_at FROM users WHERE id::text = $1 OR public_id = $1 OR LOWER(email) = LOWER($1)`,
+    [targetUserIdOrPublicId]
+  );
+
+  if (userRes.rows.length === 0) {
+    const err: any = new Error(`Target user '${targetUserIdOrPublicId}' not found.`);
+    err.statusCode = 404;
+    throw err;
+  }
+
+  const u = userRes.rows[0];
+  const userId = u.id;
+
+  // 2. Fetch Sponsor / Referral Details
+  const sponsorRes = await db.query<any>(
+    `
+    SELECT ur.referral_code, sp.id AS sponsor_id, sp.public_id AS sponsor_public_id, sp.full_name AS sponsor_full_name, sp.email AS sponsor_email
+    FROM user_referrals ur
+    LEFT JOIN users sp ON ur.sponsor_user_id = sp.id
+    WHERE ur.user_id = $1
+    `,
+    [userId]
+  );
+  const sponsor = sponsorRes.rows[0] || null;
+
+  // 3. Fetch Wallet Overview (USDT & PHIVO)
+  const [usdtWallet, phivoWallet, depositAgg, withdrawalAgg, swapAgg, orderAgg, adminAdjAgg] = await Promise.all([
+    getWalletSummary(userId),
+    getUserCoinBalance(userId),
+    db.query<any>(`
+      SELECT COALESCE(SUM(amount), 0)::float AS total, COUNT(*)::int AS count
+      FROM blockchain_deposits
+      WHERE user_id = $1 AND status IN ('CREDITED', 'CONFIRMED', 'SWEPT')
+    `, [userId]),
+    db.query<any>(`
+      SELECT 
+        COALESCE(SUM(amount), 0)::float AS total,
+        COUNT(*)::int AS count,
+        COALESCE(SUM(CASE WHEN status = 'COMPLETED' THEN amount ELSE 0 END), 0)::float AS completed_total,
+        COALESCE(SUM(CASE WHEN status = 'PENDING' THEN amount ELSE 0 END), 0)::float AS pending_total
+      FROM withdrawals
+      WHERE user_id = $1
+    `, [userId]),
+    db.query<any>(`
+      SELECT 
+        COALESCE(SUM(usdt_amount), 0)::float AS total_usdt,
+        COALESCE(SUM(coin_amount), 0)::float AS total_phivo,
+        COUNT(*)::int AS count
+      FROM coin_swap_transactions
+      WHERE user_id = $1 AND status = 'COMPLETED'
+    `, [userId]),
+    db.query<any>(`
+      SELECT COALESCE(SUM(amount_usd), 0)::float AS total, COUNT(*)::int AS count
+      FROM node_orders
+      WHERE user_id = $1 AND status = 'COMPLETED'
+    `, [userId]),
+    db.query<any>(`
+      SELECT 
+        COALESCE(SUM(CASE WHEN entry_type = 'CREDIT' THEN amount ELSE 0 END), 0)::float AS credit_total,
+        COALESCE(SUM(CASE WHEN entry_type = 'DEBIT' THEN amount ELSE 0 END), 0)::float AS debit_total,
+        COUNT(*)::int AS count
+      FROM financial_ledger_entries
+      WHERE user_id = $1 AND source_type = 'ADMIN_ADJUSTMENT' AND status = 'SETTLED'
+    `, [userId]),
+  ]);
+
+  const depRow = depositAgg.rows[0] || {};
+  const wRow = withdrawalAgg.rows[0] || {};
+  const swRow = swapAgg.rows[0] || {};
+  const ordRow = orderAgg.rows[0] || {};
+  const admRow = adminAdjAgg.rows[0] || {};
+
+  // 4. Fetch User Deposit Addresses & Withdrawal History
+  const [depositAddressesRes, recentWithdrawalsRes] = await Promise.all([
+    db.query<any>(`SELECT id, chain_id, asset, address, derivation_index, created_at FROM user_deposit_addresses WHERE user_id = $1`, [userId]),
+    db.query<any>(`SELECT id, public_withdrawal_id, amount, currency, destination_type, destination_reference, status, created_at, completed_at FROM withdrawals WHERE user_id = $1 ORDER BY created_at DESC LIMIT 20`, [userId]),
+  ]);
+
+  // 5. Fetch User Owned Nodes & Node Orders
+  const [nodesRes, ordersRes] = await Promise.all([
+    db.query<any>(`SELECT id, node_number, public_node_id, status, reserved_at, activated_at, created_at FROM nodes WHERE owner_user_id = $1 ORDER BY node_number ASC`, [userId]),
+    db.query<any>(`SELECT id, public_order_id, node_number, amount_usd, currency, status, payment_method, payment_reference, created_at, completed_at FROM node_orders WHERE user_id = $1 ORDER BY created_at DESC LIMIT 20`, [userId]),
+  ]);
+
+  // 6. Fetch User Financial Ledger Transactions
+  const ledgerRes = await db.query<any>(
+    `SELECT id, public_txn_id, entry_type, source_type, source_id, source_ref, description, amount, currency, status, created_at FROM financial_ledger_entries WHERE user_id = $1 ORDER BY created_at DESC LIMIT 50`,
+    [userId]
+  );
+
+  // 7. Fetch Active / Recent Sessions & Security Logs
+  const [sessionsRes, securityEventsRes] = await Promise.all([
+    db.query<any>(`SELECT id, user_agent, ip_address, created_at, expires_at, last_used_at, revoked_at FROM sessions WHERE user_id = $1 ORDER BY created_at DESC LIMIT 20`, [userId]),
+    db.query<any>(`SELECT id, event_type, description, user_agent_summary, created_at FROM security_events WHERE user_id = $1 ORDER BY created_at DESC LIMIT 20`, [userId]),
+  ]);
+
+  // 8. Fetch Admin Audit Logs targeting this user
+  const adminAuditRes = await db.query<any>(
+    `
+    SELECT id, admin_user_id, admin_public_id, action, target_type, target_id, details, metadata, ip_address, created_at
+    FROM admin_audit_logs
+    WHERE target_id = $1 OR target_id = $2 OR (metadata IS NOT NULL AND metadata::text LIKE '%' || $1 || '%')
+    ORDER BY created_at DESC
+    LIMIT 30
+    `,
+    [u.public_id, userId]
+  );
+
+  return {
+    profile: {
+      id: u.id,
+      publicId: u.public_id,
+      fullName: u.full_name,
+      email: u.email,
+      phone: u.phone || null,
+      country: u.country,
+      status: u.status,
+      role: u.role,
+      emailVerified: !!u.email_verified_at,
+      emailVerifiedAt: u.email_verified_at ? new Date(u.email_verified_at).toISOString() : null,
+      createdAt: new Date(u.created_at).toISOString(),
+      lastLoginAt: u.last_login_at ? new Date(u.last_login_at).toISOString() : null,
+      sponsor: sponsor
+        ? {
+            referralCode: sponsor.referral_code,
+            sponsorPublicId: sponsor.sponsor_public_id || null,
+            sponsorFullName: sponsor.sponsor_full_name || null,
+            sponsorEmail: sponsor.sponsor_email || null,
+          }
+        : null,
+    },
+    walletOverview: {
+      usdtAvailableBalance: usdtWallet.availableBalance,
+      phivoAvailableBalance: phivoWallet.availableCoinBalance,
+      totalDepositsUsdt: Number(depRow.total || 0),
+      depositCount: Number(depRow.count || 0),
+      totalWithdrawalsUsdt: Number(wRow.total || 0),
+      completedWithdrawalsUsdt: Number(wRow.completed_total || 0),
+      pendingWithdrawalsUsdt: Number(wRow.pending_total || 0),
+      withdrawalCount: Number(wRow.count || 0),
+      totalSwapsUsdt: Number(swRow.total_usdt || 0),
+      totalSwapsPhivo: Number(swRow.total_phivo || 0),
+      swapCount: Number(swRow.count || 0),
+      nodePurchasesUsdt: Number(ordRow.total || 0),
+      orderCount: Number(ordRow.count || 0),
+      rewardsEarnedPhivo: phivoWallet.totalEarnedCoins,
+      referralCommissionsUsdt: usdtWallet.breakdown.referral,
+      matchingRewardsUsdt: usdtWallet.breakdown.matching,
+      promotionBonusesUsdt: usdtWallet.breakdown.promotion,
+      adminAdjustments: {
+        totalCreditsUsdt: Number(admRow.credit_total || 0),
+        totalDebitsUsdt: Number(admRow.debit_total || 0),
+        netUsdt: Number(admRow.credit_total || 0) - Number(admRow.debit_total || 0),
+        count: Number(admRow.count || 0),
+      },
+    },
+    addresses: depositAddressesRes.rows.map((a) => ({
+      id: a.id,
+      chainId: a.chain_id,
+      asset: a.asset,
+      address: a.address,
+      derivationIndex: a.derivation_index,
+      createdAt: new Date(a.created_at).toISOString(),
+    })),
+    recentWithdrawals: recentWithdrawalsRes.rows.map((w) => ({
+      id: w.id,
+      publicWithdrawalId: w.public_withdrawal_id,
+      amount: Number(w.amount),
+      currency: w.currency,
+      destinationType: w.destination_type,
+      destinationReference: w.destination_reference,
+      status: w.status,
+      createdAt: new Date(w.created_at).toISOString(),
+      completedAt: w.completed_at ? new Date(w.completed_at).toISOString() : null,
+    })),
+    nodes: nodesRes.rows.map((n) => ({
+      id: n.id,
+      nodeNumber: n.node_number,
+      publicNodeId: n.public_node_id,
+      status: n.status,
+      reservedAt: n.reserved_at ? new Date(n.reserved_at).toISOString() : null,
+      activatedAt: n.activated_at ? new Date(n.activated_at).toISOString() : null,
+      createdAt: new Date(n.created_at).toISOString(),
+    })),
+    orders: ordersRes.rows.map((o) => ({
+      id: o.id,
+      publicOrderId: o.public_order_id,
+      nodeNumber: o.node_number,
+      amountUsd: Number(o.amount_usd),
+      currency: o.currency,
+      status: o.status,
+      paymentMethod: o.payment_method,
+      paymentReference: o.payment_reference,
+      createdAt: new Date(o.created_at).toISOString(),
+      completedAt: o.completed_at ? new Date(o.completed_at).toISOString() : null,
+    })),
+    transactions: ledgerRes.rows.map((r) => ({
+      id: r.id,
+      publicTxnId: r.public_txn_id,
+      entryType: r.entry_type,
+      sourceType: r.source_type,
+      sourceId: r.source_id,
+      sourceRef: r.source_ref,
+      description: r.description,
+      amount: Number(r.amount),
+      currency: r.currency,
+      status: r.status,
+      createdAt: new Date(r.created_at).toISOString(),
+    })),
+    sessions: sessionsRes.rows.map((s) => ({
+      id: s.id,
+      userAgent: s.user_agent,
+      ipAddress: s.ip_address,
+      createdAt: new Date(s.created_at).toISOString(),
+      expiresAt: new Date(s.expires_at).toISOString(),
+      lastUsedAt: new Date(s.last_used_at).toISOString(),
+      revokedAt: s.revoked_at ? new Date(s.revoked_at).toISOString() : null,
+      isActive: !s.revoked_at && new Date(s.expires_at).getTime() > Date.now(),
+    })),
+    securityEvents: securityEventsRes.rows.map((se) => ({
+      id: se.id,
+      eventType: se.event_type,
+      description: se.description,
+      userAgentSummary: se.user_agent_summary,
+      createdAt: new Date(se.created_at).toISOString(),
+    })),
+    auditLogs: adminAuditRes.rows.map((al) => ({
+      id: al.id,
+      adminUserId: al.admin_user_id,
+      adminPublicId: al.admin_public_id,
+      action: al.action,
+      targetType: al.target_type,
+      targetId: al.target_id,
+      details: al.details,
+      metadata: al.metadata ? (typeof al.metadata === 'string' ? JSON.parse(al.metadata) : al.metadata) : null,
+      ipAddress: al.ip_address,
+      createdAt: new Date(al.created_at).toISOString(),
+    })),
+  };
+}
+
+/**
+ * Execute Secure Admin Wallet Adjustment inside a Single PostgreSQL Transaction:
+ * - NO direct balance overwrite (UPDATE users SET balance = ...)
+ * - Safe decimal handling (amount > 0, finite number)
+ * - Row lock target user (SELECT FOR UPDATE)
+ * - Negative balance protection (DEBIT rejected if current balance < amount)
+ * - Idempotency guard (unique source_ref / idempotency key prevents duplicate execution)
+ * - Immutable financial_ledger_entries record
+ * - Full admin audit logging
+ * - Realtime SSE notification dispatch
+ */
+export async function executeAdminWalletAdjustment(params: {
+  adminUserId: string;
+  adminPublicId: string;
+  targetUserId: string;
+  asset: 'USDT' | 'PHIVO';
+  direction: 'CREDIT' | 'DEBIT';
+  amount: number;
+  reason: string;
+  idempotencyKey?: string;
+  ipAddress?: string;
+}) {
+  const db = await getDb();
+
+  // 1. Input Validation
+  const cleanAsset = (params.asset || '').toUpperCase().trim() as 'USDT' | 'PHIVO';
+  if (cleanAsset !== 'USDT' && cleanAsset !== 'PHIVO') {
+    const err: any = new Error('Invalid asset specified. Supported assets: USDT, PHIVO.');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const cleanDirection = (params.direction || '').toUpperCase().trim() as 'CREDIT' | 'DEBIT';
+  if (cleanDirection !== 'CREDIT' && cleanDirection !== 'DEBIT') {
+    const err: any = new Error('Invalid direction specified. Supported directions: CREDIT, DEBIT.');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const numAmount = Number(params.amount);
+  if (isNaN(numAmount) || !isFinite(numAmount) || numAmount <= 0) {
+    const err: any = new Error('Adjustment amount must be a positive, finite number strictly greater than 0.');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  if (!params.reason || params.reason.trim().length < 5) {
+    const err: any = new Error('Administrative reason is mandatory (minimum 5 characters) for wallet adjustment.');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const cleanReason = params.reason.trim();
+  const idempotencyKey = params.idempotencyKey ? params.idempotencyKey.trim() : null;
+
+  // 2. Idempotency Guard Check (if key supplied)
+  if (idempotencyKey) {
+    const existingTx = await db.query<any>(
+      `
+      SELECT f.*, u.public_id AS target_public_id
+      FROM financial_ledger_entries f
+      JOIN users u ON f.user_id = u.id
+      WHERE f.source_type = 'ADMIN_ADJUSTMENT' AND f.source_ref = $1
+      LIMIT 1
+      `,
+      [idempotencyKey]
+    );
+
+    if (existingTx.rows.length > 0) {
+      const row = existingTx.rows[0];
+      return {
+        success: true,
+        isDuplicate: true,
+        transaction: {
+          publicTxnId: row.public_txn_id,
+          targetUserId: row.user_id,
+          targetPublicId: row.target_public_id,
+          asset: row.currency,
+          direction: row.entry_type,
+          amount: Number(row.amount),
+          reason: row.description,
+          newBalance: undefined,
+          createdAt: new Date(row.created_at).toISOString(),
+        },
+      };
+    }
+  }
+
+  // 3. PostgreSQL Transaction with Row Lock & Negative Balance Protection
+  return await db.transaction(async (txClient) => {
+    // Row Lock
+    const targetUserRes = await txClient.query<any>(
+      `SELECT id, public_id, full_name, email, status, COALESCE(role, 'USER') AS role FROM users WHERE id::text = $1 OR public_id = $1 FOR UPDATE`,
+      [params.targetUserId]
+    );
+
+    if (targetUserRes.rows.length === 0) {
+      const err: any = new Error(`Target user '${params.targetUserId}' not found.`);
+      err.statusCode = 404;
+      throw err;
+    }
+
+    const targetUser = targetUserRes.rows[0];
+
+    // Check target balance if direction is DEBIT
+    let currentBalance = 0;
+    if (cleanAsset === 'USDT') {
+      const usdtSummary = await getWalletSummary(targetUser.id);
+      currentBalance = usdtSummary.availableBalance;
+    } else {
+      const phivoSummary = await getUserCoinBalance(targetUser.id);
+      currentBalance = phivoSummary.availableCoinBalance;
+    }
+
+    if (cleanDirection === 'DEBIT' && currentBalance < numAmount) {
+      const err: any = new Error(
+        `INSUFFICIENT_BALANCE: Cannot DEBIT ${numAmount} ${cleanAsset} from user ${targetUser.public_id}. Current available balance: ${currentBalance} ${cleanAsset}.`
+      );
+      err.statusCode = 400;
+      throw err;
+    }
+
+    // Insert Immutable Financial Ledger Entry
+    const ledgerId = uuidv4();
+    const sourceId = uuidv4();
+    const publicTxnId = generateLedgerTransactionPublicId();
+    const sourceRef = idempotencyKey || params.adminPublicId;
+    const description = `Admin Adjustment (${cleanDirection}): ${cleanReason}`;
+
+    await txClient.query(
+      `
+      INSERT INTO financial_ledger_entries (
+        id, public_txn_id, user_id, entry_type, source_type, source_id,
+        source_ref, description, amount, currency, status, created_at
+      )
+      VALUES ($1, $2, $3, $4, 'ADMIN_ADJUSTMENT', $5, $6, $7, $8, $9, 'SETTLED', CURRENT_TIMESTAMP)
+      `,
+      [ledgerId, publicTxnId, targetUser.id, cleanDirection, sourceId, sourceRef, description, numAmount, cleanAsset]
+    );
+
+    // Calculate updated balance
+    const newBalance = cleanDirection === 'CREDIT' ? currentBalance + numAmount : currentBalance - numAmount;
+
+    // Log Administrator Audit Action
+    await txClient.query(
+      `
+      INSERT INTO admin_audit_logs (
+        id, admin_user_id, admin_public_id, action, target_type, target_id, details, metadata, ip_address, created_at
+      )
+      VALUES ($1, $2, $3, $4, 'USER', $5, $6, $7, $8, CURRENT_TIMESTAMP)
+      `,
+      [
+        uuidv4(),
+        params.adminUserId,
+        params.adminPublicId,
+        cleanDirection === 'CREDIT' ? 'ADMIN_WALLET_CREDIT' : 'ADMIN_WALLET_DEBIT',
+        targetUser.public_id,
+        `Admin ${params.adminPublicId} executed ${cleanDirection} of ${numAmount} ${cleanAsset} for user ${targetUser.public_id}. Reason: ${cleanReason}`,
+        JSON.stringify({
+          adminUserId: params.adminUserId,
+          adminPublicId: params.adminPublicId,
+          targetUserId: targetUser.id,
+          targetPublicId: targetUser.public_id,
+          asset: cleanAsset,
+          direction: cleanDirection,
+          amount: numAmount,
+          reason: cleanReason,
+          publicTxnId,
+          idempotencyKey,
+          previousBalance: currentBalance,
+          newBalance,
+        }),
+        params.ipAddress || null,
+      ]
+    );
+
+    // 4. Async Notification & SSE Realtime Update
+    createNotification({
+      userId: targetUser.id,
+      type: 'SECURITY_ALERT',
+      title: `Wallet Adjustment (${cleanDirection})`,
+      message: `An administrative ${cleanDirection.toLowerCase()} of ${numAmount} ${cleanAsset} was applied to your wallet balance. Reason: ${cleanReason}`,
+      sourceType: 'ADMIN_ADJUSTMENT',
+      sourceId: publicTxnId,
+    }).catch(console.error);
+
+    try {
+      notificationEmitter.emit(`notification:${targetUser.id}`, {
+        type: 'WALLET_UPDATED',
+        asset: cleanAsset,
+        direction: cleanDirection,
+        amount: numAmount,
+        newBalance,
+        publicTxnId,
+      });
+    } catch {}
+
+    return {
+      success: true,
+      isDuplicate: false,
+      transaction: {
+        publicTxnId,
+        targetUserId: targetUser.id,
+        targetPublicId: targetUser.public_id,
+        asset: cleanAsset,
+        direction: cleanDirection,
+        amount: numAmount,
+        reason: cleanReason,
+        previousBalance: currentBalance,
+        newBalance,
+        createdAt: new Date().toISOString(),
+      },
+    };
+  });
+}
+
+/**
+ * Account Lock / Unlock / Suspend Administrative Action with Audit Log and Session Revocation
+ */
+export async function setUserAccountStatus(params: {
+  adminUserId: string;
+  adminPublicId: string;
+  targetUserId: string;
+  status: 'ACTIVE' | 'LOCKED' | 'SUSPENDED';
+  reason: string;
+  ipAddress?: string;
+}) {
+  const db = await getDb();
+
+  if (!params.reason || params.reason.trim().length < 5) {
+    const err: any = new Error('Admin reason is mandatory (minimum 5 characters) for account status updates.');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const targetRes = await db.query<any>(`SELECT id, public_id, full_name, email, status FROM users WHERE id::text = $1 OR public_id = $1`, [params.targetUserId]);
+  if (targetRes.rows.length === 0) {
+    const err: any = new Error('Target user account not found.');
+    err.statusCode = 404;
+    throw err;
+  }
+
+  const targetUser = targetRes.rows[0];
+
+  if (targetUser.id === params.adminUserId && params.status !== 'ACTIVE') {
+    const err: any = new Error('You cannot lock or suspend your own active administrator account.');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  await db.query(`UPDATE users SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`, [params.status, targetUser.id]);
+
+  // If locking or suspending, revoke active sessions immediately
+  if (params.status === 'LOCKED' || params.status === 'SUSPENDED') {
+    await db.query(`UPDATE sessions SET revoked_at = CURRENT_TIMESTAMP WHERE user_id = $1 AND revoked_at IS NULL`, [targetUser.id]);
+  }
+
+  const actionType = params.status === 'LOCKED' ? 'ADMIN_USER_LOCK' : params.status === 'ACTIVE' ? 'ADMIN_USER_UNLOCK' : 'ADMIN_USER_SUSPEND';
+
+  await logAdminAction({
+    adminUserId: params.adminUserId,
+    adminPublicId: params.adminPublicId,
+    action: actionType,
+    targetType: 'USER',
+    targetId: targetUser.public_id,
+    details: `Admin ${params.adminPublicId} set account status to ${params.status} for user ${targetUser.public_id}. Reason: ${params.reason}`,
+    metadata: {
+      targetUserId: targetUser.id,
+      targetPublicId: targetUser.public_id,
+      previousStatus: targetUser.status,
+      newStatus: params.status,
+      reason: params.reason,
+    },
+    ipAddress: params.ipAddress,
+  });
+
+  try {
+    notificationEmitter.emit(`notification:${targetUser.id}`, {
+      type: 'USER_STATUS_UPDATED',
+      status: params.status,
+    });
+  } catch {}
+
+  return { success: true, targetPublicId: targetUser.public_id, status: params.status };
+}
+
+/**
+ * Revoke Active Sessions for User with Audit Log
+ */
+export async function revokeUserSessions(params: {
+  adminUserId: string;
+  adminPublicId: string;
+  targetUserId: string;
+  reason: string;
+  ipAddress?: string;
+}) {
+  const db = await getDb();
+
+  if (!params.reason || params.reason.trim().length < 5) {
+    const err: any = new Error('Admin reason is mandatory (minimum 5 characters) for session revocation.');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const targetRes = await db.query<any>(`SELECT id, public_id FROM users WHERE id::text = $1 OR public_id = $1`, [params.targetUserId]);
+  if (targetRes.rows.length === 0) {
+    const err: any = new Error('Target user account not found.');
+    err.statusCode = 404;
+    throw err;
+  }
+
+  const targetUser = targetRes.rows[0];
+
+  const revokeRes = await db.query<any>(
+    `UPDATE sessions SET revoked_at = CURRENT_TIMESTAMP WHERE user_id = $1 AND revoked_at IS NULL RETURNING id`,
+    [targetUser.id]
+  );
+
+  const revokedCount = revokeRes.rowCount || 0;
+
+  await logAdminAction({
+    adminUserId: params.adminUserId,
+    adminPublicId: params.adminPublicId,
+    action: 'ADMIN_SESSION_REVOKE',
+    targetType: 'USER',
+    targetId: targetUser.public_id,
+    details: `Admin ${params.adminPublicId} revoked ${revokedCount} active sessions for user ${targetUser.public_id}. Reason: ${params.reason}`,
+    metadata: {
+      targetUserId: targetUser.id,
+      targetPublicId: targetUser.public_id,
+      revokedCount,
+      reason: params.reason,
+    },
+    ipAddress: params.ipAddress,
+  });
+
+  try {
+    notificationEmitter.emit(`notification:${targetUser.id}`, {
+      type: 'SESSION_REVOKED',
+      revokedCount,
+    });
+  } catch {}
+
+  return { success: true, targetPublicId: targetUser.public_id, revokedCount };
 }

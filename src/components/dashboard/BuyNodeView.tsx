@@ -24,6 +24,7 @@ import { UserProfile } from '../../context/AuthContext';
 import { useSystemConfig } from '../../context/SystemConfigContext';
 import { GENESIS_NODE_CAP, NODE_BASE_PRICE_USD, RESERVATION_EXPIRY_MINUTES } from '../../config/nodeConfig';
 import { UsdtIcon, BnbIcon, PhivoCoinIcon } from '../brand/CryptoIcons';
+import { GenesisEngineAnimation } from '../GenesisEngineAnimation';
 
 interface BuyNodeViewProps {
   user: UserProfile;
@@ -80,6 +81,8 @@ export const BuyNodeView: React.FC<BuyNodeViewProps> = ({ user, onNavigateTab })
   const [devSettling, setDevSettling] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [selectedMethod, setSelectedMethod] = useState<'CRYPTO_USDT' | 'BANK_WIRE'>('CRYPTO_USDT');
+  const [nodeQty, setNodeQty] = useState<number>(1);
+  const [showMobileDetails, setShowMobileDetails] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [activatedNode, setActivatedNode] = useState<{ publicNodeId: string; nodeNumber: number } | null>(null);
@@ -860,124 +863,208 @@ export const BuyNodeView: React.FC<BuyNodeViewProps> = ({ user, onNavigateTab })
             </div>
           </div>
 
-          <div className="p-6 sm:p-8 rounded-2xl bg-[#07101D] border border-white/[0.08] shadow-xl space-y-6">
-          <div className="flex items-center justify-between border-b border-white/[0.08] pb-4">
-            <div className="space-y-1">
-              <h2 className="text-base font-bold text-white flex items-center gap-2">
-                <Server className="w-4 h-4 text-[#00CFFF]" />
-                <span>Genesis Node Specification</span>
-              </h2>
-              <p className="text-xs text-[#98A2B3]">
-                Lock your spot in the initial 10,000 Genesis consensus validators.
-              </p>
-            </div>
+          {/* FUTURISTIC GENESIS ENGINE ANIMATED MACHINERY PREVIEW */}
+          <GenesisEngineAnimation
+            nodeNumber={42}
+            publicNodeId="PHX-GENESIS-ENGINE"
+            distributedPhivo={3175}
+            remainingPhivo={6825}
+            currentDay={127}
+            totalDays={400}
+            status="ACTIVE"
+            isEmitting={true}
+          />
 
-            <span className="text-xs font-mono text-[#32D583] bg-[#32D583]/10 px-3 py-1 rounded-full border border-[#32D583]/30">
-              Tier 1 Genesis
-            </span>
-          </div>
-
-          {/* Specs Grid */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            <div className="p-4 rounded-xl bg-[#05070B] border border-white/[0.06] space-y-1">
-              <div className="text-[10px] font-mono text-[#98A2B3]">CONSENSUS WEIGHT</div>
-              <div className="text-sm font-bold text-white font-mono">1.00x Validator Tier</div>
-              <p className="text-[10px] text-[#98A2B3]">Full block verification authority</p>
-            </div>
-
-            <div className="p-4 rounded-xl bg-[#05070B] border border-white/[0.06] space-y-1">
-              <div className="text-[10px] font-mono text-[#98A2B3]">ACQUISITION PRICE</div>
-              <div className="text-sm font-bold text-white font-mono">$1,000 USD</div>
-              <p className="text-[10px] text-[#98A2B3]">Guaranteed Genesis base tier</p>
-            </div>
-
-            <div className="p-4 rounded-xl bg-[#05070B] border border-white/[0.06] space-y-1">
-              <div className="text-[10px] font-mono text-[#98A2B3]">INVENTORY STATUS</div>
-              <div className="text-sm font-bold text-[#00CFFF] font-mono">
-                {isSoldOut ? 'Sold Out' : `${(stats?.available ?? 0).toLocaleString()} Available`}
+          {/* CUSTOMER PURCHASE CARD & ORDER SUMMARY */}
+          <div className="p-6 sm:p-8 rounded-2xl bg-[#07101D] border border-white/[0.08] shadow-2xl space-y-6">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-white/[0.08] pb-4">
+              <div>
+                <h2 className="text-lg font-bold text-white flex items-center gap-2 font-mono">
+                  <Server className="w-5 h-5 text-[#00CFFF]" />
+                  <span>Genesis Node Launch Purchase Panel</span>
+                </h2>
+                <p className="text-xs text-[#98A2B3] mt-0.5">
+                  10,000 PHIVO Lifetime Allocation • 25 PHIVO / Day • 400-Day Distribution Schedule
+                </p>
               </div>
-              <p className="text-[10px] text-[#98A2B3]">Strictly capped at 10,000</p>
-            </div>
-          </div>
 
-          {/* Payment Method Option */}
-          <div className="space-y-3">
-            <label className="text-xs font-semibold text-white block">Preferred Settlement Protocol</label>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="px-3 py-1 rounded-full text-xs font-mono font-bold bg-[#00CFFF]/10 border border-[#00CFFF]/30 text-[#00CFFF]">
+                Current Capacity: 10,000 Nodes
+              </div>
+            </div>
+
+            {/* Quantity Selector & Key Launch Specs */}
+            <div className="grid grid-cols-1 md:grid-cols-12 gap-6 items-center">
+              <div className="md:col-span-6 space-y-4">
+                <div className="p-4 rounded-xl bg-[#05070B] border border-white/[0.06] space-y-3">
+                  <span className="text-xs font-mono text-[#98A2B3] uppercase block">Select Node Quantity</span>
+                  <div className="flex items-center gap-4">
+                    <button
+                      type="button"
+                      onClick={() => setNodeQty((q) => Math.max(1, q - 1))}
+                      className="w-10 h-10 rounded-lg bg-white/[0.06] hover:bg-white/[0.12] text-white font-bold text-lg flex items-center justify-center transition-colors cursor-pointer"
+                    >
+                      -
+                    </button>
+                    <span className="text-2xl font-extrabold font-mono text-white w-12 text-center tabular-nums">
+                      {nodeQty}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setNodeQty((q) => Math.min(10, q + 1))}
+                      className="w-10 h-10 rounded-lg bg-white/[0.06] hover:bg-white/[0.12] text-white font-bold text-lg flex items-center justify-center transition-colors cursor-pointer"
+                    >
+                      +
+                    </button>
+                    <span className="text-xs font-mono text-[#98A2B3] ml-2">
+                      @ ${(1000).toLocaleString()} USD / Node
+                    </span>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3 text-xs font-mono">
+                  <div className="p-3 rounded-xl bg-[#05070B] border border-white/[0.06]">
+                    <span className="text-[10px] text-[#98A2B3] block">LIFETIME ALLOC / NODE</span>
+                    <span className="text-sm font-bold text-white">10,000 PHIVO</span>
+                  </div>
+                  <div className="p-3 rounded-xl bg-[#05070B] border border-white/[0.06]">
+                    <span className="text-[10px] text-[#98A2B3] block">DAILY EMISSION / NODE</span>
+                    <span className="text-sm font-bold text-[#32D583]">25 PHIVO / Day</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Order Summary Table */}
+              <div className="md:col-span-6 p-5 rounded-xl bg-[#05070B] border border-white/[0.08] space-y-3 font-mono text-xs">
+                <span className="text-xs font-bold text-white uppercase block border-b border-white/[0.06] pb-2">
+                  ORDER SUMMARY ({nodeQty} {nodeQty === 1 ? 'NODE' : 'NODES'})
+                </span>
+
+                <div className="flex items-center justify-between text-[#98A2B3]">
+                  <span>Node Quantity</span>
+                  <span className="text-white font-bold">{nodeQty}</span>
+                </div>
+                <div className="flex items-center justify-between text-[#98A2B3]">
+                  <span>Node Price</span>
+                  <span className="text-white">$1,000 USD / Node</span>
+                </div>
+                <div className="flex items-center justify-between text-[#98A2B3]">
+                  <span>Total PHIVO Allocation</span>
+                  <span className="text-[#00CFFF] font-bold">{(10000 * nodeQty).toLocaleString()} PHIVO</span>
+                </div>
+                <div className="flex items-center justify-between text-[#98A2B3]">
+                  <span>Daily Emission Across Nodes</span>
+                  <span className="text-[#32D583] font-bold">{(25 * nodeQty).toLocaleString()} PHIVO / Day</span>
+                </div>
+                <div className="flex items-center justify-between text-[#98A2B3]">
+                  <span>Distribution Term</span>
+                  <span className="text-white">400 Days</span>
+                </div>
+
+                <div className="pt-2 border-t border-white/[0.08] flex items-center justify-between text-sm">
+                  <span className="font-bold text-white">TOTAL PAYMENT</span>
+                  <span className="font-extrabold text-[#00CFFF] text-base">${(1000 * nodeQty).toLocaleString()} USD</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Mobile Expandable Details Drawer Toggle (Section 20) */}
+            <div className="block sm:hidden pt-2">
               <button
                 type="button"
-                onClick={() => setSelectedMethod('CRYPTO_USDT')}
-                className={`p-4 rounded-xl border text-left transition-all cursor-pointer min-h-[44px] ${
-                  selectedMethod === 'CRYPTO_USDT'
-                    ? 'bg-[#00CFFF]/10 border-[#00CFFF] text-white'
-                    : 'bg-[#05070B] border-white/[0.08] text-[#98A2B3] hover:border-white/[0.2]'
-                }`}
+                onClick={() => setShowMobileDetails((prev) => !prev)}
+                className="w-full py-2 px-3 rounded-lg bg-white/[0.04] border border-white/[0.08] text-xs font-mono text-[#00CFFF] flex items-center justify-between cursor-pointer"
               >
-                <div className="flex items-center gap-2 mb-1">
-                  <UsdtIcon size={16} />
-                  <span className="text-xs font-bold text-white">USDT Settlement</span>
-                </div>
-                <p className="text-[10px] text-[#98A2B3]">
-                  Direct ERC-20 / TRC-20 protocol treasury gateway with automated verification.
-                </p>
+                <span>{showMobileDetails ? 'HIDE NODE DETAILS' : 'VIEW NODE DETAILS'}</span>
+                <span>{showMobileDetails ? '▲' : '▼'}</span>
               </button>
 
-              <button
-                type="button"
-                onClick={() => setSelectedMethod('BANK_WIRE')}
-                className={`p-4 rounded-xl border text-left transition-all cursor-pointer min-h-[44px] ${
-                  selectedMethod === 'BANK_WIRE'
-                    ? 'bg-[#00CFFF]/10 border-[#00CFFF] text-white'
-                    : 'bg-[#05070B] border-white/[0.08] text-[#98A2B3] hover:border-white/[0.2]'
-                }`}
-              >
-                <div className="flex items-center gap-2 mb-1">
-                  <Building2 className="w-4 h-4 text-[#F79009]" />
-                  <span className="text-xs font-bold text-white">Institutional Wire</span>
+              {showMobileDetails && (
+                <div className="mt-3 p-4 rounded-xl bg-[#05070B] border border-white/[0.08] space-y-2 text-xs font-mono text-[#98A2B3] animate-fadeIn">
+                  <div className="flex justify-between"><span>Reference Rate:</span><span className="text-white">$0.10 / PHIVO</span></div>
+                  <div className="flex justify-between"><span>Reference Daily Value:</span><span className="text-[#32D583]">${(2.50 * nodeQty).toFixed(2)} / Day</span></div>
+                  <div className="flex justify-between"><span>Capacity:</span><span className="text-white">10,000 Nodes</span></div>
+                  <div className="flex justify-between"><span>Maturity Schedule:</span><span className="text-white">400 Eligible Daily Epochs</span></div>
+                  <div className="flex justify-between"><span>Wallet Ledger:</span><span className="text-[#00CFFF]">Immutable Direct Credit</span></div>
                 </div>
-                <p className="text-[10px] text-[#98A2B3]">
-                  Direct bank transfer for institutional nodes.
-                </p>
-              </button>
+              )}
             </div>
-          </div>
 
-          {/* Reservation Policy Note */}
-          <div className="p-4 rounded-xl bg-[#00CFFF]/[0.03] border border-[#00CFFF]/20 text-xs text-[#98A2B3] flex items-start gap-3">
-            <Info className="w-4 h-4 text-[#00CFFF] shrink-0 mt-0.5" />
-            <div className="space-y-1">
-              <span className="font-semibold text-white block">Atomic 15-Minute Reservation Hold</span>
-              <span className="text-[11px] leading-relaxed block">
-                When you click "Reserve Genesis Node", the protocol atomically locks the next available node number for 15 minutes. If settlement is not confirmed within 15 minutes, the node is automatically returned to available inventory.
+            {/* Payment Method Selector */}
+            <div className="space-y-3 pt-2">
+              <label className="text-xs font-semibold text-white block font-mono">PREFERRED SETTLEMENT METHOD</label>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <button
+                  type="button"
+                  onClick={() => setSelectedMethod('CRYPTO_USDT')}
+                  className={`p-4 rounded-xl border text-left transition-all cursor-pointer min-h-[44px] ${
+                    selectedMethod === 'CRYPTO_USDT'
+                      ? 'bg-[#00CFFF]/10 border-[#00CFFF] text-white'
+                      : 'bg-[#05070B] border-white/[0.08] text-[#98A2B3] hover:border-white/[0.2]'
+                  }`}
+                >
+                  <div className="flex items-center gap-2 mb-1">
+                    <UsdtIcon size={16} />
+                    <span className="text-xs font-bold text-white">USDT / BNB Settlement</span>
+                  </div>
+                  <p className="text-[10px] text-[#98A2B3]">
+                    Direct ERC-20 / BEP-20 treasury gateway with automated verification.
+                  </p>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setSelectedMethod('BANK_WIRE')}
+                  className={`p-4 rounded-xl border text-left transition-all cursor-pointer min-h-[44px] ${
+                    selectedMethod === 'BANK_WIRE'
+                      ? 'bg-[#00CFFF]/10 border-[#00CFFF] text-white'
+                      : 'bg-[#05070B] border-white/[0.08] text-[#98A2B3] hover:border-white/[0.2]'
+                  }`}
+                >
+                  <div className="flex items-center gap-2 mb-1">
+                    <Building2 className="w-4 h-4 text-[#F79009]" />
+                    <span className="text-xs font-bold text-white">Institutional Wire</span>
+                  </div>
+                  <p className="text-[10px] text-[#98A2B3]">
+                    Direct wire settlement for institutional nodes.
+                  </p>
+                </button>
+              </div>
+            </div>
+
+            {/* Public Card Disclosure (Section 19) */}
+            <div className="p-3.5 rounded-xl bg-[#00CFFF]/[0.03] border border-[#00CFFF]/20 text-[11px] text-[#98A2B3] leading-relaxed flex items-start gap-2.5">
+              <Info className="w-4 h-4 text-[#00CFFF] shrink-0 mt-0.5" />
+              <span>
+                PHIVO amounts are distributed according to the Genesis Node terms active at purchase. USD figures shown on this card are reference calculations using the configured PHIVO reference rate of $0.10 and are not a guarantee of future market value.
               </span>
             </div>
-          </div>
 
-          {/* Reserve CTA Button */}
-          <div className="pt-2">
-            <button
-              type="button"
-              onClick={handleReserveNode}
-              disabled={reserving || isSoldOut}
-              className="w-full py-3.5 px-6 rounded-xl bg-[#00CFFF] hover:bg-[#00CFFF]/90 disabled:bg-white/[0.05] disabled:text-[#98A2B3] text-[#05070B] font-bold text-xs flex items-center justify-center gap-2 transition-all cursor-pointer min-h-[48px] shadow-lg shadow-[#00CFFF]/15"
-            >
-              {reserving ? (
-                <>
-                  <Loader2 className="w-4 h-4 animate-spin text-[#05070B]" />
-                  <span>Locking Genesis Node Allocation...</span>
-                </>
-              ) : isSoldOut ? (
-                <span>Genesis Node Allocation Sold Out</span>
-              ) : (
-                <>
-                  <Lock className="w-4 h-4 text-[#05070B]" />
-                  <span>Reserve Genesis Node ($1,000 USD)</span>
-                </>
-              )}
-            </button>
+            {/* Reserve CTA Button */}
+            <div className="pt-2">
+              <button
+                type="button"
+                onClick={handleReserveNode}
+                disabled={reserving || isSoldOut}
+                className="w-full py-4 px-6 rounded-xl bg-[#00CFFF] hover:bg-[#00CFFF]/90 disabled:bg-white/[0.05] disabled:text-[#98A2B3] text-[#05070B] font-extrabold text-sm font-mono uppercase tracking-wider flex items-center justify-center gap-2 transition-all cursor-pointer min-h-[50px] shadow-lg shadow-[#00CFFF]/20"
+              >
+                {reserving ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin text-[#05070B]" />
+                    <span>ACTIVATE GENESIS NODE...</span>
+                  </>
+                ) : isSoldOut ? (
+                  <span>GENESIS CAPACITY SOLD OUT</span>
+                ) : (
+                  <>
+                    <Zap className="w-4 h-4 text-[#05070B] fill-[#05070B]" />
+                    <span>ACTIVATE GENESIS NODE (${(1000 * nodeQty).toLocaleString()} USD)</span>
+                  </>
+                )}
+              </button>
+            </div>
           </div>
         </div>
-      </div>
       )}
 
       {/* PURCHASE & RESERVATION HISTORY */}
