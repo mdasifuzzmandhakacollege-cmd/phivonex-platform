@@ -123,6 +123,7 @@ var init_nodeConfig = __esm({
 // src/server/services/walletLedgerService.ts
 var walletLedgerService_exports = {};
 __export(walletLedgerService_exports, {
+  executeEcosystemWalletTransfer: () => executeEcosystemWalletTransfer,
   getWalletSummary: () => getWalletSummary,
   getWalletTransactions: () => getWalletTransactions,
   postLedgerCredit: () => postLedgerCredit,
@@ -676,6 +677,76 @@ async function getWalletTransactions(userId, page = 1, limit = 20, typeFilter, s
       totalPages
     }
   };
+}
+async function executeEcosystemWalletTransfer(userId, fromVault, toVault, amount, currency = "USDT") {
+  if (fromVault === toVault) {
+    throw new Error("INVALID_TRANSFER: Source and target ecosystem vaults must be different.");
+  }
+  if (amount <= 0 || isNaN(amount)) {
+    throw new Error("INVALID_AMOUNT: Transfer amount must be greater than 0.");
+  }
+  const db = await getDb();
+  return await db.transaction(async (trx) => {
+    await trx.query(`SELECT id FROM users WHERE id = $1 FOR UPDATE`, [userId]);
+    const walletSummary = await getWalletSummary(userId);
+    const available = walletSummary.availableBalance;
+    if (available < amount) {
+      throw new Error(`INSUFFICIENT_BALANCE: Available balance of $${available.toFixed(2)} USDT is insufficient for $${amount.toFixed(2)} USDT transfer.`);
+    }
+    const transferId = `TRF-${uuidv4().substring(0, 8).toUpperCase()}`;
+    const now = /* @__PURE__ */ new Date();
+    const fromLabel = fromVault === "MAIN_WALLET" ? "Main Earnings Wallet" : fromVault === "NODE_VAULT" ? "Node Purchase Vault" : "Mining Yield Vault";
+    const toLabel = toVault === "NODE_VAULT" ? "Node Activation Vault" : toVault === "MAIN_WALLET" ? "Main Earnings Wallet" : "Mining Yield Vault";
+    const debitTxnId = `TXN-TRF-OUT-${uuidv4().substring(0, 8).toUpperCase()}`;
+    await trx.query(
+      `
+      INSERT INTO financial_ledger_entries (
+        id, public_txn_id, user_id, entry_type, source_type, source_id,
+        source_ref, description, amount, currency, status, created_at
+      ) VALUES ($1, $2, $3, 'DEBIT', 'WALLET_TRANSFER', $4, $5, $6, $7, $8, 'SETTLED', $9)
+      `,
+      [
+        uuidv4(),
+        debitTxnId,
+        userId,
+        uuidv4(),
+        transferId,
+        `Ecosystem Transfer to ${toLabel}`,
+        amount,
+        currency,
+        now
+      ]
+    );
+    const creditTxnId = `TXN-TRF-IN-${uuidv4().substring(0, 8).toUpperCase()}`;
+    await trx.query(
+      `
+      INSERT INTO financial_ledger_entries (
+        id, public_txn_id, user_id, entry_type, source_type, source_id,
+        source_ref, description, amount, currency, status, created_at
+      ) VALUES ($1, $2, $3, 'CREDIT', 'WALLET_TRANSFER', $4, $5, $6, $7, $8, 'SETTLED', $9)
+      `,
+      [
+        uuidv4(),
+        creditTxnId,
+        userId,
+        uuidv4(),
+        transferId,
+        `Ecosystem Transfer from ${fromLabel}`,
+        amount,
+        currency,
+        now
+      ]
+    );
+    return {
+      success: true,
+      transferId,
+      fromVault,
+      toVault,
+      amount,
+      currency,
+      transferredAt: now.toISOString()
+    };
+  });
 }
 var init_walletLedgerService = __esm({
   "src/server/services/walletLedgerService.ts"() {
@@ -2787,7 +2858,7 @@ async function initSchema(client) {
         status VARCHAR(20) NOT NULL DEFAULT 'SETTLED',
         created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
         CONSTRAINT chk_fle_entry_type CHECK (entry_type IN ('CREDIT', 'DEBIT', 'REVERSAL')),
-        CONSTRAINT chk_fle_source_type CHECK (source_type IN ('REFERRAL_COMMISSION', 'MATCHING_BONUS', 'PROMOTION_BONUS', 'NODE_REWARD', 'WITHDRAWAL', 'NODE_PURCHASE', 'USDT_DEPOSIT', 'BNB_DEPOSIT', 'COIN_SWAP', 'BLOCKCHAIN_DEPOSIT', 'DEPOSIT_CREDIT')),
+        CONSTRAINT chk_fle_source_type CHECK (source_type IN ('REFERRAL_COMMISSION', 'MATCHING_BONUS', 'PROMOTION_BONUS', 'NODE_REWARD', 'WITHDRAWAL', 'NODE_PURCHASE', 'USDT_DEPOSIT', 'BNB_DEPOSIT', 'COIN_SWAP', 'BLOCKCHAIN_DEPOSIT', 'DEPOSIT_CREDIT', 'ADMIN_ADJUSTMENT', 'WALLET_TRANSFER')),
         CONSTRAINT chk_fle_status CHECK (status IN ('SETTLED', 'REVERSED', 'PENDING')),
         CONSTRAINT chk_fle_amount CHECK (amount > 0),
         CONSTRAINT uq_fle_source_entry_type UNIQUE (source_type, source_id, entry_type)
@@ -3230,9 +3301,9 @@ async function initSchema(client) {
 
         ALTER TABLE coin_swap_transactions ADD COLUMN IF NOT EXISTS direction VARCHAR(20) NOT NULL DEFAULT 'COIN_TO_USDT';
 
-        -- Update financial_ledger_entries constraint to support COIN_SWAP & ADMIN_ADJUSTMENT
+        -- Update financial_ledger_entries constraint to support COIN_SWAP, ADMIN_ADJUSTMENT & WALLET_TRANSFER
         ALTER TABLE financial_ledger_entries DROP CONSTRAINT IF EXISTS chk_fle_source_type;
-        ALTER TABLE financial_ledger_entries ADD CONSTRAINT chk_fle_source_type CHECK (source_type IN ('REFERRAL_COMMISSION', 'MATCHING_BONUS', 'PROMOTION_BONUS', 'NODE_REWARD', 'WITHDRAWAL', 'BLOCKCHAIN_DEPOSIT', 'COIN_SWAP', 'NODE_PURCHASE', 'USDT_DEPOSIT', 'BNB_DEPOSIT', 'DEPOSIT_CREDIT', 'ADMIN_ADJUSTMENT'));
+        ALTER TABLE financial_ledger_entries ADD CONSTRAINT chk_fle_source_type CHECK (source_type IN ('REFERRAL_COMMISSION', 'MATCHING_BONUS', 'PROMOTION_BONUS', 'NODE_REWARD', 'WITHDRAWAL', 'BLOCKCHAIN_DEPOSIT', 'COIN_SWAP', 'NODE_PURCHASE', 'USDT_DEPOSIT', 'BNB_DEPOSIT', 'DEPOSIT_CREDIT', 'ADMIN_ADJUSTMENT', 'WALLET_TRANSFER'));
       `);
     } catch (task191Err) {
       console.warn("[DB Migration] Task #19.1 Swap Transactions schema migration warning:", task191Err);
@@ -14914,6 +14985,37 @@ walletRouter.get("/transactions", requireAuth, async (req, res) => {
   } catch (err) {
     console.error("[Wallet API] Error in GET /api/wallet/transactions:", err);
     return res.status(500).json({ error: "Failed to retrieve wallet transactions" });
+  }
+});
+walletRouter.post("/transfer", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { fromVault = "MAIN_WALLET", toVault = "NODE_VAULT", amount, currency = "USDT" } = req.body || {};
+    const parsedAmount = Number(amount);
+    if (!parsedAmount || parsedAmount <= 0 || isNaN(parsedAmount)) {
+      return res.status(400).json({
+        error: "INVALID_AMOUNT",
+        message: "Please specify a valid transfer amount greater than 0."
+      });
+    }
+    const result = await executeEcosystemWalletTransfer(
+      userId,
+      fromVault,
+      toVault,
+      parsedAmount,
+      currency.toUpperCase()
+    );
+    return res.status(200).json({
+      success: true,
+      message: `Successfully transferred $${parsedAmount.toFixed(2)} ${currency.toUpperCase()} to ${toVault === "NODE_VAULT" ? "Node Purchase Vault" : toVault}!`,
+      transfer: result
+    });
+  } catch (err) {
+    console.error("[Wallet API] Error executing wallet transfer:", err);
+    return res.status(400).json({
+      error: err.code || "TRANSFER_ERROR",
+      message: err.message || "Failed to execute internal wallet transfer."
+    });
   }
 });
 

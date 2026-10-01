@@ -19,6 +19,7 @@ import { NotificationsView } from '../components/dashboard/NotificationsView';
 import { RewardsView } from '../components/dashboard/RewardsView';
 import { TransactionsView } from '../components/dashboard/TransactionsView';
 import { PlaceholderView } from '../components/dashboard/PlaceholderView';
+import { NotificationPermissionModal } from '../components/notifications/NotificationPermissionModal';
 import { Loader2, AlertCircle, LogIn } from 'lucide-react';
 import { PhivonexLogo } from '../components/brand/PhivonexLogo';
 
@@ -321,6 +322,9 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onNavigate, curren
           {renderTabContent()}
         </main>
       </div>
+
+      {/* Global Notification Permission Prompt Modal */}
+      <NotificationPermissionModal userPublicId={user.publicId} />
     </div>
   );
 };

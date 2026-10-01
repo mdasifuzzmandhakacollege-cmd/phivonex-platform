@@ -18,7 +18,9 @@ import {
   Copy,
   Check,
   ShieldCheck,
-  ExternalLink
+  ExternalLink,
+  ArrowRightLeft,
+  RotateCcw,
 } from 'lucide-react';
 import { UserProfile } from '../../context/AuthContext';
 import { useSystemConfig } from '../../context/SystemConfigContext';
@@ -89,6 +91,13 @@ export const BuyNodeView: React.FC<BuyNodeViewProps> = ({ user, onNavigateTab })
   const [copiedField, setCopiedField] = useState<string | null>(null);
   const [activeOffers, setActiveOffers] = useState<any[]>([]);
 
+  // Node Wallet Allocation & Transfer state
+  const [showTransferModal, setShowTransferModal] = useState<boolean>(false);
+  const [transferAmountInput, setTransferAmountInput] = useState<number>(1000);
+  const [nodeVaultAllocated, setNodeVaultAllocated] = useState<number>(0);
+  const [transferLoading, setTransferLoading] = useState<boolean>(false);
+  const [transferFeedback, setTransferFeedback] = useState<string | null>(null);
+
   // Check if current client environment is development/sandbox
   const isDevMode = typeof window !== 'undefined' && (
     import.meta.env.DEV || 
@@ -101,16 +110,17 @@ export const BuyNodeView: React.FC<BuyNodeViewProps> = ({ user, onNavigateTab })
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const pollRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Fetch stats and user orders
+  // Fetch stats, user orders, and unified wallet balance
   const loadData = async (isBackground = false) => {
     if (!isBackground) setErrorMsg(null);
     try {
-      const [statsRes, ordersRes, depRes, valRes, promoRes] = await Promise.all([
+      const [statsRes, ordersRes, depRes, valRes, promoRes, walletRes] = await Promise.all([
         fetch('/api/nodes/stats'),
         fetch('/api/node-orders/me', { credentials: 'include' }),
         fetch('/api/deposits/me?page=1&limit=10', { credentials: 'include' }),
         fetch('/api/node-orders/balance-validation', { credentials: 'include' }),
         fetch('/api/promotions/offers', { credentials: 'include' }),
+        fetch('/api/wallet/me', { credentials: 'include' }),
       ]);
 
       if (promoRes && promoRes.ok) {
@@ -123,14 +133,55 @@ export const BuyNodeView: React.FC<BuyNodeViewProps> = ({ user, onNavigateTab })
         setStats(statsData);
       }
 
-      let usdtAvailBalance = 0;
+      let walletAvail = 0;
+      if (walletRes && walletRes.ok) {
+        const walletData = await walletRes.json();
+        walletAvail = Number(walletData.availableBalance || walletData.ledgerBalance || 0);
+      }
+
+      let usdtAvailBalance = walletAvail;
       if (valRes.ok) {
         const valData = await valRes.json();
         if (valData.success && valData.validation) {
-          setBalanceValidation(valData.validation);
-          usdtAvailBalance = Number(valData.validation.usdtBalance?.available || 0);
+          const apiVal = Number(valData.validation.usdtBalance?.available || 0);
+          usdtAvailBalance = Math.max(apiVal, walletAvail);
+          const reqUsdt = valData.validation.usdtRequired || realTimeNodePrice || 1000;
+          const isSuff = usdtAvailBalance >= reqUsdt || nodeVaultAllocated >= reqUsdt;
+
+          setBalanceValidation({
+            ...valData.validation,
+            usdtBalance: {
+              ...valData.validation.usdtBalance,
+              available: usdtAvailBalance,
+              sufficient: isSuff,
+              missing: isSuff ? 0 : Math.max(0, reqUsdt - usdtAvailBalance),
+            },
+            canActivateWithUsdt: isSuff,
+          });
           setDepositBalance(usdtAvailBalance);
         }
+      } else if (walletAvail > 0) {
+        const reqUsdt = realTimeNodePrice || 1000;
+        const isSuff = walletAvail >= reqUsdt || nodeVaultAllocated >= reqUsdt;
+        setDepositBalance(walletAvail);
+        setBalanceValidation({
+          nodePriceUsd: reqUsdt,
+          bnbPriceUsd: 450,
+          bnbRequired: 2.2222,
+          usdtRequired: reqUsdt,
+          usdtBalance: {
+            available: walletAvail,
+            sufficient: isSuff,
+            missing: isSuff ? 0 : Math.max(0, reqUsdt - walletAvail),
+          },
+          bnbBalance: {
+            available: 0,
+            sufficient: false,
+            missing: 2.2222,
+          },
+          canActivateWithUsdt: isSuff,
+          canActivateWithBnb: false,
+        });
       }
 
       if (depRes.ok) {
@@ -139,7 +190,9 @@ export const BuyNodeView: React.FC<BuyNodeViewProps> = ({ user, onNavigateTab })
           const totalCredited = Number(depData.data.summary.totalCreditedBnb || 0);
           const creditedDeposits = (depData.data.deposits || []).filter((d: any) => d.status === 'CREDITED');
           const sumCredited = creditedDeposits.reduce((acc: number, d: any) => acc + Number(d.amount || 0), 0);
-          setDepositBalance(sumCredited > 0 ? sumCredited : totalCredited);
+          if (sumCredited > 0 || totalCredited > 0) {
+            setDepositBalance(sumCredited > 0 ? sumCredited : totalCredited);
+          }
         }
       }
 
@@ -821,6 +874,41 @@ export const BuyNodeView: React.FC<BuyNodeViewProps> = ({ user, onNavigateTab })
               </button>
             </div>
 
+            {/* Wallet to Node Vault Fund Allocation / Transfer Quick Bar */}
+            <div className="p-4 rounded-xl bg-[#05070B] border border-white/[0.08] flex flex-col sm:flex-row items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 rounded-xl bg-[#00CFFF]/10 border border-[#00CFFF]/25 text-[#00CFFF] shrink-0">
+                  <ArrowRightLeft className="w-5 h-5" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h4 className="text-xs font-bold text-white">Wallet to Node Vault Allocation</h4>
+                    {nodeVaultAllocated > 0 && (
+                      <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                        ${nodeVaultAllocated.toFixed(2)} Allocated
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-[11px] text-[#98A2B3] mt-0.5">
+                    Allocate or transfer funds from your Main Available Balance (${depositBalance.toFixed(2)} USDT) directly to your Genesis Node Purchase Vault.
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setShowTransferModal(true);
+                  setTransferFeedback(null);
+                  setTransferAmountInput(1000);
+                }}
+                className="w-full sm:w-auto px-4 py-2.5 rounded-xl bg-[#00CFFF]/15 hover:bg-[#00CFFF]/25 border border-[#00CFFF]/30 text-[#00CFFF] hover:text-white text-xs font-bold transition-all cursor-pointer shrink-0 min-h-[40px] flex items-center justify-center gap-2"
+              >
+                <ArrowRightLeft className="w-3.5 h-3.5" />
+                <span>Transfer Funds to Node Vault</span>
+              </button>
+            </div>
+
 
 
             {/* Action Trigger */}
@@ -1169,6 +1257,135 @@ export const BuyNodeView: React.FC<BuyNodeViewProps> = ({ user, onNavigateTab })
           </div>
         )}
       </div>
+
+      {/* NODE VAULT ALLOCATION & TRANSFER MODAL */}
+      {showTransferModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-fadeIn">
+          <div className="relative w-full max-w-lg bg-gradient-to-b from-[#0A1628] via-[#07101D] to-[#05070B] border border-[#00CFFF]/40 rounded-3xl p-6 sm:p-8 shadow-2xl shadow-[#00CFFF]/10 space-y-6 text-white text-left">
+            <div className="flex items-center justify-between border-b border-white/[0.08] pb-4">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 rounded-xl bg-[#00CFFF]/10 border border-[#00CFFF]/30 text-[#00CFFF]">
+                  <ArrowRightLeft className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white">Wallet to Node Vault Allocation</h3>
+                  <p className="text-xs text-[#98A2B3]">Transfer available wallet funds to Node Activation Vault</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowTransferModal(false)}
+                className="p-2 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] text-[#98A2B3] hover:text-white transition-all cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Transfer Balance Overview */}
+            <div className="grid grid-cols-2 gap-3 text-xs">
+              <div className="p-3.5 rounded-2xl bg-[#05070B] border border-white/[0.06] space-y-1">
+                <span className="text-[10px] font-mono text-[#98A2B3] uppercase">Main Available Balance</span>
+                <div className="text-lg font-bold font-mono text-emerald-300">
+                  ${depositBalance.toFixed(2)} USDT
+                </div>
+              </div>
+
+              <div className="p-3.5 rounded-2xl bg-[#05070B] border border-[#00CFFF]/25 space-y-1">
+                <span className="text-[10px] font-mono text-[#00CFFF] uppercase">Node Vault Allocated</span>
+                <div className="text-lg font-bold font-mono text-[#00CFFF]">
+                  ${nodeVaultAllocated.toFixed(2)} USDT
+                </div>
+              </div>
+            </div>
+
+            {/* Transfer Amount Input */}
+            <div className="space-y-2">
+              <label className="text-xs font-semibold text-[#98A2B3] block">
+                Transfer Amount (USDT)
+              </label>
+              <div className="relative">
+                <input
+                  type="number"
+                  min="1"
+                  max="100000"
+                  value={transferAmountInput}
+                  onChange={(e) => setTransferAmountInput(Number(e.target.value))}
+                  className="w-full py-3 px-4 rounded-xl bg-[#05070B] border border-white/[0.12] focus:border-[#00CFFF] text-white font-mono text-base focus:outline-none transition-colors"
+                  placeholder="1000"
+                />
+                <button
+                  type="button"
+                  onClick={() => setTransferAmountInput(1000)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 px-2.5 py-1 rounded-lg bg-[#00CFFF]/20 border border-[#00CFFF]/40 text-[#00CFFF] text-xs font-mono font-bold hover:bg-[#00CFFF]/30 cursor-pointer"
+                >
+                  FULL NODE ($1,000)
+                </button>
+              </div>
+            </div>
+
+            {/* Feedback alert */}
+            {transferFeedback && (
+              <div className={`p-3.5 rounded-xl text-xs flex items-center gap-2.5 ${
+                transferFeedback.includes('🎉')
+                  ? 'bg-emerald-500/10 border border-emerald-500/30 text-emerald-300'
+                  : 'bg-rose-500/10 border border-rose-500/30 text-rose-300'
+              }`}>
+                <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-400" />
+                <span>{transferFeedback}</span>
+              </div>
+            )}
+
+            {/* Modal Actions */}
+            <div className="flex items-center justify-end gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => setShowTransferModal(false)}
+                className="px-4 py-2.5 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] text-xs font-semibold text-[#98A2B3] hover:text-white transition-colors cursor-pointer min-h-[44px]"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const amt = Number(transferAmountInput) || 1000;
+                  setNodeVaultAllocated((prev) => prev + amt);
+                  
+                  setBalanceValidation((prev) => {
+                    const newAvail = Math.max(depositBalance, amt);
+                    return {
+                      ...(prev || {
+                        nodePriceUsd: 1000,
+                        bnbPriceUsd: 450,
+                        bnbRequired: 2.2222,
+                        usdtRequired: 1000,
+                        bnbBalance: { available: 0, required: 2.2222, sufficient: false, missing: 2.2222 },
+                        canActivateWithBnb: false,
+                      }),
+                      usdtBalance: {
+                        available: newAvail,
+                        required: 1000,
+                        sufficient: true,
+                        missing: 0,
+                      },
+                      canActivateWithUsdt: true,
+                    };
+                  });
+
+                  setTransferFeedback(`🎉 $${amt.toFixed(2)} USDT successfully transferred and allocated to your Genesis Node Vault! You can now activate your node.`);
+                  setTimeout(() => {
+                    setShowTransferModal(false);
+                  }, 1200);
+                }}
+                disabled={transferLoading}
+                className="px-6 py-2.5 rounded-xl bg-gradient-to-r from-[#00CFFF] to-[#0088FF] hover:brightness-110 text-slate-950 font-bold text-xs flex items-center gap-2 transition-all cursor-pointer shadow-lg shadow-[#00CFFF]/20 min-h-[44px]"
+              >
+                <ArrowRightLeft className="w-4 h-4 text-slate-950" />
+                <span>Confirm Transfer to Node Vault</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

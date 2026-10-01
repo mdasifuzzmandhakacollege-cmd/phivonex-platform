@@ -3,7 +3,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { generateLedgerTransactionPublicId } from '../utils/idGenerator';
 
 export type LedgerEntryType = 'CREDIT' | 'DEBIT' | 'REVERSAL';
-export type LedgerSourceType = 'REFERRAL_COMMISSION' | 'MATCHING_BONUS' | 'PROMOTION_BONUS' | 'NODE_REWARD' | 'WITHDRAWAL' | 'BLOCKCHAIN_DEPOSIT' | 'COIN_SWAP' | 'ADMIN_ADJUSTMENT';
+export type LedgerSourceType = 'REFERRAL_COMMISSION' | 'MATCHING_BONUS' | 'PROMOTION_BONUS' | 'NODE_REWARD' | 'WITHDRAWAL' | 'BLOCKCHAIN_DEPOSIT' | 'COIN_SWAP' | 'ADMIN_ADJUSTMENT' | 'WALLET_TRANSFER';
 
 export interface LedgerTransaction {
   id: string;
@@ -872,4 +872,105 @@ export async function getWalletTransactions(
       totalPages,
     },
   };
+}
+
+/**
+ * Executes atomic internal transfer between ecosystem wallets / vaults
+ * (e.g., Main Earnings Wallet -> Node Purchase Vault).
+ * Performs double-entry ledger debit & credit inside a single DB transaction.
+ */
+export async function executeEcosystemWalletTransfer(
+  userId: string,
+  fromVault: 'MAIN_WALLET' | 'NODE_VAULT' | 'MINING_VAULT',
+  toVault: 'MAIN_WALLET' | 'NODE_VAULT' | 'MINING_VAULT',
+  amount: number,
+  currency: string = 'USDT'
+): Promise<{
+  success: boolean;
+  transferId: string;
+  fromVault: string;
+  toVault: string;
+  amount: number;
+  currency: string;
+  transferredAt: string;
+}> {
+  if (fromVault === toVault) {
+    throw new Error('INVALID_TRANSFER: Source and target ecosystem vaults must be different.');
+  }
+  if (amount <= 0 || isNaN(amount)) {
+    throw new Error('INVALID_AMOUNT: Transfer amount must be greater than 0.');
+  }
+
+  const db = await getDb();
+  return await db.transaction(async (trx) => {
+    // Lock user row
+    await trx.query(`SELECT id FROM users WHERE id = $1 FOR UPDATE`, [userId]);
+
+    // Check available balance in source vault
+    const walletSummary = await getWalletSummary(userId);
+    const available = walletSummary.availableBalance;
+    if (available < amount) {
+      throw new Error(`INSUFFICIENT_BALANCE: Available balance of $${available.toFixed(2)} USDT is insufficient for $${amount.toFixed(2)} USDT transfer.`);
+    }
+
+    const transferId = `TRF-${uuidv4().substring(0, 8).toUpperCase()}`;
+    const now = new Date();
+
+    const fromLabel = fromVault === 'MAIN_WALLET' ? 'Main Earnings Wallet' : fromVault === 'NODE_VAULT' ? 'Node Purchase Vault' : 'Mining Yield Vault';
+    const toLabel = toVault === 'NODE_VAULT' ? 'Node Activation Vault' : toVault === 'MAIN_WALLET' ? 'Main Earnings Wallet' : 'Mining Yield Vault';
+
+    // Debit source vault
+    const debitTxnId = `TXN-TRF-OUT-${uuidv4().substring(0, 8).toUpperCase()}`;
+    await trx.query(
+      `
+      INSERT INTO financial_ledger_entries (
+        id, public_txn_id, user_id, entry_type, source_type, source_id,
+        source_ref, description, amount, currency, status, created_at
+      ) VALUES ($1, $2, $3, 'DEBIT', 'WALLET_TRANSFER', $4, $5, $6, $7, $8, 'SETTLED', $9)
+      `,
+      [
+        uuidv4(),
+        debitTxnId,
+        userId,
+        uuidv4(),
+        transferId,
+        `Ecosystem Transfer to ${toLabel}`,
+        amount,
+        currency,
+        now,
+      ]
+    );
+
+    // Credit target vault
+    const creditTxnId = `TXN-TRF-IN-${uuidv4().substring(0, 8).toUpperCase()}`;
+    await trx.query(
+      `
+      INSERT INTO financial_ledger_entries (
+        id, public_txn_id, user_id, entry_type, source_type, source_id,
+        source_ref, description, amount, currency, status, created_at
+      ) VALUES ($1, $2, $3, 'CREDIT', 'WALLET_TRANSFER', $4, $5, $6, $7, $8, 'SETTLED', $9)
+      `,
+      [
+        uuidv4(),
+        creditTxnId,
+        userId,
+        uuidv4(),
+        transferId,
+        `Ecosystem Transfer from ${fromLabel}`,
+        amount,
+        currency,
+        now,
+      ]
+    );
+
+    return {
+      success: true,
+      transferId,
+      fromVault,
+      toVault,
+      amount,
+      currency,
+      transferredAt: now.toISOString(),
+    };
+  });
 }

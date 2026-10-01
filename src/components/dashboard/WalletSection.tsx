@@ -30,6 +30,7 @@ import {
 } from 'lucide-react';
 import { PhivoCoinIcon } from '../brand/CryptoIcons';
 import { getTransactionDisplayLabel, getTransactionUserDescription } from '../../utils/transactionDisplay';
+import { EcosystemWalletTransferCard } from './EcosystemWalletTransferCard';
 
 export interface WalletBreakdown {
   referral: number;
@@ -436,6 +437,14 @@ export const WalletSection: React.FC<WalletSectionProps> = ({ onNavigateTab }) =
           </div>
         </div>
       </div>
+
+      {/* ========================================================
+          3. ECOSYSTEM WALLET TRANSFER CARD
+         ======================================================== */}
+      <EcosystemWalletTransferCard
+        availableBalance={summary?.ledgerBalance || 0}
+        onTransferSuccess={handleRefresh}
+      />
 
       {/* ========================================================
           3. 5-CHANNEL EARNINGS BREAKDOWN
