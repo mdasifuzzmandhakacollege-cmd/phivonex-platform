@@ -7,6 +7,7 @@ import { ProfileView } from '../components/dashboard/ProfileView';
 import { SecurityView } from '../components/dashboard/SecurityView';
 import { MyNodesView } from '../components/dashboard/MyNodesView';
 import { NodeHealthView } from '../components/dashboard/NodeHealthView';
+import { RewardAnalytics } from '../components/dashboard/RewardAnalytics';
 import { BuyNodeView } from '../components/dashboard/BuyNodeView';
 import { DirectReferralsView } from '../components/dashboard/DirectReferralsView';
 import { NetworkView } from '../components/dashboard/NetworkView';
@@ -35,6 +36,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onNavigate, curren
     if (cleanPath === '/app/profile' || cleanPath.startsWith('/app/profile/')) return 'profile';
     if (cleanPath === '/app/security' || cleanPath.startsWith('/app/security/')) return 'security';
     if (cleanPath === '/app/node-health' || cleanPath.startsWith('/app/node-health/')) return 'node-health';
+    if (cleanPath === '/app/reward-analytics' || cleanPath.startsWith('/app/reward-analytics/')) return 'reward-analytics';
     if (cleanPath === '/app/nodes' || cleanPath.startsWith('/app/nodes/')) return 'nodes';
     if (cleanPath === '/app/network' || cleanPath.startsWith('/app/network/')) return 'network';
     if (cleanPath === '/app/referrals' || cleanPath.startsWith('/app/referrals/')) return 'referrals';
@@ -173,6 +175,13 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onNavigate, curren
       case 'node-health':
         return (
           <NodeHealthView
+            user={user}
+            onNavigateTab={(tab) => handleSelectTab(tab as DashboardTab)}
+          />
+        );
+      case 'reward-analytics':
+        return (
+          <RewardAnalytics
             user={user}
             onNavigateTab={(tab) => handleSelectTab(tab as DashboardTab)}
           />

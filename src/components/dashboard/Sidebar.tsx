@@ -17,7 +17,8 @@ import {
   ArrowUpRight,
   ArrowDownLeft,
   Bell,
-  X
+  X,
+  BarChart3
 } from 'lucide-react';
 import { PhivonexLogo } from '../brand/PhivonexLogo';
 import { PhivonexSymbol } from '../brand/PhivonexSymbol';
@@ -26,6 +27,7 @@ export type DashboardTab =
   | 'overview'
   | 'nodes'
   | 'node-health'
+  | 'reward-analytics'
   | 'network'
   | 'referrals'
   | 'wallet'
@@ -59,6 +61,7 @@ const NAV_ITEMS: NavItem[] = [
   { id: 'overview', label: 'Overview', icon: LayoutDashboard },
   { id: 'nodes', label: 'My Nodes', icon: Server },
   { id: 'node-health', label: 'Node Health', icon: Activity },
+  { id: 'reward-analytics', label: 'Reward Analytics', icon: BarChart3 },
   { id: 'network', label: 'Network', icon: GitFork },
   { id: 'referrals', label: 'Direct Referrals', icon: Users },
   { id: 'wallet', label: 'Wallet & Ledger', icon: Wallet },
