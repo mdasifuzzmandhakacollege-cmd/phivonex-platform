@@ -781,7 +781,7 @@ export const BuyNodeView: React.FC<BuyNodeViewProps> = ({ user, onNavigateTab })
                 </div>
 
                 <div className="text-xl font-bold font-mono text-emerald-300">
-                  ${balanceValidation?.usdtBalance.available.toFixed(2) || depositBalance.toFixed(2)} USDT
+                  ${(balanceValidation ? balanceValidation.usdtBalance.available : depositBalance).toFixed(2)} USDT
                 </div>
                 <p className="text-[11px] text-[#98A2B3] mt-1">
                   Required: <span className="font-mono text-white">$1,000.00 USDT</span>

@@ -696,7 +696,7 @@ var init_firebase_applet_config = __esm({
       firestoreDatabaseId: "ai-studio-phivonex-2c45abba-b586-4032-8cf4-6a039eec92bc",
       storageBucket: "phivonex-production.firebasestorage.app",
       messagingSenderId: "1077670417334",
-      vapidKey: "BNeL3a358h7juM_T8y58vQHoFatzS2FGVttAEtrVl-_HpqmsiQ9t-g7FsDdbmCwkca_5pI2k1IlBPoqoDHKkLRM",
+      vapidKey: "BNeL3a358h7juM_T8y58vQHoFatZS2FGVttAEtrVl-_HpqmsiQ9t-g7FsDdbmCwkca_5pI2k1IlBPoqoDHKkLRM",
       measurementId: "",
       oAuthClientId: "1077670417334-bguriebp3b7qc2p7eoiln4r1agqfbq89.apps.googleusercontent.com",
       recaptchaSiteKey: ""
