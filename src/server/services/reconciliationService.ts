@@ -666,7 +666,7 @@ export async function runFinancialReconciliation(options?: {
           COALESCE(SUM(CASE WHEN entry_type = 'DEBIT' THEN amount ELSE 0 END), 0) as debits,
           COALESCE(SUM(CASE WHEN entry_type = 'REVERSAL' THEN amount ELSE 0 END), 0) as reversals
         FROM financial_ledger_entries
-        WHERE user_id = $1 AND (currency = 'USDT' OR currency = 'USD') AND source_type != 'NODE_REWARD'
+        WHERE user_id = $1 AND (currency = 'USDT' OR currency = 'USD')
         `,
         [u.id]
       );

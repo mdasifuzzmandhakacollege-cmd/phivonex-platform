@@ -226,7 +226,6 @@ export async function processNodePurchaseWithAssetBalance(
             WHERE user_id = $1 
               AND status = 'SETTLED' 
               AND (currency = 'USDT' OR currency = 'USD') 
-              AND source_type != 'NODE_REWARD'
             `,
             [userId]
           );
