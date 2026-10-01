@@ -119,6 +119,13 @@ async function runPf04Tests() {
     );
     await db.query(`INSERT INTO binary_placements (user_id, status) VALUES ($1, 'PLACED')`, [sponsorId]);
 
+    // Sponsor must have an active Genesis Node to be eligible for referral commission
+    await db.query(
+      `INSERT INTO blockchain_deposits (id, public_deposit_id, user_id, chain_id, asset, tx_hash, log_index, from_address, to_address, amount, block_number, confirmations, status, detected_at, confirmed_at, credited_at, created_at, updated_at) VALUES ($1, $2, $3, 56, 'USDT', $4, 0, '0xsender', '0xtreasury', 1000.0, 100, 5, 'CREDITED', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+      [uuidv4(), generateDepositPublicId(), sponsorId, `0xspons${uuidv4().replace(/-/g, '')}`.slice(0, 66)]
+    );
+    await purchaseNodeWithDepositBalance(sponsorId, 'USDT');
+
     await db.query(
       `INSERT INTO users (id, public_id, full_name, email, country, password_hash, status) VALUES ($1, $2, 'Buyer Bob', $3, 'US', $4, 'ACTIVE')`,
       [buyer2Id, `PHX-B2-${uuidv4().slice(0, 4)}`, `buyer2.${uuidv4().slice(0, 6)}@phivonex.test`, pwdHash]

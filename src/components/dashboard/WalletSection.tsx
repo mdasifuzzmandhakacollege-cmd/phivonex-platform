@@ -443,6 +443,8 @@ export const WalletSection: React.FC<WalletSectionProps> = ({ onNavigateTab }) =
          ======================================================== */}
       <EcosystemWalletTransferCard
         availableBalance={summary?.ledgerBalance || 0}
+        mainWalletBalance={(summary as any)?.mainWalletBalance || 0}
+        nodeVaultBalance={(summary as any)?.nodeVaultBalance || 0}
         onTransferSuccess={handleRefresh}
       />
 

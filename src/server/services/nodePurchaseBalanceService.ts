@@ -20,6 +20,8 @@ export interface NodeBalanceValidationResult {
   usdtRequired: number;
   usdtBalance: AssetBalanceInfo;
   bnbBalance: AssetBalanceInfo;
+  mainWalletBalance: number;
+  nodeVaultBalance: number;
   canActivateWithUsdt: boolean;
   canActivateWithBnb: boolean;
 }
@@ -54,6 +56,8 @@ export async function validateUserNodePurchaseBalances(
   // 2. Compute unified USDT Available Balance (Deposits + Earnings - Debits)
   const walletSummary = await getWalletSummary(userId);
   const availableUsdt = walletSummary.availableBalance;
+  const nodeVaultBalance = walletSummary.nodeVaultBalance;
+  const mainWalletBalance = walletSummary.mainWalletBalance;
 
   // 3. Compute BNB Credited Deposits vs Node Purchase Debits
   const bnbDepositsRes = await db.query<{ total: string | number }>(
@@ -99,6 +103,8 @@ export async function validateUserNodePurchaseBalances(
       sufficient: bnbSufficient,
       missing: bnbSufficient ? 0 : (bnbRequired > 0 ? Number((bnbRequired - availableBnb).toFixed(4)) : 0),
     },
+    mainWalletBalance,
+    nodeVaultBalance,
     canActivateWithUsdt: usdtSufficient,
     canActivateWithBnb: bnbSufficient,
   };

@@ -88,6 +88,21 @@ export async function processNodeActivationCommission(
 
   const sponsorUser = sponsorUserRes.rows[0];
 
+  // 2b. Validate that sponsor has at least one ACTIVE Genesis Node (Upline active node requirement)
+  const sponsorNodeRes = await db.query<{ count: string | number }>(
+    `
+    SELECT COUNT(*)::int AS count 
+    FROM nodes 
+    WHERE owner_user_id = $1 AND status = 'ACTIVE'
+    `,
+    [sponsorUserId]
+  );
+  const sponsorActiveNodes = Number(sponsorNodeRes.rows[0]?.count || 0);
+  if (sponsorActiveNodes === 0) {
+    console.warn(`[ReferralCommission] Sponsor ${sponsorUserId} has no active Genesis Node. Direct referral commission skipped.`);
+    return null;
+  }
+
   // 3. Uniqueness Check: Check if commission already exists for this exact node_id
   const existingRes = await db.query<{
     id: string;

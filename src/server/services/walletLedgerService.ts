@@ -26,6 +26,8 @@ export interface WalletSummaryResponse {
   totalWithdrawn: number;
   ledgerBalance: number;
   availableBalance: number;
+  mainWalletBalance: number;
+  nodeVaultBalance: number;
   transactionCount: number;
   breakdown: {
     referral: number;
@@ -33,6 +35,7 @@ export interface WalletSummaryResponse {
     promotion: number;
     nodeReward: number;
     swap?: number;
+    deposit?: number;
   };
   grossBreakdown: {
     referral: number;
@@ -40,6 +43,7 @@ export interface WalletSummaryResponse {
     promotion: number;
     nodeReward: number;
     swap?: number;
+    deposit?: number;
   };
 }
 
@@ -645,7 +649,7 @@ export async function getWalletSummary(userId: string): Promise<WalletSummaryRes
       COALESCE(SUM(amount), 0) AS total_amount,
       COUNT(*) AS count
     FROM financial_ledger_entries
-    WHERE user_id = $1 AND status = 'SETTLED' AND (currency = 'USDT' OR currency = 'USD') AND source_type != 'NODE_REWARD'
+    WHERE user_id = $1 AND status = 'SETTLED' AND (currency = 'USDT' OR currency = 'USD')
     GROUP BY entry_type, source_type
     `,
     [userId]
@@ -680,8 +684,13 @@ export async function getWalletSummary(userId: string): Promise<WalletSummaryRes
     const cnt = Number(row.count);
     transactionCount += cnt;
 
+    const st = row.source_type;
+    const isEarningSource = st === 'REFERRAL_COMMISSION' || st === 'MATCHING_BONUS' || st === 'PROMOTION_BONUS' || st === 'NODE_REWARD' || st === 'ADMIN_ADJUSTMENT';
+
     if (row.entry_type === 'CREDIT') {
-      totalEarned += amt;
+      if (isEarningSource) {
+        totalEarned += amt;
+      }
       if (row.source_type === 'REFERRAL_COMMISSION') grossCredits.referral += amt;
       else if (row.source_type === 'MATCHING_BONUS') grossCredits.matching += amt;
       else if (row.source_type === 'PROMOTION_BONUS') grossCredits.promotion += amt;
@@ -692,7 +701,9 @@ export async function getWalletSummary(userId: string): Promise<WalletSummaryRes
       if (row.source_type === 'WITHDRAWAL') {
         withdrawalReversals += amt;
       } else {
-        earningReversals += amt;
+        if (isEarningSource) {
+          earningReversals += amt;
+        }
         if (row.source_type === 'REFERRAL_COMMISSION') reversals.referral += amt;
         else if (row.source_type === 'MATCHING_BONUS') reversals.matching += amt;
         else if (row.source_type === 'PROMOTION_BONUS') reversals.promotion += amt;
@@ -715,9 +726,57 @@ export async function getWalletSummary(userId: string): Promise<WalletSummaryRes
     deposit: Math.max(0, grossCredits.deposit - reversals.deposit),
   };
 
-  const netEarned = Math.max(0, totalEarned - earningReversals);
   const netWithdrawn = Math.max(0, totalDebited - withdrawalReversals);
-  const ledgerBalance = Math.max(0, netEarned - netWithdrawn);
+  const balRes = await db.query<{ available_balance: string | number }>(
+    `
+    SELECT 
+      COALESCE(SUM(CASE 
+        WHEN entry_type = 'CREDIT' THEN amount 
+        WHEN entry_type = 'DEBIT' THEN -amount 
+        WHEN entry_type = 'REVERSAL' AND source_type = 'WITHDRAWAL' THEN amount 
+        WHEN entry_type = 'REVERSAL' THEN -amount 
+        ELSE 0 
+      END), 0) AS available_balance
+    FROM financial_ledger_entries
+    WHERE user_id = $1 AND status = 'SETTLED' AND (currency = 'USDT' OR currency = 'USD')
+    `,
+    [userId]
+  );
+  const ledgerBalance = Math.max(0, Number(balRes.rows[0]?.available_balance || 0));
+
+  // Calculate distinct Node Purchase Vault and Main Wallet balances
+  const transfersRes = await db.query<{
+    entry_type: LedgerEntryType;
+    source_type: LedgerSourceType;
+    description: string;
+    amount: string | number;
+  }>(
+    `
+    SELECT entry_type, source_type, description, amount
+    FROM financial_ledger_entries
+    WHERE user_id = $1 AND status = 'SETTLED' AND (currency = 'USDT' OR currency = 'USD') AND source_type IN ('WALLET_TRANSFER', 'NODE_PURCHASE')
+    `,
+    [userId]
+  );
+
+  let nodeVaultCredits = 0;
+  let nodeVaultDebits = 0;
+
+  for (const tr of transfersRes.rows) {
+    const amt = Number(tr.amount);
+    const desc = (tr.description || '').toLowerCase();
+
+    if (tr.source_type === 'WALLET_TRANSFER') {
+      if (tr.entry_type === 'CREDIT' && (desc.includes('main') || desc.includes('transfer from'))) {
+        nodeVaultCredits += amt;
+      }
+    } else if (tr.source_type === 'NODE_PURCHASE' && tr.entry_type === 'DEBIT') {
+      nodeVaultDebits += amt;
+    }
+  }
+
+  const nodeVaultBalance = Math.max(0, nodeVaultCredits - nodeVaultDebits);
+  const mainWalletBalance = Math.max(0, ledgerBalance - nodeVaultBalance);
 
   return {
     totalEarned,
@@ -725,6 +784,8 @@ export async function getWalletSummary(userId: string): Promise<WalletSummaryRes
     totalWithdrawn: netWithdrawn,
     ledgerBalance,
     availableBalance: ledgerBalance,
+    mainWalletBalance,
+    nodeVaultBalance,
     transactionCount,
     breakdown,
     grossBreakdown: grossCredits,

@@ -100,6 +100,32 @@ export function getNextUtcMidnightTime(from: Date = new Date()): {
 }
 
 /**
+ * Calculates the exact next 06:00 UTC occurrence and milliseconds until then.
+ */
+export function getNextUtc0600Time(from: Date = new Date()): {
+  nextRunIso: string;
+  msUntilRun: number;
+} {
+  const now = from.getTime();
+  const d = new Date(now);
+  const targetToday = new Date(Date.UTC(
+    d.getUTCFullYear(),
+    d.getUTCMonth(),
+    d.getUTCDate(),
+    6, 0, 0, 0
+  ));
+
+  if (now >= targetToday.getTime()) {
+    targetToday.setUTCDate(targetToday.getUTCDate() + 1);
+  }
+
+  return {
+    nextRunIso: targetToday.toISOString(),
+    msUntilRun: Math.max(0, targetToday.getTime() - now),
+  };
+}
+
+/**
  * Returns current timestamp in ISO format
  */
 export function getNowIso(): string {

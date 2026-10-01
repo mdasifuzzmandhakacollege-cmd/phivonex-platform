@@ -3,13 +3,19 @@ import { ArrowRightLeft, ShieldCheck, Zap, Loader2, CheckCircle2, AlertCircle, C
 
 interface EcosystemWalletTransferCardProps {
   availableBalance: number;
+  mainWalletBalance?: number;
+  nodeVaultBalance?: number;
   onTransferSuccess?: () => void;
 }
 
 export const EcosystemWalletTransferCard: React.FC<EcosystemWalletTransferCardProps> = ({
   availableBalance,
+  mainWalletBalance,
+  nodeVaultBalance,
   onTransferSuccess,
 }) => {
+  const effectiveMainBalance = mainWalletBalance !== undefined ? mainWalletBalance : availableBalance;
+  const effectiveNodeBalance = nodeVaultBalance !== undefined ? nodeVaultBalance : 0;
   const [fromVault, setFromVault] = useState<'MAIN_WALLET' | 'NODE_VAULT'>('MAIN_WALLET');
   const [toVault, setToVault] = useState<'MAIN_WALLET' | 'NODE_VAULT'>('NODE_VAULT');
   const [amount, setAmount] = useState<number | ''>(1000);
@@ -99,9 +105,9 @@ export const EcosystemWalletTransferCard: React.FC<EcosystemWalletTransferCardPr
         </div>
 
         <div className="text-right">
-          <span className="text-[10px] uppercase font-mono text-[#98A2B3] block">Main Spendable Balance</span>
-          <span className="text-lg font-bold font-mono text-emerald-300 tabular-nums">
-            ${availableBalance.toFixed(2)} USDT
+          <span className="text-[10px] uppercase font-mono text-[#98A2B3] block">Node Purchase Vault Balance</span>
+          <span className="text-lg font-bold font-mono text-[#00CFFF] tabular-nums">
+            ${effectiveNodeBalance.toFixed(2)} USDT
           </span>
         </div>
       </div>
@@ -127,7 +133,7 @@ export const EcosystemWalletTransferCard: React.FC<EcosystemWalletTransferCardPr
               )}
             </div>
             <p className="text-[10px] font-mono text-emerald-400/90">
-              Available: ${availableBalance.toFixed(2)} USDT
+              Available: ${fromVault === 'MAIN_WALLET' ? effectiveMainBalance.toFixed(2) : effectiveNodeBalance.toFixed(2)} USDT
             </p>
           </div>
 
@@ -160,7 +166,7 @@ export const EcosystemWalletTransferCard: React.FC<EcosystemWalletTransferCardPr
               )}
             </div>
             <p className="text-[10px] font-mono text-[#00CFFF]/90">
-              Dedicated for Node Activations
+              Current Vault Balance: ${toVault === 'NODE_VAULT' ? effectiveNodeBalance.toFixed(2) : effectiveMainBalance.toFixed(2)} USDT
             </p>
           </div>
         </div>

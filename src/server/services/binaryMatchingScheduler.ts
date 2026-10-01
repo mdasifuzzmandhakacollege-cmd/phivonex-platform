@@ -1,59 +1,57 @@
-import { getNextDhakaMidnightTime, getPreviousDhakaBusinessDate } from '../utils/timezone';
+import { getNextUtc0600Time, getPreviousUtcBusinessDate } from '../utils/timezone';
 import { runDailyMatchingSettlementCycle } from './binaryMatchingService';
 
 let schedulerTimer: NodeJS.Timeout | null = null;
 let isRunning = false;
 
 /**
- * Executes the authoritative midnight settlement cycle.
- * Settles the previous business date that just closed at 00:00 Asia/Dhaka.
+ * Executes the authoritative 06:00 UTC daily matching settlement cycle.
+ * Settles the previous business date that just closed at 06:00 UTC.
  */
-async function executeMidnightCycle(): Promise<void> {
-  const previousDate = getPreviousDhakaBusinessDate();
-  console.log(`[MatchingScheduler] 🕛 00:00 Asia/Dhaka reached. Starting settlement for previous business date: ${previousDate}`);
+async function executeDailyCycle(): Promise<void> {
+  const previousDate = getPreviousUtcBusinessDate();
+  console.log(`[MatchingScheduler] 🕛 06:00 UTC reached. Starting daily matching settlement for previous business date: ${previousDate}`);
 
   try {
     const result = await runDailyMatchingSettlementCycle(previousDate);
     console.log(
-      `[MatchingScheduler] ✅ Midnight settlement cycle finished for ${previousDate}: ` +
+      `[MatchingScheduler] ✅ Daily settlement cycle finished for ${previousDate}: ` +
       `status=${result.status}, usersSettled=${result.usersSettled}, totalBonus=$${result.totalBonusUsd}, duration=${result.durationMs}ms`
     );
   } catch (err) {
-    console.error(`[MatchingScheduler] ❌ Midnight settlement cycle failed for ${previousDate}:`, err);
+    console.error(`[MatchingScheduler] ❌ Daily settlement cycle failed for ${previousDate}:`, err);
   } finally {
     // Schedule next cycle
-    scheduleNextMidnightRun();
+    scheduleNextDailyRun();
   }
 }
 
 /**
- * Calculates ms until the next 00:00 Asia/Dhaka and arms the timer.
+ * Calculates ms until the next 06:00 UTC and arms the timer.
  */
-function scheduleNextMidnightRun(): void {
-  const { nextMidnightIso, msUntilMidnight } = getNextDhakaMidnightTime();
-  console.log(`[MatchingScheduler] Next daily settlement scheduled for ${nextMidnightIso} (in ${Math.round(msUntilMidnight / 1000)}s)`);
+function scheduleNextDailyRun(): void {
+  const { nextRunIso, msUntilRun } = getNextUtc0600Time();
+  console.log(`[MatchingScheduler] Next daily settlement scheduled for ${nextRunIso} (in ${Math.round(msUntilRun / 1000)}s)`);
 
   if (schedulerTimer) {
     clearTimeout(schedulerTimer);
   }
 
-  // Max setTimeout in Node.js is 2147483647 ms (~24.8 days)
-  // Asia/Dhaka midnight is at most 24 hours away (~86,400,000 ms), completely safe.
   schedulerTimer = setTimeout(() => {
-    executeMidnightCycle().catch((err) => {
-      console.error('[MatchingScheduler] Unhandled error during midnight execution:', err);
+    executeDailyCycle().catch((err) => {
+      console.error('[MatchingScheduler] Unhandled error during 06:00 UTC execution:', err);
     });
-  }, msUntilMidnight);
+  }, msUntilRun);
 }
 
 /**
- * Initializes the background midnight matching scheduler.
+ * Initializes the background 06:00 UTC daily matching scheduler.
  */
 export function startMatchingScheduler(): void {
   if (isRunning) return;
   isRunning = true;
-  console.log('[MatchingScheduler] Initializing Daily Binary Matching Settlement Scheduler (Asia/Dhaka)...');
-  scheduleNextMidnightRun();
+  console.log('[MatchingScheduler] Initializing Daily Binary Matching Settlement Scheduler (06:00 UTC)...');
+  scheduleNextDailyRun();
 }
 
 /**
