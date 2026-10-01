@@ -95,13 +95,13 @@ async function runPf05AuditTests() {
     const user1 = await createTestUser('user1');
     await createActiveNode(user1.id);
 
-    const epochValid = await createRewardEpoch({ rewardPerNode: 2.50 });
+    const epochValid = await createRewardEpoch({ rewardPerNode: 25.00 });
     const settlementValid = await closeAndSettleEpoch(epochValid.id);
     assert(settlementValid.success === true, 'Valid reward epoch settles successfully');
     assert(settlementValid.rewardsCreated === 1, 'Exactly one PHIVO reward created for active node');
 
     const rewardBal1 = await getUserCoinBalance(user1.id);
-    assert(rewardBal1.availableCoinBalance === 2.50, 'User PHIVO balance correctly credited with 2.50 PHIVO');
+    assert(rewardBal1.availableCoinBalance === 25.00, 'User PHIVO balance correctly credited with 25.00 PHIVO');
     assert(rewardBal1.coinSymbol === 'PHIVO', 'Reward balance currency symbol is PHIVO');
 
     // Verify USD/USDT wallet ledger is completely untouched (separate accounting)
@@ -129,7 +129,7 @@ async function runPf05AuditTests() {
     // Restore reward rate for subsequent tests
     await updateEconomicConfig({
       configKey: 'NODE_REWARD_RATE_PER_EPOCH',
-      configValue: { rateUsd: 2.50 },
+      configValue: { rateUsd: 25.00 },
       status: 'ACTIVE',
       adminPublicId: 'SYS_ADMIN',
       reason: 'Restoring reward rate'
@@ -142,7 +142,7 @@ async function runPf05AuditTests() {
     const settlementDup = await closeAndSettleEpoch(epochValid.id);
     assert(settlementDup.rewardsCreated === 0, 'Duplicate settlement run creates 0 additional rewards');
     const rewardBalDup = await getUserCoinBalance(user1.id);
-    assert(rewardBalDup.availableCoinBalance === 2.50, 'User PHIVO balance remains 2.50 PHIVO (no double credit)');
+    assert(rewardBalDup.availableCoinBalance === 25.00, 'User PHIVO balance remains 25.00 PHIVO (no double credit)');
 
     // ----------------------------------------------------
     // TEST 4: Valid PHIVO -> USDT Swap
@@ -158,15 +158,15 @@ async function runPf05AuditTests() {
 
     const swapRes1 = await executeCoinToUsdtSwap({
       userId: user1.id,
-      coinAmount: 2.00,
+      coinAmount: 10.00,
       idempotencyKey: 'swap_key_1'
     });
     assert(swapRes1.success === true, 'PHIVO to USDT swap executes successfully');
-    assert(swapRes1.balances.usdtCredited === 1.00, 'Exact $1.00 USDT credited for 2 PHIVO @ $0.50');
-    assert(swapRes1.balances.remainingCoinBalance === 0.50, 'Remaining PHIVO balance is 0.50');
+    assert(swapRes1.balances.usdtCredited === 5.00, 'Exact $5.00 USDT credited for 10 PHIVO @ $0.50');
+    assert(swapRes1.balances.remainingCoinBalance === 15.00, 'Remaining PHIVO balance is 15.00');
 
     const walletAfterSwap = await getWalletSummary(user1.id);
-    assert(walletAfterSwap.availableBalance === 1.00, 'Wallet USDT ledger balance is exactly $1.00');
+    assert(walletAfterSwap.availableBalance === 5.00, 'Wallet USDT ledger balance is exactly $5.00');
 
     // ----------------------------------------------------
     // TEST 5: Insufficient PHIVO => No Debit/Credit

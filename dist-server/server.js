@@ -2468,14 +2468,24 @@ async function initSchema(client) {
         status VARCHAR(50) NOT NULL,
         owner_user_id UUID NULL REFERENCES users(id) ON DELETE SET NULL,
         reserved_by_user_id UUID NULL REFERENCES users(id) ON DELETE SET NULL,
+        product_version VARCHAR(50) NOT NULL DEFAULT 'GENESIS_V1',
+        purchase_price_usd NUMERIC(12, 2) NOT NULL DEFAULT 1000.00,
+        phivo_reference_price_at_purchase NUMERIC(10, 4) NOT NULL DEFAULT 0.10,
+        lifetime_phivo_allocation NUMERIC(14, 2) NOT NULL DEFAULT 10000.00,
+        term_days INTEGER NOT NULL DEFAULT 400,
+        daily_phivo_emission NUMERIC(10, 2) NOT NULL DEFAULT 25.00,
+        purchase_timestamp TIMESTAMP WITH TIME ZONE NULL,
         reserved_at TIMESTAMP WITH TIME ZONE NULL,
         activated_at TIMESTAMP WITH TIME ZONE NULL,
+        maturity_timestamp TIMESTAMP WITH TIME ZONE NULL,
+        distributed_phivo NUMERIC(14, 2) NOT NULL DEFAULT 0.00,
+        remaining_phivo NUMERIC(14, 2) NOT NULL DEFAULT 10000.00,
         created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
         CONSTRAINT chk_node_number_range CHECK (node_number >= 1 AND node_number <= 10000),
-        CONSTRAINT chk_node_status_valid CHECK (status IN ('AVAILABLE', 'RESERVED', 'ACTIVE', 'RETIRED')),
+        CONSTRAINT chk_node_status_valid CHECK (status IN ('AVAILABLE', 'RESERVED', 'PURCHASED', 'ACTIVE', 'EMITTING', 'MATURED', 'RETIRED')),
         CONSTRAINT chk_node_available_owner CHECK (status != 'AVAILABLE' OR owner_user_id IS NULL),
-        CONSTRAINT chk_node_active_owner CHECK (status != 'ACTIVE' OR owner_user_id IS NOT NULL)
+        CONSTRAINT chk_node_active_owner CHECK (status NOT IN ('ACTIVE', 'EMITTING', 'MATURED') OR owner_user_id IS NOT NULL)
       );
 
       CREATE TABLE IF NOT EXISTS node_orders (
@@ -2541,6 +2551,23 @@ async function initSchema(client) {
         CONSTRAINT chk_placement_side CHECK (side IS NULL OR side IN ('LEFT', 'RIGHT')),
         CONSTRAINT chk_placement_status CHECK (status IN ('UNPLACED', 'PLACED'))
       );
+
+      ALTER TABLE nodes ADD COLUMN IF NOT EXISTS product_version VARCHAR(50) NOT NULL DEFAULT 'GENESIS_V1';
+      ALTER TABLE nodes ADD COLUMN IF NOT EXISTS purchase_price_usd NUMERIC(12, 2) NOT NULL DEFAULT 1000.00;
+      ALTER TABLE nodes ADD COLUMN IF NOT EXISTS phivo_reference_price_at_purchase NUMERIC(10, 4) NOT NULL DEFAULT 0.10;
+      ALTER TABLE nodes ADD COLUMN IF NOT EXISTS lifetime_phivo_allocation NUMERIC(14, 2) NOT NULL DEFAULT 10000.00;
+      ALTER TABLE nodes ADD COLUMN IF NOT EXISTS term_days INTEGER NOT NULL DEFAULT 400;
+      ALTER TABLE nodes ADD COLUMN IF NOT EXISTS daily_phivo_emission NUMERIC(10, 2) NOT NULL DEFAULT 25.00;
+      ALTER TABLE nodes ADD COLUMN IF NOT EXISTS purchase_timestamp TIMESTAMP WITH TIME ZONE NULL;
+      ALTER TABLE nodes ADD COLUMN IF NOT EXISTS maturity_timestamp TIMESTAMP WITH TIME ZONE NULL;
+      ALTER TABLE nodes ADD COLUMN IF NOT EXISTS distributed_phivo NUMERIC(14, 2) NOT NULL DEFAULT 0.00;
+      ALTER TABLE nodes ADD COLUMN IF NOT EXISTS remaining_phivo NUMERIC(14, 2) NOT NULL DEFAULT 10000.00;
+
+      ALTER TABLE nodes DROP CONSTRAINT IF EXISTS chk_node_status_valid;
+      ALTER TABLE nodes ADD CONSTRAINT chk_node_status_valid CHECK (status IN ('AVAILABLE', 'RESERVED', 'PURCHASED', 'ACTIVE', 'EMITTING', 'MATURED', 'RETIRED'));
+
+      ALTER TABLE nodes DROP CONSTRAINT IF EXISTS chk_node_active_owner;
+      ALTER TABLE nodes ADD CONSTRAINT chk_node_active_owner CHECK (status NOT IN ('ACTIVE', 'EMITTING', 'MATURED') OR owner_user_id IS NOT NULL);
 
       -- Task #10: Binary Volume Engine Tables
       CREATE TABLE IF NOT EXISTS binary_volume_events (
@@ -3032,7 +3059,7 @@ async function initSchema(client) {
       `);
       await client.exec(`
         ALTER TABLE financial_ledger_entries DROP CONSTRAINT IF EXISTS chk_fle_source_type;
-        ALTER TABLE financial_ledger_entries ADD CONSTRAINT chk_fle_source_type CHECK (source_type IN ('REFERRAL_COMMISSION', 'MATCHING_BONUS', 'PROMOTION_BONUS', 'NODE_REWARD', 'WITHDRAWAL', 'BLOCKCHAIN_DEPOSIT', 'COIN_SWAP', 'NODE_PURCHASE', 'USDT_DEPOSIT', 'BNB_DEPOSIT', 'DEPOSIT_CREDIT'));
+        ALTER TABLE financial_ledger_entries ADD CONSTRAINT chk_fle_source_type CHECK (source_type IN ('REFERRAL_COMMISSION', 'MATCHING_BONUS', 'PROMOTION_BONUS', 'NODE_REWARD', 'WITHDRAWAL', 'BLOCKCHAIN_DEPOSIT', 'COIN_SWAP', 'NODE_PURCHASE', 'USDT_DEPOSIT', 'BNB_DEPOSIT', 'DEPOSIT_CREDIT', 'ADMIN_ADJUSTMENT'));
       `);
     } catch (task171Err) {
       console.warn("[DB Migration] Task #17.1 BSC schema migration warning:", task171Err);
@@ -3437,6 +3464,10 @@ async function initSchema(client) {
   }
 }
 async function restoreUsersFromFirestore(client) {
+  if ((process.env.NODE_ENV || "").toLowerCase() === "test") {
+    console.log("[DB Hydration] Skipped in test environment (isolated database).");
+    return;
+  }
   try {
     const { adminFirestore: adminFirestore2 } = await Promise.resolve().then(() => (init_firebase_admin(), firebase_admin_exports));
     console.log("[DB Hydration] Checking Firestore for persistent users across rollouts...");
@@ -5878,6 +5909,7 @@ async function executeAdminWalletAdjustment(params) {
           direction: row.entry_type,
           amount: Number(row.amount),
           reason: row.description,
+          newBalance: void 0,
           createdAt: new Date(row.created_at).toISOString()
         }
       };
@@ -10659,9 +10691,19 @@ import { v4 as uuidv413 } from "uuid";
 
 // src/server/utils/timezone.ts
 var PHIVONEX_BUSINESS_TIMEZONE = "Asia/Dhaka";
+var PHIVONEX_UTC_TIMEZONE = "UTC";
 function getDhakaBusinessDate(date = /* @__PURE__ */ new Date()) {
   const formatter = new Intl.DateTimeFormat("en-CA", {
     timeZone: PHIVONEX_BUSINESS_TIMEZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  });
+  return formatter.format(date);
+}
+function getUtcBusinessDate(date = /* @__PURE__ */ new Date()) {
+  const formatter = new Intl.DateTimeFormat("en-CA", {
+    timeZone: PHIVONEX_UTC_TIMEZONE,
     year: "numeric",
     month: "2-digit",
     day: "2-digit"
@@ -11315,10 +11357,20 @@ async function settleNodeOrder(userId, orderIdentifier, paymentReference, dbClie
       status = 'ACTIVE',
       owner_user_id = $1,
       reserved_by_user_id = NULL,
+      purchase_timestamp = COALESCE(purchase_timestamp, CURRENT_TIMESTAMP),
       activated_at = CURRENT_TIMESTAMP,
+      maturity_timestamp = CURRENT_TIMESTAMP + INTERVAL '400 days',
+      product_version = COALESCE(product_version, 'GENESIS_V1'),
+      purchase_price_usd = COALESCE(purchase_price_usd, 1000.00),
+      phivo_reference_price_at_purchase = COALESCE(phivo_reference_price_at_purchase, 0.10),
+      lifetime_phivo_allocation = COALESCE(lifetime_phivo_allocation, 10000.00),
+      term_days = COALESCE(term_days, 400),
+      daily_phivo_emission = COALESCE(daily_phivo_emission, 25.00),
+      distributed_phivo = COALESCE(distributed_phivo, 0.00),
+      remaining_phivo = COALESCE(remaining_phivo, 10000.00),
       updated_at = CURRENT_TIMESTAMP
     WHERE id = $2 AND status = 'RESERVED'
-    RETURNING id, public_node_id, node_number, status, activated_at
+    RETURNING id, public_node_id, node_number, status, activated_at, maturity_timestamp, distributed_phivo, remaining_phivo
     `,
     [order.user_id, order.node_id]
   );
@@ -11745,8 +11797,11 @@ async function createRewardEpoch(params) {
   const epochNumber = Number(maxRes.rows[0]?.next_num || 1);
   const publicEpochId = generateEpochPublicId(epochNumber);
   const id = uuidv416();
-  const startAt = params?.startAt || /* @__PURE__ */ new Date();
-  const endAt = params?.endAt || new Date(startAt.getTime() + 24 * 60 * 60 * 1e3);
+  const baseDate = params?.startAt || /* @__PURE__ */ new Date();
+  const utcDateStr = getUtcBusinessDate(baseDate);
+  const [year, month, day] = utcDateStr.split("-").map(Number);
+  const startAt = new Date(Date.UTC(year, month - 1, day, 0, 0, 0, 0));
+  const endAt = new Date(Date.UTC(year, month - 1, day, 23, 59, 59, 999));
   const res = await db.query(
     `
     INSERT INTO reward_epochs (
@@ -11844,16 +11899,31 @@ async function closeAndSettleEpoch(epochId, options) {
   );
   const activeNodesRes = await db.query(
     `
-    SELECT id, public_node_id, node_number, owner_user_id
+    SELECT id, public_node_id, node_number, owner_user_id, daily_phivo_emission, lifetime_phivo_allocation, distributed_phivo
     FROM nodes
-    WHERE status = 'ACTIVE' AND owner_user_id IS NOT NULL
+    WHERE (status = 'ACTIVE' OR status = 'EMITTING') 
+      AND owner_user_id IS NOT NULL 
+      AND (distributed_phivo IS NULL OR distributed_phivo < COALESCE(lifetime_phivo_allocation, 10000.00))
+      AND ($1::text IS NULL OR id::text = $1 OR public_node_id = $1)
     ORDER BY node_number ASC
-    `
+    `,
+    [options?.targetNodeId || null]
   );
   const eligibleNodes = activeNodesRes.rows;
   let rewardsCreated = 0;
   let totalDistributed = 0;
   for (const node of eligibleNodes) {
+    const dailyEmission = Number(node.daily_phivo_emission || effectiveRate || 25);
+    const lifetimeCap = Number(node.lifetime_phivo_allocation || 1e4);
+    const currentDist = Number(node.distributed_phivo || 0);
+    const actualEmission = Math.min(dailyEmission, Math.max(0, lifetimeCap - currentDist));
+    if (actualEmission <= 0) {
+      await db.query(
+        `UPDATE nodes SET status = 'MATURED', remaining_phivo = 0, updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
+        [node.id]
+      );
+      continue;
+    }
     const rewardId = uuidv416();
     const publicRewardId = generateRewardPublicId();
     const insRes = await db.query(
@@ -11865,7 +11935,7 @@ async function closeAndSettleEpoch(epochId, options) {
       ON CONFLICT (node_id, epoch_id) DO NOTHING
       RETURNING *
       `,
-      [rewardId, publicRewardId, epochId, node.id, node.owner_user_id, effectiveRate, now]
+      [rewardId, publicRewardId, epochId, node.id, node.owner_user_id, actualEmission, now]
     );
     let actualRewardId;
     let actualPublicRewardId;
@@ -11876,6 +11946,17 @@ async function closeAndSettleEpoch(epochId, options) {
       actualAmount = Number(insRes.rows[0].amount);
       rewardsCreated++;
       totalDistributed += actualAmount;
+      const newDist = currentDist + actualAmount;
+      const newRem = Math.max(0, lifetimeCap - newDist);
+      const newStatus = newDist >= lifetimeCap ? "MATURED" : "EMITTING";
+      await db.query(
+        `
+        UPDATE nodes
+        SET distributed_phivo = $1, remaining_phivo = $2, status = $3, updated_at = CURRENT_TIMESTAMP
+        WHERE id = $4
+        `,
+        [newDist, newRem, newStatus, node.id]
+      );
     } else {
       const existing = await db.query(
         `SELECT id, public_reward_id, amount FROM node_rewards WHERE node_id = $1 AND epoch_id = $2`,
@@ -11907,12 +11988,11 @@ async function closeAndSettleEpoch(epochId, options) {
     } catch (notifErr) {
       console.warn("[Notification] Error triggering node reward notification:", notifErr);
     }
-    try {
-      const userRes = await db.query(
-        `SELECT email, full_name, public_id FROM users WHERE id = $1`,
-        [node.owner_user_id]
-      );
-      if (userRes.rowCount > 0) {
+    db.query(
+      `SELECT email, full_name, public_id FROM users WHERE id = $1`,
+      [node.owner_user_id]
+    ).then(async (userRes) => {
+      if (userRes.rows.length > 0) {
         const user = userRes.rows[0];
         const { queueEventEmail: queueEventEmail2, triggerAutomationRule: triggerAutomationRule2 } = await Promise.resolve().then(() => (init_emailService(), emailService_exports));
         await queueEventEmail2(user.email, "REWARD", {
@@ -11921,14 +12001,15 @@ async function closeAndSettleEpoch(epochId, options) {
           amount: String(actualAmount),
           epochId,
           publicEpochId
+        }).catch(() => {
         });
         await triggerAutomationRule2(node.owner_user_id, "MATCHING_ACTIVITY", {
           amount: String(actualAmount)
+        }).catch(() => {
         });
       }
-    } catch (emailErr) {
-      console.warn("[EmailEngine] Failed to send Reward email:", emailErr);
-    }
+    }).catch(() => {
+    });
   }
   return {
     success: true,
@@ -12186,7 +12267,17 @@ router4.get("/me", requireAuth, async (req, res) => {
         node_number,
         public_node_id,
         status,
-        activated_at
+        product_version,
+        purchase_price_usd,
+        phivo_reference_price_at_purchase,
+        lifetime_phivo_allocation,
+        term_days,
+        daily_phivo_emission,
+        purchase_timestamp,
+        activated_at,
+        maturity_timestamp,
+        distributed_phivo,
+        remaining_phivo
       FROM nodes
       WHERE owner_user_id = $1
       ORDER BY node_number ASC
@@ -12200,11 +12291,30 @@ router4.get("/me", requireAuth, async (req, res) => {
         currentRewardState: "READY",
         latestRewardEpoch: null
       };
+      const lifetimeAllocation = Number(n.lifetime_phivo_allocation || 1e4);
+      const dailyEmission = Number(n.daily_phivo_emission || 25);
+      const distributedPhivo = Number(n.distributed_phivo || stat.totalRewards || 0);
+      const remainingPhivo = Math.max(0, lifetimeAllocation - distributedPhivo);
+      const progressPercent = Math.min(100, Number((distributedPhivo / lifetimeAllocation * 100).toFixed(2)));
+      const completedDays = Math.min(400, Math.floor(distributedPhivo / dailyEmission));
+      const currentDay = n.status === "MATURED" ? 400 : Math.min(400, completedDays + 1);
       return {
         publicNodeId: n.public_node_id,
         nodeNumber: n.node_number,
         status: n.status,
+        productVersion: n.product_version || "GENESIS_V1",
+        purchasePriceUsd: Number(n.purchase_price_usd || 1e3),
+        phivoReferencePriceAtPurchase: Number(n.phivo_reference_price_at_purchase || 0.1),
+        lifetimePhivoAllocation: lifetimeAllocation,
+        termDays: n.term_days || 400,
+        dailyPhivoEmission: dailyEmission,
+        purchaseTimestamp: n.purchase_timestamp ? n.purchase_timestamp.toISOString() : n.activated_at ? n.activated_at.toISOString() : null,
         activatedAt: n.activated_at ? n.activated_at.toISOString() : null,
+        maturityTimestamp: n.maturity_timestamp ? n.maturity_timestamp.toISOString() : n.activated_at ? new Date(new Date(n.activated_at).getTime() + 400 * 24 * 60 * 60 * 1e3).toISOString() : null,
+        distributedPhivo,
+        remainingPhivo,
+        progressPercent,
+        currentDay,
         totalRewards: stat.totalRewards,
         currentRewardState: stat.currentRewardState,
         latestRewardEpoch: stat.latestRewardEpoch
