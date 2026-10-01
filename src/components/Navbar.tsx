@@ -103,13 +103,15 @@ export const Navbar: React.FC<NavbarProps> = ({ onExploreClick, onLaunchAppClick
               </button>
             </div>
           ) : (
-            <button
-              onClick={onLaunchAppClick}
-              className="px-4 py-2 text-xs font-semibold text-[#05070B] bg-gradient-to-r from-[#00CFFF] to-[#168BFF] hover:brightness-110 active:scale-[0.99] rounded-lg shadow-md shadow-[#00CFFF]/20 transition-all flex items-center gap-1.5 whitespace-nowrap cursor-pointer"
-            >
-              <span>Launch App</span>
-              <ArrowUpRight className="w-3.5 h-3.5" />
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={onLaunchAppClick}
+                className="px-4 py-2 text-xs font-bold text-[#05070B] bg-gradient-to-r from-[#00CFFF] to-[#168BFF] hover:brightness-110 active:scale-[0.99] rounded-lg shadow-md shadow-[#00CFFF]/20 transition-all flex items-center gap-1.5 whitespace-nowrap cursor-pointer uppercase tracking-wider"
+              >
+                <span>Register</span>
+                <ArrowUpRight className="w-3.5 h-3.5" />
+              </button>
+            </div>
           )}
         </div>
 
@@ -125,9 +127,9 @@ export const Navbar: React.FC<NavbarProps> = ({ onExploreClick, onLaunchAppClick
           ) : (
             <button
               onClick={onLaunchAppClick}
-              className="px-3 py-1.5 text-xs font-semibold text-[#05070B] bg-[#00CFFF] rounded-md cursor-pointer"
+              className="px-3 py-1.5 text-xs font-bold text-[#05070B] bg-[#00CFFF] rounded-md cursor-pointer uppercase tracking-wider"
             >
-              Launch App
+              Register
             </button>
           )}
           <button
@@ -186,9 +188,9 @@ export const Navbar: React.FC<NavbarProps> = ({ onExploreClick, onLaunchAppClick
                   setMobileMenuOpen(false);
                   onLaunchAppClick();
                 }}
-                className="w-full py-2.5 px-4 text-xs font-semibold text-center text-[#05070B] bg-gradient-to-r from-[#00CFFF] to-[#168BFF] rounded-lg cursor-pointer"
+                className="w-full py-2.5 px-4 text-xs font-bold text-center text-[#05070B] bg-gradient-to-r from-[#00CFFF] to-[#168BFF] rounded-lg cursor-pointer uppercase tracking-wider"
               >
-                Launch App
+                Register
               </button>
             ) : (
               <button

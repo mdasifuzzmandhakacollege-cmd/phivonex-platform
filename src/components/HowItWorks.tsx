@@ -72,7 +72,7 @@ export const HowItWorks: React.FC<HowItWorksProps> = ({ onStartAction }) => {
             onClick={onStartAction}
             className="px-5 py-2.5 text-xs font-semibold text-[#05070B] bg-[#00C8FF] hover:bg-white rounded-lg transition-colors flex items-center gap-1.5 self-start md:self-end cursor-pointer"
           >
-            <span>Start Node Deployment</span>
+            <span>Create Account</span>
             <ArrowRight className="w-3.5 h-3.5" />
           </button>
         </div>
