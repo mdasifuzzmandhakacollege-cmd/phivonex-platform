@@ -4549,7 +4549,7 @@ async function getUserCoinBalance(userId) {
     `
     SELECT entry_type, COALESCE(SUM(amount), 0) AS total
     FROM financial_ledger_entries
-    WHERE user_id = $1 AND currency = 'PHIVO' AND status = 'SETTLED'
+    WHERE user_id = $1 AND currency = 'PHIVO' AND status = 'SETTLED' AND source_type = 'ADMIN_ADJUSTMENT'
     GROUP BY entry_type
     `,
     [userId]
@@ -5583,7 +5583,7 @@ async function updateAdminUserProfile(params) {
     err.statusCode = 400;
     throw err;
   }
-  const userRes = await db.query(`SELECT * FROM users WHERE id = $1 OR public_id = $1`, [params.targetUserId]);
+  const userRes = await db.query(`SELECT * FROM users WHERE id::text = $1 OR public_id = $1`, [params.targetUserId]);
   if (userRes.rows.length === 0) {
     const err = new Error("Target user account not found.");
     err.statusCode = 404;
@@ -5607,6 +5607,11 @@ async function updateAdminUserProfile(params) {
     `,
     [newFullName, newCountry, newPhone, newStatus, currentUser.id]
   );
+  if (params.status && params.status !== currentUser.status) {
+    if (params.status === "LOCKED" || params.status === "SUSPENDED") {
+      await db.query(`UPDATE sessions SET revoked_at = CURRENT_TIMESTAMP WHERE user_id = $1 AND revoked_at IS NULL`, [currentUser.id]);
+    }
+  }
   const updatedUserRes = await db.query(`SELECT id, public_id, full_name, email, phone, country, status, role, created_at FROM users WHERE id = $1`, [currentUser.id]);
   const updatedUser = updatedUserRes.rows[0];
   await logAdminAction({
@@ -5633,6 +5638,34 @@ async function updateAdminUserProfile(params) {
     },
     ipAddress: params.ipAddress
   });
+  createNotification({
+    userId: currentUser.id,
+    type: "SECURITY_ALERT",
+    title: "Profile Updated",
+    message: `Your account profile has been updated by administrator ${params.adminPublicId}. Reason: ${params.reason}`,
+    sourceType: "ADMIN_ADJUSTMENT",
+    sourceId: currentUser.public_id
+  }).catch(console.error);
+  try {
+    notificationEmitter.emit(`notification:${currentUser.id}`, {
+      type: "USER_PROFILE_UPDATED",
+      user: {
+        id: updatedUser.id,
+        publicId: updatedUser.public_id,
+        fullName: updatedUser.full_name,
+        phone: updatedUser.phone,
+        country: updatedUser.country,
+        status: updatedUser.status
+      }
+    });
+    if (params.status && params.status !== currentUser.status) {
+      notificationEmitter.emit(`notification:${currentUser.id}`, {
+        type: "USER_STATUS_UPDATED",
+        status: params.status
+      });
+    }
+  } catch {
+  }
   return { user: updatedUser };
 }
 async function getUser360Details(targetUserIdOrPublicId) {

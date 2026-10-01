@@ -49,6 +49,23 @@ export const ProfileView: React.FC<ProfileViewProps> = ({ user, onNavigateTab })
     setCountry(user.country || '');
   }, [user]);
 
+  // Real-time listener for admin/external profile modifications
+  useEffect(() => {
+    const handleProfileUpdated = (e: any) => {
+      const u = e?.detail?.user;
+      if (u) {
+        if (u.fullName !== undefined) setFullName(u.fullName);
+        else if (u.full_name !== undefined) setFullName(u.full_name);
+        if (u.phone !== undefined) setPhone(u.phone || '');
+        if (u.country !== undefined) setCountry(u.country || '');
+      }
+    };
+    window.addEventListener('phivonex:profile-updated', handleProfileUpdated);
+    return () => {
+      window.removeEventListener('phivonex:profile-updated', handleProfileUpdated);
+    };
+  }, []);
+
   // Load Sponsor and detailed profile metadata
   useEffect(() => {
     let isMounted = true;

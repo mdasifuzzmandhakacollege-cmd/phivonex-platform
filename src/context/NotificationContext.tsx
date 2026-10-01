@@ -184,22 +184,28 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
           const parsed = JSON.parse(event.data);
           if (parsed && parsed.type === 'NEW_NOTIFICATION' && parsed.notification) {
             const notif: AppNotification = parsed.notification;
-            if (!knownNotificationIdsRef.current.has(notif.id)) {
-              knownNotificationIdsRef.current.add(notif.id);
-              setNotifications((prev) => [notif, ...prev.filter((item) => item.id !== notif.id)]);
-              setTotalCount((prev) => prev + 1);
-              if (!notif.readAt) {
-                setUnreadCount((prev) => prev + 1);
-                if (audioEnabled && isHighPriorityNotification(notif.type)) {
-                  playSubtleChime();
+            if (notif.id) {
+              if (!knownNotificationIdsRef.current.has(notif.id)) {
+                knownNotificationIdsRef.current.add(notif.id);
+                setNotifications((prev) => [notif, ...prev.filter((item) => item.id !== notif.id)]);
+                setTotalCount((prev) => prev + 1);
+                if (!notif.readAt) {
+                  setUnreadCount((prev) => prev + 1);
+                  if (audioEnabled && isHighPriorityNotification(notif.type)) {
+                    playSubtleChime();
+                  }
                 }
               }
+            }
 
-              // Dispatch window events for real-time views synchronization
-              if (typeof window !== 'undefined') {
-                window.dispatchEvent(new CustomEvent('phivonex:balance-or-tx-updated', { detail: notif }));
-                window.dispatchEvent(new CustomEvent('phivonex:notifications-updated', { detail: notif }));
+            // Dispatch window events for real-time views synchronization
+            if (typeof window !== 'undefined') {
+              const eventType = (notif as any).type;
+              if (eventType === 'USER_PROFILE_UPDATED' || eventType === 'USER_STATUS_UPDATED') {
+                window.dispatchEvent(new CustomEvent('phivonex:profile-updated', { detail: notif }));
               }
+              window.dispatchEvent(new CustomEvent('phivonex:balance-or-tx-updated', { detail: notif }));
+              window.dispatchEvent(new CustomEvent('phivonex:notifications-updated', { detail: notif }));
             }
           } else if (parsed && parsed.type === 'CONNECTED') {
             fetchUnreadCount();

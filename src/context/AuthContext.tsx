@@ -93,6 +93,39 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   useEffect(() => {
     refreshUser();
+
+    const handleProfileUpdate = (e: any) => {
+      const detail = e?.detail;
+      if (detail?.user) {
+        setUser((prev) => {
+          if (!prev) return null;
+          return {
+            ...prev,
+            fullName: detail.user.fullName ?? detail.user.full_name ?? prev.fullName,
+            phone: detail.user.phone !== undefined ? detail.user.phone : prev.phone,
+            country: detail.user.country ?? prev.country,
+            status: detail.user.status ?? prev.status,
+          };
+        });
+      }
+      refreshUser();
+    };
+
+    const handleVisibilityOrFocus = () => {
+      if (document.visibilityState === 'visible') {
+        refreshUser();
+      }
+    };
+
+    window.addEventListener('phivonex:profile-updated', handleProfileUpdate);
+    window.addEventListener('focus', handleVisibilityOrFocus);
+    document.addEventListener('visibilitychange', handleVisibilityOrFocus);
+
+    return () => {
+      window.removeEventListener('phivonex:profile-updated', handleProfileUpdate);
+      window.removeEventListener('focus', handleVisibilityOrFocus);
+      document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
+    };
   }, [refreshUser]);
 
   // 1. Register with backend API & Firebase
