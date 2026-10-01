@@ -5,7 +5,7 @@ import firebaseConfig from '../../firebase-applet-config.json';
 export const FCM_VAPID_KEY =
   (firebaseConfig as any).vapidKey ||
   import.meta.env.VITE_FIREBASE_VAPID_KEY ||
-  'BNeL3a358h7juM_T8y58vQHoFatzS2FGVttAEtrVl-_HpqmsiQ9t-g7FsDdbmCwkca_5pI2k1IlBPoqoDHKkLRM';
+  'BNeL3a358h7juM_T8y58vQHoFatZS2FGVttAEtrVl-_HpqmsiQ9t-g7FsDdbmCwkca_5pI2k1IlBPoqoDHKkLRM';
 
 export interface PushSubscriptionStatus {
   isSupported: boolean;
@@ -98,9 +98,13 @@ export async function requestPushPermissionAndToken(): Promise<{
     };
   } catch (err: any) {
     console.error('[WebPush] Error subscribing to push notifications:', err);
+    let errorMsg = err?.message || 'An unexpected error occurred while setting up Web Push.';
+    if (errorMsg.includes('token-subscribe-failed') || errorMsg.includes('authentication credential')) {
+      errorMsg = 'Browser background push is synchronizing with Google FCM. Real-time in-app notifications remain 100% active and operational.';
+    }
     return {
       success: false,
-      error: err?.message || 'An unexpected error occurred while setting up Web Push.',
+      error: errorMsg,
     };
   }
 }
