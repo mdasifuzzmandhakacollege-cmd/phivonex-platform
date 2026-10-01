@@ -227,11 +227,11 @@ async function runPf05AuditTests() {
     console.log('\n--- 7. ATOMIC TRANSACTION ROLLBACK ON FAILURE ---');
     const user2 = await createTestUser('user2');
     await createActiveNode(user2.id);
-    const epochUser2 = await createRewardEpoch({ rewardPerNode: 10.00 });
+    const epochUser2 = await createRewardEpoch({ rewardPerNode: 25.00 });
     await closeAndSettleEpoch(epochUser2.id);
 
     const balBeforeFail = await getUserCoinBalance(user2.id);
-    assert(balBeforeFail.availableCoinBalance === 10.00, 'User2 has 10 PHIVO');
+    assert(balBeforeFail.availableCoinBalance === 25.00, 'User2 has 25 PHIVO');
     assert(true, 'Atomic transaction rollback enforced via db.transaction wrapper');
 
     // ----------------------------------------------------

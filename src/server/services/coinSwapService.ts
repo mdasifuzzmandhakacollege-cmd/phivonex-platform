@@ -101,12 +101,12 @@ export async function getUserCoinBalance(userId: string): Promise<UserCoinBalanc
   );
   const totalSoldCoins = Number(soldRes.rows[0]?.total || 0);
 
-  // 4. Admin PHIVO credits & debits from financial_ledger_entries
+  // 4. Admin PHIVO credits & debits from financial_ledger_entries (ADMIN_ADJUSTMENT only)
   const adminPhivoRes = await db.query<{ entry_type: string; total: string | number }>(
     `
     SELECT entry_type, COALESCE(SUM(amount), 0) AS total
     FROM financial_ledger_entries
-    WHERE user_id = $1 AND currency = 'PHIVO' AND status = 'SETTLED'
+    WHERE user_id = $1 AND currency = 'PHIVO' AND status = 'SETTLED' AND source_type = 'ADMIN_ADJUSTMENT'
     GROUP BY entry_type
     `,
     [userId]
