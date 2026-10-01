@@ -3,7 +3,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { generateLedgerTransactionPublicId } from '../utils/idGenerator';
 
 export type LedgerEntryType = 'CREDIT' | 'DEBIT' | 'REVERSAL';
-export type LedgerSourceType = 'REFERRAL_COMMISSION' | 'MATCHING_BONUS' | 'PROMOTION_BONUS' | 'NODE_REWARD' | 'WITHDRAWAL' | 'BLOCKCHAIN_DEPOSIT' | 'COIN_SWAP' | 'ADMIN_ADJUSTMENT' | 'WALLET_TRANSFER';
+export type LedgerSourceType = 'REFERRAL_COMMISSION' | 'MATCHING_BONUS' | 'PROMOTION_BONUS' | 'NODE_REWARD' | 'WITHDRAWAL' | 'BLOCKCHAIN_DEPOSIT' | 'COIN_SWAP' | 'ADMIN_ADJUSTMENT' | 'WALLET_TRANSFER' | 'NODE_PURCHASE';
 
 export interface LedgerTransaction {
   id: string;
