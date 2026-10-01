@@ -29,6 +29,7 @@ import { PhivoCoinIcon, UsdtIcon } from '../brand/CryptoIcons';
 import { TokenPriceTrendChart } from './TokenPriceTrendChart';
 import { PromotionalBannerCarousel } from './PromotionalBannerCarousel';
 import { useSystemConfig } from '../../context/SystemConfigContext';
+import { getTransactionUserDescription } from '../../utils/transactionDisplay';
 
 // TypeScript Interfaces for Authoritative Data
 interface ReferralMeResponse {
@@ -1056,7 +1057,7 @@ export const OverviewView: React.FC<OverviewViewProps> = ({ user, onNavigateTab 
                     </div>
                     <div className="min-w-0">
                       <span className="text-xs font-semibold text-white block truncate">
-                        {tx.description || tx.sourceType.replace(/_/g, ' ')}
+                        {getTransactionUserDescription(tx)}
                       </span>
                       <span className="text-[10px] text-[#98A2B3] font-mono block">
                         {formatDate(tx.createdAt)}

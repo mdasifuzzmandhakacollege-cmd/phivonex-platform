@@ -1431,8 +1431,8 @@ export async function executeAdminWalletAdjustment(params: {
     createNotification({
       userId: targetUser.id,
       type: 'SECURITY_ALERT',
-      title: `Wallet Adjustment (${cleanDirection})`,
-      message: `An administrative ${cleanDirection.toLowerCase()} of ${numAmount} ${cleanAsset} was applied to your wallet balance. Reason: ${cleanReason}`,
+      title: cleanDirection === 'CREDIT' ? 'Account Credit' : 'Account Debit',
+      message: `An ${cleanDirection === 'CREDIT' ? 'account credit' : 'account debit'} of ${numAmount} ${cleanAsset} was applied to your balance.`,
       sourceType: 'ADMIN_ADJUSTMENT',
       sourceId: publicTxnId,
     }).catch(console.error);

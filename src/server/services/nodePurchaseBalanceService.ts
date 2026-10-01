@@ -201,6 +201,40 @@ export async function processNodePurchaseWithAssetBalance(
     // 4. Atomic Execution: DB Transaction containing Ledger Debit + Settlement
     try {
       const result = await db.transaction(async (trx) => {
+        // Lock user row to prevent concurrency race conditions
+        await trx.query(`SELECT id FROM users WHERE id = $1 FOR UPDATE`, [userId]);
+
+        // Re-verify authoritative balance inside transaction
+        if (selectedAsset === 'USDT') {
+          const balRes = await trx.query<{ available_balance: string | number }>(
+            `
+            SELECT 
+              COALESCE(SUM(CASE 
+                WHEN entry_type = 'CREDIT' THEN amount 
+                WHEN entry_type = 'DEBIT' THEN -amount 
+                WHEN entry_type = 'REVERSAL' AND source_type = 'WITHDRAWAL' THEN amount 
+                WHEN entry_type = 'REVERSAL' THEN -amount 
+                ELSE 0 
+              END), 0) AS available_balance
+            FROM financial_ledger_entries
+            WHERE user_id = $1 
+              AND status = 'SETTLED' 
+              AND (currency = 'USDT' OR currency = 'USD') 
+              AND source_type != 'NODE_REWARD'
+            `,
+            [userId]
+          );
+          const currentAvailable = Math.max(0, Number(balRes.rows[0]?.available_balance || 0));
+          if (currentAvailable < requiredAmount) {
+            const err: any = new Error(
+              `INSUFFICIENT_ASSET_BALANCE: Available balance of ${currentAvailable} ${selectedAsset} is insufficient for required ${requiredAmount} ${selectedAsset}.`
+            );
+            err.code = 'INSUFFICIENT_ASSET_BALANCE';
+            err.statusCode = 400;
+            throw err;
+          }
+        }
+
         const orderId = reservation.order.id || reservation.order.publicOrderId;
 
         // Duplicate debit check inside transaction

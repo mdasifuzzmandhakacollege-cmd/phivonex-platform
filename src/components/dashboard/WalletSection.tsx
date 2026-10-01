@@ -29,6 +29,7 @@ import {
   Sparkles,
 } from 'lucide-react';
 import { PhivoCoinIcon } from '../brand/CryptoIcons';
+import { getTransactionDisplayLabel, getTransactionUserDescription } from '../../utils/transactionDisplay';
 
 export interface WalletBreakdown {
   referral: number;
@@ -268,6 +269,8 @@ export const WalletSection: React.FC<WalletSectionProps> = ({ onNavigateTab }) =
 
   const getSourceIcon = (sourceType: string) => {
     switch (sourceType) {
+      case 'ADMIN_ADJUSTMENT':
+        return <ShieldCheck className="w-4 h-4 text-[#00CFFF]" />;
       case 'REFERRAL_COMMISSION':
       case 'REFERRAL':
         return <Users className="w-4 h-4 text-[#00CFFF]" />;
@@ -281,6 +284,7 @@ export const WalletSection: React.FC<WalletSectionProps> = ({ onNavigateTab }) =
       case 'NODE_MINING':
         return <PhivoCoinIcon size={16} />;
       case 'DEPOSIT':
+      case 'BLOCKCHAIN_DEPOSIT':
         return <ArrowDownLeft className="w-4 h-4 text-[#32D583]" />;
       case 'WITHDRAWAL':
         return <ArrowUpRight className="w-4 h-4 text-[#F04438]" />;
@@ -289,27 +293,8 @@ export const WalletSection: React.FC<WalletSectionProps> = ({ onNavigateTab }) =
     }
   };
 
-  const getSourceLabel = (sourceType: string) => {
-    switch (sourceType) {
-      case 'REFERRAL_COMMISSION':
-      case 'REFERRAL':
-        return 'Referral Commission';
-      case 'MATCHING_BONUS':
-      case 'MATCHING':
-        return 'Matching Bonus';
-      case 'PROMOTION_BONUS':
-      case 'PROMOTION':
-        return 'Promotion Milestone';
-      case 'NODE_REWARD':
-      case 'NODE_MINING':
-        return 'Node Mining Reward';
-      case 'DEPOSIT':
-        return 'USDT Deposit';
-      case 'WITHDRAWAL':
-        return 'Withdrawal';
-      default:
-        return sourceType;
-    }
+  const getSourceLabel = (sourceType: string, entryType?: string) => {
+    return getTransactionDisplayLabel(sourceType, entryType);
   };
 
   return (
@@ -699,14 +684,14 @@ export const WalletSection: React.FC<WalletSectionProps> = ({ onNavigateTab }) =
                       <td className="py-3 px-3 whitespace-nowrap">
                         <div className="flex items-center gap-1.5 text-white">
                           {getSourceIcon(tx.sourceType)}
-                          <span className="text-xs font-medium">{getSourceLabel(tx.sourceType)}</span>
+                          <span className="text-xs font-medium">{getSourceLabel(tx.sourceType, tx.entryType)}</span>
                         </div>
                       </td>
                       <td className="py-3 px-3 font-mono text-[#98A2B3] text-[11px] whitespace-nowrap">
                         {tx.sourceRef}
                       </td>
                       <td className="py-3 px-3 text-[#98A2B3] max-w-xs truncate">
-                        {tx.description}
+                        {getTransactionUserDescription(tx)}
                       </td>
                       <td className="py-3 px-3 text-right font-mono font-bold whitespace-nowrap">
                         <span className={isCredit ? 'text-[#32D583]' : isReversal ? 'text-[#F79009]' : 'text-[#F04438]'}>
@@ -789,18 +774,16 @@ export const WalletSection: React.FC<WalletSectionProps> = ({ onNavigateTab }) =
                   <div className="flex items-center justify-between text-xs text-[#98A2B3]">
                     <div className="flex items-center gap-1.5 text-white">
                       {getSourceIcon(tx.sourceType)}
-                      <span>{getSourceLabel(tx.sourceType)}</span>
+                      <span>{getSourceLabel(tx.sourceType, tx.entryType)}</span>
                     </div>
                     <span className="text-[11px] font-mono text-[#667085]">
                       {formatDate(tx.createdAt)}
                     </span>
                   </div>
 
-                  {tx.description && (
-                    <p className="text-[11px] text-[#667085] truncate">
-                      {tx.description}
-                    </p>
-                  )}
+                  <p className="text-[11px] text-[#667085] truncate">
+                    {getTransactionUserDescription(tx)}
+                  </p>
                 </div>
               );
             })
@@ -906,7 +889,7 @@ export const WalletSection: React.FC<WalletSectionProps> = ({ onNavigateTab }) =
                 <span className="text-[10px] font-mono text-[#667085] uppercase block">Source Channel</span>
                 <div className="flex items-center gap-2 text-white font-medium">
                   {getSourceIcon(selectedTxDetail.sourceType)}
-                  <span>{getSourceLabel(selectedTxDetail.sourceType)}</span>
+                  <span>{getSourceLabel(selectedTxDetail.sourceType, selectedTxDetail.entryType)}</span>
                 </div>
               </div>
 
@@ -924,14 +907,12 @@ export const WalletSection: React.FC<WalletSectionProps> = ({ onNavigateTab }) =
                 </div>
               </div>
 
-              {selectedTxDetail.description && (
-                <div className="p-3 rounded-xl bg-[#05070B] border border-white/[0.06] space-y-1 sm:col-span-2">
-                  <span className="text-[10px] font-mono text-[#667085] uppercase block">Description</span>
-                  <div className="text-white text-xs leading-relaxed">
-                    {selectedTxDetail.description}
-                  </div>
+              <div className="p-3 rounded-xl bg-[#05070B] border border-white/[0.06] space-y-1 sm:col-span-2">
+                <span className="text-[10px] font-mono text-[#667085] uppercase block">Description</span>
+                <div className="text-white text-xs leading-relaxed">
+                  {getTransactionUserDescription(selectedTxDetail)}
                 </div>
-              )}
+              </div>
             </div>
 
             {/* Modal Actions */}

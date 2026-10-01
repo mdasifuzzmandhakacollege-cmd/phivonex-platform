@@ -11,6 +11,7 @@ import {
   Users,
   ChevronRight,
   Check,
+  Award,
 } from 'lucide-react';
 
 export interface PromotionRule {
@@ -23,7 +24,11 @@ export interface PromotionRule {
   requiredRight: number;
   requiredLeaderRank: string | null;
   legBalanceRule: 'FLEXIBLE' | 'STRICT';
+  rewardType?: 'USDT' | 'NON_CASH';
   rewardUsd: number;
+  rewardTitle?: string | null;
+  rewardDescription?: string | null;
+  rewardDisplayValueUsd?: number | null;
   flushRule: string;
   status: 'ACTIVE' | 'INACTIVE';
   version: number;
@@ -78,7 +83,11 @@ export interface UserRankState {
     consumedLeft: number;
     consumedRight: number;
     ruleVersion: number;
+    rewardType?: 'USDT' | 'NON_CASH';
     rewardUsd: number;
+    rewardTitle?: string | null;
+    rewardDescription?: string | null;
+    rewardDisplayValueUsd?: number | null;
     status: string;
     completedAt: string;
   }>;
@@ -475,6 +484,23 @@ export const PromotionSection: React.FC<PromotionSectionProps> = () => {
                       ? `${rule.requiredLeft} / ${rule.requiredRight} ${rule.requiredLeaderRank} Leaders`
                       : 'Default Tier'}
                   </div>
+                  <div className="pt-1.5 border-t border-white/[0.04]">
+                    {rule.rewardType === 'NON_CASH' ? (
+                      <div className="flex items-center gap-1 text-amber-400 font-semibold text-[10px]">
+                        <Award className="w-3 h-3 text-amber-400 shrink-0" />
+                        <span>{rule.rewardTitle || 'Non-Cash Reward'}</span>
+                        {rule.rewardDisplayValueUsd && (
+                          <span className="text-[#98A2B3]">(${Number(rule.rewardDisplayValueUsd).toLocaleString()})</span>
+                        )}
+                      </div>
+                    ) : rule.rewardUsd > 0 ? (
+                      <span className="text-emerald-400 font-semibold text-[10px]">
+                        ${Number(rule.rewardUsd).toLocaleString()} USDT Reward
+                      </span>
+                    ) : (
+                      <span className="text-[#667085] text-[10px]">Recognition Tier</span>
+                    )}
+                  </div>
                 </div>
               </div>
             );
@@ -498,6 +524,7 @@ export const PromotionSection: React.FC<PromotionSectionProps> = () => {
                   <th className="py-2 px-2">Rank Achieved</th>
                   <th className="py-2 px-2">Order</th>
                   <th className="py-2 px-2">Type</th>
+                  <th className="py-2 px-2">Reward</th>
                   <th className="py-2 px-2">Date Completed</th>
                 </tr>
               </thead>
@@ -508,6 +535,18 @@ export const PromotionSection: React.FC<PromotionSectionProps> = () => {
                     <td className="py-2.5 px-2 font-bold text-white">{evt.rankName}</td>
                     <td className="py-2.5 px-2 text-[#98A2B3]">#{evt.rankOrder}</td>
                     <td className="py-2.5 px-2 text-[#98A2B3]">{evt.qualificationType}</td>
+                    <td className="py-2.5 px-2">
+                      {evt.rewardType === 'NON_CASH' ? (
+                        <span className="text-amber-400 font-semibold flex items-center gap-1 text-[11px]">
+                          <Award className="w-3 h-3 text-amber-400 shrink-0" />
+                          <span>{evt.rewardTitle || 'Non-Cash Entitlement'}</span>
+                        </span>
+                      ) : evt.rewardUsd > 0 ? (
+                        <span className="text-emerald-400 font-bold">${Number(evt.rewardUsd).toLocaleString()} USDT</span>
+                      ) : (
+                        <span className="text-[#667085]">—</span>
+                      )}
+                    </td>
                     <td className="py-2.5 px-2 text-[#98A2B3]">{formatDate(evt.completedAt)}</td>
                   </tr>
                 ))}

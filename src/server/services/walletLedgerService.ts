@@ -745,8 +745,18 @@ export async function getWalletTransactions(
   await syncUserLedger(userId);
 
   const db = await getDb();
-  const safePage = Math.max(1, page);
-  const safeLimit = Math.min(100, Math.max(1, limit));
+  let actualPage = 1;
+  let actualLimit = 20;
+  if (typeof page === 'object' && page !== null) {
+    actualPage = Number((page as any).page) || 1;
+    actualLimit = Number((page as any).limit) || 20;
+  } else {
+    actualPage = Number(page) || 1;
+    actualLimit = Number(limit) || 20;
+  }
+
+  const safePage = Math.max(1, actualPage);
+  const safeLimit = Math.min(100, Math.max(1, actualLimit));
   const offset = (safePage - 1) * safeLimit;
 
   // Determine normalized source types to filter
@@ -831,20 +841,27 @@ export async function getWalletTransactions(
 
   const totalPages = Math.ceil(totalCount / safeLimit) || 1;
 
-  const transactions: LedgerTransaction[] = txRows.map((row) => ({
-    id: row.id,
-    publicTxnId: row.public_txn_id,
-    userId: row.user_id,
-    entryType: row.entry_type,
-    sourceType: row.source_type,
-    sourceId: row.source_id,
-    sourceRef: row.source_ref,
-    description: row.description,
-    amount: Number(row.amount),
-    currency: row.currency,
-    status: row.status,
-    createdAt: new Date(row.created_at).toISOString(),
-  }));
+  const transactions: LedgerTransaction[] = txRows.map((row) => {
+    let cleanDescription = row.description;
+    if (row.source_type === 'ADMIN_ADJUSTMENT' || (cleanDescription && /admin adjustment/i.test(cleanDescription))) {
+      cleanDescription = row.entry_type === 'DEBIT' ? 'Account Debit' : 'Account Credit';
+    }
+
+    return {
+      id: row.id,
+      publicTxnId: row.public_txn_id,
+      userId: row.user_id,
+      entryType: row.entry_type,
+      sourceType: row.source_type,
+      sourceId: row.source_id,
+      sourceRef: row.source_ref,
+      description: cleanDescription,
+      amount: Number(row.amount),
+      currency: row.currency,
+      status: row.status,
+      createdAt: new Date(row.created_at).toISOString(),
+    };
+  });
 
   return {
     transactions,

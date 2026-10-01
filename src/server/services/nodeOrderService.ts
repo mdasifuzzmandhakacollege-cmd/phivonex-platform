@@ -1013,32 +1013,57 @@ export async function purchaseNodeWithDepositBalance(
       // 1. Get Node Price
       const nodePrice = await getNodeBasePrice(trx); // Default $1,000
 
-      // 2. Compute User's Total Credited Deposit Balance using trx client
-      const depositRes = await trx.query<{ total_credited: string | number }>(
-        `
-        SELECT COALESCE(SUM(amount), 0) AS total_credited
-        FROM blockchain_deposits
-        WHERE user_id = $1 AND status = 'CREDITED'
-        `,
-        [userId]
-      );
-      const totalCreditedDeposits = Number(depositRes.rows[0]?.total_credited || 0);
+      // 2. Compute User's Unified Spendable Balance using trx client
+      const { syncUserLedger } = await import('./walletLedgerService');
+      await syncUserLedger(userId, trx);
 
-      const debitsRes = await trx.query<{ total_debits: string | number }>(
-        `
-        SELECT COALESCE(SUM(amount), 0) AS total_debits
-        FROM financial_ledger_entries
-        WHERE user_id = $1 AND entry_type = 'DEBIT' AND source_type = 'NODE_PURCHASE'
-        `,
-        [userId]
-      );
-      const totalNodeDebits = Number(debitsRes.rows[0]?.total_debits || 0);
+      let availableDepositBalance = 0;
+      if (preferredAsset === 'USDT') {
+        const balRes = await trx.query<{ available_balance: string | number }>(
+          `
+          SELECT 
+            COALESCE(SUM(CASE 
+              WHEN entry_type = 'CREDIT' THEN amount 
+              WHEN entry_type = 'DEBIT' THEN -amount 
+              WHEN entry_type = 'REVERSAL' AND source_type = 'WITHDRAWAL' THEN amount 
+              WHEN entry_type = 'REVERSAL' THEN -amount 
+              ELSE 0 
+            END), 0) AS available_balance
+          FROM financial_ledger_entries
+          WHERE user_id = $1 
+            AND status = 'SETTLED' 
+            AND (currency = 'USDT' OR currency = 'USD') 
+            AND source_type != 'NODE_REWARD'
+          `,
+          [userId]
+        );
+        availableDepositBalance = Math.max(0, Number(balRes.rows[0]?.available_balance || 0));
+      } else {
+        const depositRes = await trx.query<{ total_credited: string | number }>(
+          `
+          SELECT COALESCE(SUM(amount), 0) AS total_credited
+          FROM blockchain_deposits
+          WHERE user_id = $1 AND status = 'CREDITED' AND asset = 'BNB'
+          `,
+          [userId]
+        );
+        const totalCreditedDeposits = Number(depositRes.rows[0]?.total_credited || 0);
 
-      const availableDepositBalance = Math.max(0, totalCreditedDeposits - totalNodeDebits);
+        const debitsRes = await trx.query<{ total_debits: string | number }>(
+          `
+          SELECT COALESCE(SUM(amount), 0) AS total_debits
+          FROM financial_ledger_entries
+          WHERE user_id = $1 AND entry_type = 'DEBIT' AND source_type = 'NODE_PURCHASE' AND currency = 'BNB'
+          `,
+          [userId]
+        );
+        const totalNodeDebits = Number(debitsRes.rows[0]?.total_debits || 0);
+        availableDepositBalance = Math.max(0, totalCreditedDeposits - totalNodeDebits);
+      }
 
       if (availableDepositBalance < nodePrice) {
         const error: any = new Error(
-          `Your current deposited balance is $${availableDepositBalance.toFixed(2)} USD. You need $${nodePrice.toFixed(2)} USD to activate a Genesis Node. Please deposit funds first.`
+          `Your current available balance is $${availableDepositBalance.toFixed(2)} ${preferredAsset}. You need $${nodePrice.toFixed(2)} ${preferredAsset} to activate a Genesis Node. Please deposit or add funds first.`
         );
         error.code = 'INSUFFICIENT_DEPOSIT_BALANCE';
         error.statusCode = 400;

@@ -28,7 +28,11 @@ interface PromotionRule {
   requiredRight: number;
   requiredLeaderRank: string | null;
   legBalanceRule: 'FLEXIBLE' | 'STRICT';
+  rewardType: 'USDT' | 'NON_CASH';
   rewardUsd: number;
+  rewardTitle?: string | null;
+  rewardDescription?: string | null;
+  rewardDisplayValueUsd?: number | null;
   flushRule: string;
   status: 'ACTIVE' | 'INACTIVE';
   version: number;
@@ -117,7 +121,11 @@ export const LeadershipRankControl: React.FC = () => {
   const [editReqRight, setEditReqRight] = useState<number>(0);
   const [editReqLeaderRank, setEditReqLeaderRank] = useState<string>('');
   const [editLegBalanceRule, setEditLegBalanceRule] = useState<'FLEXIBLE' | 'STRICT'>('FLEXIBLE');
+  const [editRewardType, setEditRewardType] = useState<'USDT' | 'NON_CASH'>('USDT');
   const [editRewardUsd, setEditRewardUsd] = useState<number>(0);
+  const [editRewardTitle, setEditRewardTitle] = useState<string>('');
+  const [editRewardDescription, setEditRewardDescription] = useState<string>('');
+  const [editRewardDisplayValueUsd, setEditRewardDisplayValueUsd] = useState<string>('');
   const [editStatus, setEditStatus] = useState<'ACTIVE' | 'INACTIVE'>('ACTIVE');
   const [editReason, setEditReason] = useState<string>('');
   const [savingRule, setSavingRule] = useState(false);
@@ -166,7 +174,15 @@ export const LeadershipRankControl: React.FC = () => {
     setEditReqRight(rule.requiredRight);
     setEditReqLeaderRank(rule.requiredLeaderRank || '');
     setEditLegBalanceRule(rule.legBalanceRule);
-    setEditRewardUsd(rule.rewardUsd);
+    setEditRewardType(rule.rewardType || 'USDT');
+    setEditRewardUsd(rule.rewardUsd || 0);
+    setEditRewardTitle(rule.rewardTitle || '');
+    setEditRewardDescription(rule.rewardDescription || '');
+    setEditRewardDisplayValueUsd(
+      rule.rewardDisplayValueUsd !== null && rule.rewardDisplayValueUsd !== undefined
+        ? String(rule.rewardDisplayValueUsd)
+        : ''
+    );
     setEditStatus(rule.status);
     setEditReason('');
   };
@@ -175,6 +191,11 @@ export const LeadershipRankControl: React.FC = () => {
     if (!editingRule) return;
     if (!editReason || editReason.trim().length < 5) {
       alert('Audit reason is mandatory (minimum 5 characters).');
+      return;
+    }
+
+    if (editRewardType === 'NON_CASH' && (!editRewardTitle || editRewardTitle.trim().length < 3)) {
+      alert('Reward title is required (minimum 3 characters) for non-cash rewards.');
       return;
     }
 
@@ -188,7 +209,14 @@ export const LeadershipRankControl: React.FC = () => {
           requiredRight: Number(editReqRight),
           requiredLeaderRank: editReqLeaderRank ? editReqLeaderRank : null,
           legBalanceRule: editLegBalanceRule,
-          rewardUsd: Number(editRewardUsd),
+          rewardType: editRewardType,
+          rewardUsd: editRewardType === 'USDT' ? Number(editRewardUsd) : 0,
+          rewardTitle: editRewardType === 'NON_CASH' ? editRewardTitle.trim() : null,
+          rewardDescription: editRewardType === 'NON_CASH' ? (editRewardDescription.trim() || null) : null,
+          rewardDisplayValueUsd:
+            editRewardType === 'NON_CASH' && editRewardDisplayValueUsd && !isNaN(Number(editRewardDisplayValueUsd))
+              ? Number(editRewardDisplayValueUsd)
+              : null,
           status: editStatus,
           expectedVersion: editingRule.version,
           reason: editReason.trim(),
@@ -437,8 +465,24 @@ export const LeadershipRankControl: React.FC = () => {
                   <td className="py-3 px-3 font-mono text-[11px] text-[#98A2B3]">
                     {rule.qualificationType === 'LEADERSHIP' ? rule.legBalanceRule : '—'}
                   </td>
-                  <td className="py-3 px-3 font-mono text-emerald-400 font-bold">
-                    {rule.rewardUsd > 0 ? formatUsd(rule.rewardUsd) : '—'}
+                  <td className="py-3 px-3 font-mono">
+                    {rule.rewardType === 'NON_CASH' ? (
+                      <div className="flex flex-col">
+                        <span className="text-amber-400 font-bold flex items-center gap-1 text-[11px]">
+                          <Award className="w-3 h-3 text-amber-400 shrink-0" />
+                          <span>{rule.rewardTitle || 'Non-Cash Reward'}</span>
+                        </span>
+                        {rule.rewardDisplayValueUsd && (
+                          <span className="text-[10px] text-[#98A2B3]">
+                            (Est: {formatUsd(rule.rewardDisplayValueUsd)})
+                          </span>
+                        )}
+                      </div>
+                    ) : (
+                      <span className="text-emerald-400 font-bold">
+                        {rule.rewardUsd > 0 ? `${formatUsd(rule.rewardUsd)} USDT` : '—'}
+                      </span>
+                    )}
                   </td>
                   <td className="py-3 px-3">
                     <span
@@ -782,22 +826,120 @@ export const LeadershipRankControl: React.FC = () => {
                 </>
               )}
 
-              <div>
-                <label className="text-[#98A2B3] block mb-1">Reward USD ($)</label>
-                <input
-                  type="number"
-                  value={editRewardUsd}
-                  onChange={(e) => setEditRewardUsd(Number(e.target.value))}
-                  className="w-full px-3 py-2 bg-[#05070B] border border-white/10 rounded-lg text-white font-mono"
-                />
+              <div className="col-span-2 p-3 rounded-xl bg-white/[0.02] border border-white/[0.06] space-y-3">
+                <label className="text-[#98A2B3] block text-xs font-semibold uppercase tracking-wider">
+                  Reward Model Configuration
+                </label>
+                <div className="flex items-center gap-4">
+                  <label className="flex items-center gap-2 cursor-pointer text-white">
+                    <input
+                      type="radio"
+                      name="rewardType"
+                      checked={editRewardType === 'USDT'}
+                      onChange={() => setEditRewardType('USDT')}
+                      className="accent-[#00CFFF]"
+                    />
+                    <span>USDT Monetary Reward</span>
+                  </label>
+                  <label className="flex items-center gap-2 cursor-pointer text-white">
+                    <input
+                      type="radio"
+                      name="rewardType"
+                      checked={editRewardType === 'NON_CASH'}
+                      onChange={() => setEditRewardType('NON_CASH')}
+                      className="accent-amber-400"
+                    />
+                    <span className="text-amber-400 font-medium">Non-Cash / Recognition Reward</span>
+                  </label>
+                </div>
+
+                {editRewardType === 'USDT' ? (
+                  <div>
+                    <label className="text-[#98A2B3] block mb-1">Authoritative USDT Reward ($)</label>
+                    <input
+                      type="number"
+                      value={editRewardUsd}
+                      onChange={(e) => setEditRewardUsd(Number(e.target.value))}
+                      className="w-full px-3 py-2 bg-[#05070B] border border-white/10 rounded-lg text-white font-mono text-xs"
+                      placeholder="e.g. 5000"
+                    />
+                    <span className="text-[10px] text-[#98A2B3] mt-1 block">
+                      Posted directly to user spendable ledger balance upon rank achievement.
+                    </span>
+                  </div>
+                ) : (
+                  <div className="space-y-3 pt-1">
+                    <div>
+                      <label className="text-[#98A2B3] block mb-1">Quick Recognition Presets</label>
+                      <div className="flex flex-wrap gap-1.5">
+                        {[
+                          { title: 'International Tour', est: '5000' },
+                          { title: 'Luxury Travel Package', est: '10000' },
+                          { title: 'Executive Car Reward', est: '50000' },
+                          { title: 'Device / Tech Gift', est: '2000' },
+                          { title: 'Custom Recognition Reward', est: '' },
+                        ].map((preset) => (
+                          <button
+                            key={preset.title}
+                            type="button"
+                            onClick={() => {
+                              setEditRewardTitle(preset.title);
+                              if (preset.est) setEditRewardDisplayValueUsd(preset.est);
+                            }}
+                            className="px-2.5 py-1 rounded-md bg-white/[0.05] hover:bg-white/[0.1] text-amber-300 text-[11px] font-mono border border-amber-500/20 cursor-pointer"
+                          >
+                            + {preset.title}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="text-[#98A2B3] block mb-1">Reward Title *</label>
+                        <input
+                          type="text"
+                          value={editRewardTitle}
+                          onChange={(e) => setEditRewardTitle(e.target.value)}
+                          placeholder="e.g. International Tour or Car Reward"
+                          className="w-full px-3 py-2 bg-[#05070B] border border-white/10 rounded-lg text-white text-xs"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[#98A2B3] block mb-1">Est. Display Value USD (Optional)</label>
+                        <input
+                          type="number"
+                          value={editRewardDisplayValueUsd}
+                          onChange={(e) => setEditRewardDisplayValueUsd(e.target.value)}
+                          placeholder="e.g. 25000"
+                          className="w-full px-3 py-2 bg-[#05070B] border border-white/10 rounded-lg text-white font-mono text-xs"
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="text-[#98A2B3] block mb-1">Reward Description / Terms (Optional)</label>
+                      <input
+                        type="text"
+                        value={editRewardDescription}
+                        onChange={(e) => setEditRewardDescription(e.target.value)}
+                        placeholder="e.g. All-inclusive luxury resort package for 2 guests"
+                        className="w-full px-3 py-2 bg-[#05070B] border border-white/10 rounded-lg text-white text-xs"
+                      />
+                    </div>
+                    <span className="text-[10px] text-amber-400/80 block">
+                      Non-cash rewards represent tangible gifts or honors and never automatically credit financial ledger balances.
+                    </span>
+                  </div>
+                )}
               </div>
 
-              <div>
+              <div className="col-span-2">
                 <label className="text-[#98A2B3] block mb-1">Rule Status</label>
                 <select
                   value={editStatus}
                   onChange={(e) => setEditStatus(e.target.value as any)}
-                  className="w-full px-3 py-2 bg-[#05070B] border border-white/10 rounded-lg text-white font-mono"
+                  className="w-full px-3 py-2 bg-[#05070B] border border-white/10 rounded-lg text-white font-mono text-xs"
                 >
                   <option value="ACTIVE">ACTIVE</option>
                   <option value="INACTIVE">INACTIVE</option>

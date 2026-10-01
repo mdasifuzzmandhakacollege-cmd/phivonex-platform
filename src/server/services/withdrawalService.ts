@@ -268,22 +268,25 @@ export async function createWithdrawalRequest(params: {
 
       // 3. Balance Validation & Reservation (Authoritative Server Check inside transaction)
       await syncUserLedger(userId, trx);
-      const creditsRes = await trx.query<{ total: string | number }>(
-        `SELECT COALESCE(SUM(amount), 0) AS total FROM financial_ledger_entries WHERE user_id = $1 AND entry_type = 'CREDIT' AND status = 'SETTLED'`,
+      const balRes = await trx.query<{ available_balance: string | number }>(
+        `
+        SELECT 
+          COALESCE(SUM(CASE 
+            WHEN entry_type = 'CREDIT' THEN amount 
+            WHEN entry_type = 'DEBIT' THEN -amount 
+            WHEN entry_type = 'REVERSAL' AND source_type = 'WITHDRAWAL' THEN amount 
+            WHEN entry_type = 'REVERSAL' THEN -amount 
+            ELSE 0 
+          END), 0) AS available_balance
+        FROM financial_ledger_entries
+        WHERE user_id = $1 
+          AND status = 'SETTLED' 
+          AND (currency = 'USDT' OR currency = 'USD') 
+          AND source_type != 'NODE_REWARD'
+        `,
         [userId]
       );
-      const debitsRes = await trx.query<{ total: string | number }>(
-        `SELECT COALESCE(SUM(amount), 0) AS total FROM financial_ledger_entries WHERE user_id = $1 AND entry_type = 'DEBIT' AND status = 'SETTLED'`,
-        [userId]
-      );
-      const reversalsRes = await trx.query<{ total: string | number }>(
-        `SELECT COALESCE(SUM(amount), 0) AS total FROM financial_ledger_entries WHERE user_id = $1 AND entry_type = 'REVERSAL' AND status = 'SETTLED'`,
-        [userId]
-      );
-      const totalCredits = Number(creditsRes.rows[0]?.total || 0);
-      const totalDebits = Number(debitsRes.rows[0]?.total || 0);
-      const totalReversals = Number(reversalsRes.rows[0]?.total || 0);
-      const availableBalance = Math.max(0, totalCredits - totalDebits + totalReversals);
+      const availableBalance = Math.max(0, Number(balRes.rows[0]?.available_balance || 0));
       console.log(`[WithdrawalService] User ${userId} available balance: ${availableBalance}, requested: ${cleanAmount}`);
 
       if (cleanAmount > availableBalance) {

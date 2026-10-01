@@ -81,7 +81,20 @@ promotionRouter.put('/ranks/rules/:id', requireAuth, requireAdmin, async (req: A
   try {
     const admin = req.user!;
     const { id } = req.params;
-    const { requiredLeft, requiredRight, requiredLeaderRank, legBalanceRule, rewardUsd, status, reason, expectedVersion } = req.body || {};
+    const {
+      requiredLeft,
+      requiredRight,
+      requiredLeaderRank,
+      legBalanceRule,
+      rewardType,
+      rewardUsd,
+      rewardTitle,
+      rewardDescription,
+      rewardDisplayValueUsd,
+      status,
+      reason,
+      expectedVersion,
+    } = req.body || {};
 
     if (!reason || String(reason).trim().length < 5) {
       return res.status(400).json({ error: 'INVALID_INPUT', message: 'Reason is required (min 5 characters).' });
@@ -92,7 +105,11 @@ promotionRouter.put('/ranks/rules/:id', requireAuth, requireAdmin, async (req: A
       requiredRight: typeof requiredRight === 'number' ? requiredRight : undefined,
       requiredLeaderRank: requiredLeaderRank !== undefined ? requiredLeaderRank : undefined,
       legBalanceRule: legBalanceRule !== undefined ? legBalanceRule : undefined,
+      rewardType: rewardType !== undefined ? rewardType : undefined,
       rewardUsd: typeof rewardUsd === 'number' ? rewardUsd : undefined,
+      rewardTitle: rewardTitle !== undefined ? rewardTitle : undefined,
+      rewardDescription: rewardDescription !== undefined ? rewardDescription : undefined,
+      rewardDisplayValueUsd: rewardDisplayValueUsd !== undefined ? (rewardDisplayValueUsd === null ? null : Number(rewardDisplayValueUsd)) : undefined,
       status: status !== undefined ? status : undefined,
       expectedVersion: typeof expectedVersion === 'number' ? expectedVersion : undefined,
       reason: String(reason).trim(),

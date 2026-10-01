@@ -19,6 +19,7 @@ export type PromotionRankKey =
 
 export type QualificationType = 'NONE' | 'MATCHING' | 'LEADERSHIP';
 export type LegBalanceRule = 'FLEXIBLE' | 'STRICT';
+export type PromotionRewardType = 'USDT' | 'NON_CASH';
 
 export interface PromotionRule {
   id: string;
@@ -30,7 +31,11 @@ export interface PromotionRule {
   requiredRight: number;
   requiredLeaderRank: PromotionRankKey | null;
   legBalanceRule: LegBalanceRule;
+  rewardType: PromotionRewardType;
   rewardUsd: number;
+  rewardTitle?: string | null;
+  rewardDescription?: string | null;
+  rewardDisplayValueUsd?: number | null;
   flushRule: string;
   status: 'ACTIVE' | 'INACTIVE';
   version: number;
@@ -56,7 +61,11 @@ export interface UserPromotionEvent {
   consumedLeft: number;
   consumedRight: number;
   ruleVersion: number;
+  rewardType?: PromotionRewardType;
   rewardUsd: number;
+  rewardTitle?: string | null;
+  rewardDescription?: string | null;
+  rewardDisplayValueUsd?: number | null;
   qualifyingLeaderIds: { leftLeaders: string[]; rightLeaders: string[] } | null;
   status: 'COMPLETED';
   completedAt: string;
@@ -225,6 +234,17 @@ export async function ensurePromotionTables(dbClient?: DatabaseClient): Promise<
     CREATE INDEX IF NOT EXISTS idx_upe_rank_key ON user_promotion_events(rank_key);
     CREATE INDEX IF NOT EXISTS idx_ups_user_id ON user_promotion_states(user_id);
     CREATE INDEX IF NOT EXISTS idx_pal_user_id ON promotion_audit_logs(user_id);
+
+    -- Schema upgrades for Non-Cash & Custom Leadership Rewards
+    ALTER TABLE promotion_rules ADD COLUMN IF NOT EXISTS reward_type VARCHAR(20) NOT NULL DEFAULT 'USDT';
+    ALTER TABLE promotion_rules ADD COLUMN IF NOT EXISTS reward_title VARCHAR(200) NULL;
+    ALTER TABLE promotion_rules ADD COLUMN IF NOT EXISTS reward_description TEXT NULL;
+    ALTER TABLE promotion_rules ADD COLUMN IF NOT EXISTS reward_display_value_usd NUMERIC(12, 2) NULL;
+
+    ALTER TABLE user_promotion_events ADD COLUMN IF NOT EXISTS reward_type VARCHAR(20) NOT NULL DEFAULT 'USDT';
+    ALTER TABLE user_promotion_events ADD COLUMN IF NOT EXISTS reward_title VARCHAR(200) NULL;
+    ALTER TABLE user_promotion_events ADD COLUMN IF NOT EXISTS reward_description TEXT NULL;
+    ALTER TABLE user_promotion_events ADD COLUMN IF NOT EXISTS reward_display_value_usd NUMERIC(12, 2) NULL;
   `);
 
   // Seed default 7-stage promotion ladder if empty
@@ -258,7 +278,8 @@ export async function getPromotionRules(dbClient?: DatabaseClient): Promise<Prom
     SELECT 
       pr.id, pr.rank_key, pr.rank_name, pr.rank_order, pr.qualification_type,
       pr.required_left, pr.required_right, pr.required_leader_rank, pr.leg_balance_rule,
-      pr.reward_usd, pr.flush_rule, pr.status, pr.version, pr.effective_date,
+      pr.reward_type, pr.reward_usd, pr.reward_title, pr.reward_description, pr.reward_display_value_usd,
+      pr.flush_rule, pr.status, pr.version, pr.effective_date,
       pr.created_at, pr.updated_at,
       COUNT(upe.id)::int AS achievers_count
     FROM promotion_rules pr
@@ -277,7 +298,11 @@ export async function getPromotionRules(dbClient?: DatabaseClient): Promise<Prom
     requiredRight: Number(r.required_right),
     requiredLeaderRank: r.required_leader_rank,
     legBalanceRule: r.leg_balance_rule || 'FLEXIBLE',
-    rewardUsd: Number(r.reward_usd),
+    rewardType: (r.reward_type || 'USDT') as PromotionRewardType,
+    rewardUsd: Number(r.reward_usd || 0),
+    rewardTitle: r.reward_title || null,
+    rewardDescription: r.reward_description || null,
+    rewardDisplayValueUsd: r.reward_display_value_usd !== null && r.reward_display_value_usd !== undefined ? Number(r.reward_display_value_usd) : null,
     flushRule: r.flush_rule,
     status: r.status,
     version: Number(r.version),
@@ -297,7 +322,11 @@ export async function updatePromotionRule(
     requiredRight?: number;
     requiredLeaderRank?: PromotionRankKey | null;
     legBalanceRule?: LegBalanceRule;
+    rewardType?: PromotionRewardType;
     rewardUsd?: number;
+    rewardTitle?: string | null;
+    rewardDescription?: string | null;
+    rewardDisplayValueUsd?: number | null;
     status?: 'ACTIVE' | 'INACTIVE';
     expectedVersion?: number;
     reason: string;
@@ -337,14 +366,36 @@ export async function updatePromotionRule(
   const newRequiredRight = updates.requiredRight !== undefined ? updates.requiredRight : current.required_right;
   const newRequiredLeaderRank = updates.requiredLeaderRank !== undefined ? updates.requiredLeaderRank : current.required_leader_rank;
   const newLegBalanceRule = updates.legBalanceRule !== undefined ? updates.legBalanceRule : current.leg_balance_rule;
-  const newRewardUsd = updates.rewardUsd !== undefined ? updates.rewardUsd : current.reward_usd;
   const newStatus = updates.status !== undefined ? updates.status : current.status;
 
-  if (newRewardUsd !== undefined && Number(newRewardUsd) < 0) {
-    const err: any = new Error('Reward USD amount cannot be negative.');
-    err.code = 'INVALID_REWARD';
-    err.statusCode = 400;
-    throw err;
+  const newRewardType: PromotionRewardType = updates.rewardType || (current.reward_type as PromotionRewardType) || 'USDT';
+  let newRewardUsd = updates.rewardUsd !== undefined ? Number(updates.rewardUsd) : Number(current.reward_usd || 0);
+  let newRewardTitle = updates.rewardTitle !== undefined 
+    ? (updates.rewardTitle ? updates.rewardTitle.trim() : null) 
+    : (current.reward_title || null);
+  let newRewardDescription = updates.rewardDescription !== undefined 
+    ? (updates.rewardDescription ? updates.rewardDescription.trim() : null) 
+    : (current.reward_description || null);
+  let newRewardDisplayValueUsd = updates.rewardDisplayValueUsd !== undefined 
+    ? (updates.rewardDisplayValueUsd !== null && updates.rewardDisplayValueUsd !== undefined ? Number(updates.rewardDisplayValueUsd) : null) 
+    : (current.reward_display_value_usd !== null && current.reward_display_value_usd !== undefined ? Number(current.reward_display_value_usd) : null);
+
+  if (newRewardType === 'USDT') {
+    if (current.rank_order > 0 && (isNaN(newRewardUsd) || newRewardUsd <= 0)) {
+      const err: any = new Error('Reward USD amount must be a positive number for USDT reward type.');
+      err.code = 'INVALID_REWARD';
+      err.statusCode = 400;
+      throw err;
+    }
+  } else if (newRewardType === 'NON_CASH') {
+    if (!newRewardTitle || newRewardTitle.length < 3) {
+      const err: any = new Error('Reward title is required (minimum 3 characters) for Non-Cash reward type.');
+      err.code = 'INVALID_REWARD_TITLE';
+      err.statusCode = 400;
+      throw err;
+    }
+    // Non-cash rewards must never result in wallet credit
+    newRewardUsd = 0;
   }
 
   await db.query(
@@ -355,19 +406,27 @@ export async function updatePromotionRule(
       required_right = $2,
       required_leader_rank = $3,
       leg_balance_rule = $4,
-      reward_usd = $5,
-      status = $6,
-      version = $7,
+      reward_type = $5,
+      reward_usd = $6,
+      reward_title = $7,
+      reward_description = $8,
+      reward_display_value_usd = $9,
+      status = $10,
+      version = $11,
       effective_date = CURRENT_TIMESTAMP,
       updated_at = CURRENT_TIMESTAMP
-    WHERE id = $8
+    WHERE id = $12
     `,
     [
       newRequiredLeft,
       newRequiredRight,
       newRequiredLeaderRank,
       newLegBalanceRule,
+      newRewardType,
       newRewardUsd,
+      newRewardTitle,
+      newRewardDescription,
+      newRewardDisplayValueUsd,
       newStatus,
       newVersion,
       ruleId,
@@ -395,14 +454,22 @@ export async function updatePromotionRule(
           requiredLeft: current.required_left,
           requiredRight: current.required_right,
           requiredLeaderRank: current.required_leader_rank,
+          rewardType: current.reward_type || 'USDT',
           rewardUsd: current.reward_usd,
+          rewardTitle: current.reward_title || null,
+          rewardDescription: current.reward_description || null,
+          rewardDisplayValueUsd: current.reward_display_value_usd || null,
           status: current.status,
         },
         newSettings: {
           requiredLeft: newRequiredLeft,
           requiredRight: newRequiredRight,
           requiredLeaderRank: newRequiredLeaderRank,
+          rewardType: newRewardType,
           rewardUsd: newRewardUsd,
+          rewardTitle: newRewardTitle,
+          rewardDescription: newRewardDescription,
+          rewardDisplayValueUsd: newRewardDisplayValueUsd,
           status: newStatus,
         },
       }),
@@ -564,7 +631,11 @@ export async function getUserPromotionState(
     consumedLeft: Number(r.consumed_left),
     consumedRight: Number(r.consumed_right),
     ruleVersion: Number(r.rule_version),
-    rewardUsd: Number(r.reward_usd),
+    rewardType: (r.reward_type || 'USDT') as PromotionRewardType,
+    rewardUsd: Number(r.reward_usd || 0),
+    rewardTitle: r.reward_title || null,
+    rewardDescription: r.reward_description || null,
+    rewardDisplayValueUsd: r.reward_display_value_usd !== null && r.reward_display_value_usd !== undefined ? Number(r.reward_display_value_usd) : null,
     qualifyingLeaderIds: r.qualifying_leader_ids_json ? JSON.parse(r.qualifying_leader_ids_json) : null,
     status: 'COMPLETED',
     completedAt: r.completed_at instanceof Date ? r.completed_at.toISOString() : String(r.completed_at),
@@ -922,7 +993,11 @@ async function evaluateUserRankPromotionInternal(
     // 6. IS QUALIFIED: Grant exactly THIS single rank
     const eventId = uuidv4();
     const publicPromotionId = generatePublicPromotionId();
-    const rewardUsd = Number(targetRule.reward_usd || 0);
+    const rewardType: PromotionRewardType = (targetRule.reward_type || 'USDT') as PromotionRewardType;
+    const rewardUsd = rewardType === 'NON_CASH' ? 0 : Number(targetRule.reward_usd || 0);
+    const rewardTitle = targetRule.reward_title || null;
+    const rewardDescription = targetRule.reward_description || null;
+    const rewardDisplayValueUsd = targetRule.reward_display_value_usd !== null && targetRule.reward_display_value_usd !== undefined ? Number(targetRule.reward_display_value_usd) : null;
     const ruleVersion = Number(targetRule.version || 1);
 
     // Insert completed promotion event (Idempotent via UNIQUE(user_id, rank_key))
@@ -932,14 +1007,16 @@ async function evaluateUserRankPromotionInternal(
         id, public_promotion_id, user_id, rank_key, rank_name, rank_order,
         previous_rank, qualification_type, required_left, required_right,
         actual_left, actual_right, consumed_left, consumed_right,
-        rule_version, reward_usd, qualifying_leader_ids_json, source_matching_references,
+        rule_version, reward_type, reward_usd, reward_title, reward_description, reward_display_value_usd,
+        qualifying_leader_ids_json, source_matching_references,
         status, completed_at, created_at
       )
       VALUES (
         $1, $2, $3, $4, $5, $6,
         $7, $8, $9, $10,
         $11, $12, $13, $14,
-        $15, $16, $17, $18,
+        $15, $16, $17, $18, $19, $20,
+        $21, $22,
         'COMPLETED', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
       )
       ON CONFLICT (user_id, rank_key) DO NOTHING
@@ -961,7 +1038,11 @@ async function evaluateUserRankPromotionInternal(
         consumedLeft,
         consumedRight,
         ruleVersion,
+        rewardType,
         rewardUsd,
+        rewardTitle,
+        rewardDescription,
+        rewardDisplayValueUsd,
         qualifyingLeadersData ? JSON.stringify(qualifyingLeadersData) : null,
         JSON.stringify({
           evaluatedAt: new Date().toISOString(),
@@ -1070,55 +1151,62 @@ async function evaluateUserRankPromotionInternal(
     );
 
     // Optional milestone reward credit & Task #12/13 integration
-    if (rewardUsd > 0) {
-      let milestoneKey: '20/20' | '50/50' | '100/100' | null = null;
+    if (rewardType === 'USDT' && rewardUsd > 0) {
+      let milestoneKey: string = `RANK_${targetOrder}`;
       if (targetRule.rank_key === 'NODE_BUILDER') milestoneKey = '20/20';
       else if (targetRule.rank_key === 'NODE_MASTER') milestoneKey = '50/50';
       else if (targetRule.rank_key === 'NODE_CAPTAIN') milestoneKey = '100/100';
 
-      if (milestoneKey) {
-        try {
-          const bonusId = uuidv4();
-          const publicBonusId = generatePromotionBonusPublicId();
-          await db.query(
-            `
-            INSERT INTO promotion_bonuses (
-              id, public_bonus_id, user_id, milestone,
-              left_units, right_units, amount_usd, status,
-              qualified_at, created_at
-            )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, 'EARNED', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-            ON CONFLICT (user_id, milestone) DO NOTHING
-            `,
-            [bonusId, publicBonusId, userId, milestoneKey, consumedLeft, consumedRight, rewardUsd]
-          );
+      try {
+        const bonusId = uuidv4();
+        const publicBonusId = generatePromotionBonusPublicId();
+        await db.query(
+          `
+          INSERT INTO promotion_bonuses (
+            id, public_bonus_id, user_id, milestone,
+            left_units, right_units, amount_usd, status,
+            qualified_at, created_at
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, $7, 'EARNED', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+          ON CONFLICT (user_id, milestone) DO NOTHING
+          `,
+          [bonusId, publicBonusId, userId, milestoneKey, consumedLeft, consumedRight, rewardUsd]
+        );
 
-          await postLedgerCredit({
-            userId,
-            sourceType: 'PROMOTION_BONUS',
-            sourceId: bonusId,
-            sourceRef: publicBonusId,
-            amount: rewardUsd,
-            description: `Promotion Milestone Bonus - ${milestoneKey} (${targetRule.rank_name})`,
-            createdAt: new Date(),
-            dbClient: db,
-          }).catch((err) => {
-            console.warn('[LeadershipRankService] Ledger credit posting notice:', err);
-          });
-        } catch (bonusErr) {
-          console.warn('[LeadershipRankService] Error recording milestone bonus:', bonusErr);
-        }
+        await postLedgerCredit({
+          userId,
+          sourceType: 'PROMOTION_BONUS',
+          sourceId: bonusId,
+          sourceRef: publicBonusId,
+          amount: rewardUsd,
+          description: `Promotion Milestone Bonus - ${milestoneKey} (${targetRule.rank_name})`,
+          createdAt: new Date(),
+          dbClient: db,
+        }).catch((err) => {
+          console.warn('[LeadershipRankService] Ledger credit posting notice:', err);
+        });
+      } catch (bonusErr) {
+        console.warn('[LeadershipRankService] Error recording milestone bonus:', bonusErr);
       }
     }
 
     // Trigger Notification
     try {
-      await notifyPromotionEarned({
-        userId,
-        bonusUsd: rewardUsd,
-        milestoneTitle: `${targetRule.rank_name} Rank Achieved`,
-        bonusId: eventId,
-      });
+      if (rewardType === 'NON_CASH') {
+        await notifyPromotionEarned({
+          userId,
+          bonusUsd: 0,
+          milestoneTitle: `${targetRule.rank_name} Rank Achieved: ${rewardTitle || 'Non-Cash Entitlement'}`,
+          bonusId: eventId,
+        });
+      } else {
+        await notifyPromotionEarned({
+          userId,
+          bonusUsd: rewardUsd,
+          milestoneTitle: `${targetRule.rank_name} Rank Achieved`,
+          bonusId: eventId,
+        });
+      }
     } catch (notifErr) {
       // non-blocking
     }
@@ -1143,7 +1231,11 @@ async function evaluateUserRankPromotionInternal(
       consumedLeft: Number(createdEventRow.consumed_left),
       consumedRight: Number(createdEventRow.consumed_right),
       ruleVersion: Number(createdEventRow.rule_version),
-      rewardUsd: Number(createdEventRow.reward_usd),
+      rewardType: (createdEventRow.reward_type || 'USDT') as PromotionRewardType,
+      rewardUsd: Number(createdEventRow.reward_usd || 0),
+      rewardTitle: createdEventRow.reward_title || null,
+      rewardDescription: createdEventRow.reward_description || null,
+      rewardDisplayValueUsd: createdEventRow.reward_display_value_usd !== null && createdEventRow.reward_display_value_usd !== undefined ? Number(createdEventRow.reward_display_value_usd) : null,
       qualifyingLeaderIds: createdEventRow.qualifying_leader_ids_json
         ? JSON.parse(createdEventRow.qualifying_leader_ids_json)
         : null,

@@ -567,8 +567,17 @@ async function getWalletSummary(userId) {
 async function getWalletTransactions(userId, page = 1, limit = 20, typeFilter, searchQuery, entryTypeFilter) {
   await syncUserLedger(userId);
   const db = await getDb();
-  const safePage = Math.max(1, page);
-  const safeLimit = Math.min(100, Math.max(1, limit));
+  let actualPage = 1;
+  let actualLimit = 20;
+  if (typeof page === "object" && page !== null) {
+    actualPage = Number(page.page) || 1;
+    actualLimit = Number(page.limit) || 20;
+  } else {
+    actualPage = Number(page) || 1;
+    actualLimit = Number(limit) || 20;
+  }
+  const safePage = Math.max(1, actualPage);
+  const safeLimit = Math.min(100, Math.max(1, actualLimit));
   const offset = (safePage - 1) * safeLimit;
   let types = null;
   if (typeFilter && typeFilter !== "all" && typeFilter !== "ALL") {
@@ -638,20 +647,26 @@ async function getWalletTransactions(userId, page = 1, limit = 20, typeFilter, s
   );
   const txRows = txRes.rows;
   const totalPages = Math.ceil(totalCount / safeLimit) || 1;
-  const transactions = txRows.map((row) => ({
-    id: row.id,
-    publicTxnId: row.public_txn_id,
-    userId: row.user_id,
-    entryType: row.entry_type,
-    sourceType: row.source_type,
-    sourceId: row.source_id,
-    sourceRef: row.source_ref,
-    description: row.description,
-    amount: Number(row.amount),
-    currency: row.currency,
-    status: row.status,
-    createdAt: new Date(row.created_at).toISOString()
-  }));
+  const transactions = txRows.map((row) => {
+    let cleanDescription = row.description;
+    if (row.source_type === "ADMIN_ADJUSTMENT" || cleanDescription && /admin adjustment/i.test(cleanDescription)) {
+      cleanDescription = row.entry_type === "DEBIT" ? "Account Debit" : "Account Credit";
+    }
+    return {
+      id: row.id,
+      publicTxnId: row.public_txn_id,
+      userId: row.user_id,
+      entryType: row.entry_type,
+      sourceType: row.source_type,
+      sourceId: row.source_id,
+      sourceRef: row.source_ref,
+      description: cleanDescription,
+      amount: Number(row.amount),
+      currency: row.currency,
+      status: row.status,
+      createdAt: new Date(row.created_at).toISOString()
+    };
+  });
   return {
     transactions,
     pagination: {
@@ -1304,6 +1319,17 @@ async function ensurePromotionTables(dbClient) {
     CREATE INDEX IF NOT EXISTS idx_upe_rank_key ON user_promotion_events(rank_key);
     CREATE INDEX IF NOT EXISTS idx_ups_user_id ON user_promotion_states(user_id);
     CREATE INDEX IF NOT EXISTS idx_pal_user_id ON promotion_audit_logs(user_id);
+
+    -- Schema upgrades for Non-Cash & Custom Leadership Rewards
+    ALTER TABLE promotion_rules ADD COLUMN IF NOT EXISTS reward_type VARCHAR(20) NOT NULL DEFAULT 'USDT';
+    ALTER TABLE promotion_rules ADD COLUMN IF NOT EXISTS reward_title VARCHAR(200) NULL;
+    ALTER TABLE promotion_rules ADD COLUMN IF NOT EXISTS reward_description TEXT NULL;
+    ALTER TABLE promotion_rules ADD COLUMN IF NOT EXISTS reward_display_value_usd NUMERIC(12, 2) NULL;
+
+    ALTER TABLE user_promotion_events ADD COLUMN IF NOT EXISTS reward_type VARCHAR(20) NOT NULL DEFAULT 'USDT';
+    ALTER TABLE user_promotion_events ADD COLUMN IF NOT EXISTS reward_title VARCHAR(200) NULL;
+    ALTER TABLE user_promotion_events ADD COLUMN IF NOT EXISTS reward_description TEXT NULL;
+    ALTER TABLE user_promotion_events ADD COLUMN IF NOT EXISTS reward_display_value_usd NUMERIC(12, 2) NULL;
   `);
   await db.query(`
     INSERT INTO promotion_rules (
@@ -1329,7 +1355,8 @@ async function getPromotionRules(dbClient) {
     SELECT 
       pr.id, pr.rank_key, pr.rank_name, pr.rank_order, pr.qualification_type,
       pr.required_left, pr.required_right, pr.required_leader_rank, pr.leg_balance_rule,
-      pr.reward_usd, pr.flush_rule, pr.status, pr.version, pr.effective_date,
+      pr.reward_type, pr.reward_usd, pr.reward_title, pr.reward_description, pr.reward_display_value_usd,
+      pr.flush_rule, pr.status, pr.version, pr.effective_date,
       pr.created_at, pr.updated_at,
       COUNT(upe.id)::int AS achievers_count
     FROM promotion_rules pr
@@ -1347,7 +1374,11 @@ async function getPromotionRules(dbClient) {
     requiredRight: Number(r.required_right),
     requiredLeaderRank: r.required_leader_rank,
     legBalanceRule: r.leg_balance_rule || "FLEXIBLE",
-    rewardUsd: Number(r.reward_usd),
+    rewardType: r.reward_type || "USDT",
+    rewardUsd: Number(r.reward_usd || 0),
+    rewardTitle: r.reward_title || null,
+    rewardDescription: r.reward_description || null,
+    rewardDisplayValueUsd: r.reward_display_value_usd !== null && r.reward_display_value_usd !== void 0 ? Number(r.reward_display_value_usd) : null,
     flushRule: r.flush_rule,
     status: r.status,
     version: Number(r.version),
@@ -1385,13 +1416,27 @@ async function updatePromotionRule(adminId, adminPublicId, ruleId, updates, dbCl
   const newRequiredRight = updates.requiredRight !== void 0 ? updates.requiredRight : current.required_right;
   const newRequiredLeaderRank = updates.requiredLeaderRank !== void 0 ? updates.requiredLeaderRank : current.required_leader_rank;
   const newLegBalanceRule = updates.legBalanceRule !== void 0 ? updates.legBalanceRule : current.leg_balance_rule;
-  const newRewardUsd = updates.rewardUsd !== void 0 ? updates.rewardUsd : current.reward_usd;
   const newStatus = updates.status !== void 0 ? updates.status : current.status;
-  if (newRewardUsd !== void 0 && Number(newRewardUsd) < 0) {
-    const err = new Error("Reward USD amount cannot be negative.");
-    err.code = "INVALID_REWARD";
-    err.statusCode = 400;
-    throw err;
+  const newRewardType = updates.rewardType || current.reward_type || "USDT";
+  let newRewardUsd = updates.rewardUsd !== void 0 ? Number(updates.rewardUsd) : Number(current.reward_usd || 0);
+  let newRewardTitle = updates.rewardTitle !== void 0 ? updates.rewardTitle ? updates.rewardTitle.trim() : null : current.reward_title || null;
+  let newRewardDescription = updates.rewardDescription !== void 0 ? updates.rewardDescription ? updates.rewardDescription.trim() : null : current.reward_description || null;
+  let newRewardDisplayValueUsd = updates.rewardDisplayValueUsd !== void 0 ? updates.rewardDisplayValueUsd !== null && updates.rewardDisplayValueUsd !== void 0 ? Number(updates.rewardDisplayValueUsd) : null : current.reward_display_value_usd !== null && current.reward_display_value_usd !== void 0 ? Number(current.reward_display_value_usd) : null;
+  if (newRewardType === "USDT") {
+    if (current.rank_order > 0 && (isNaN(newRewardUsd) || newRewardUsd <= 0)) {
+      const err = new Error("Reward USD amount must be a positive number for USDT reward type.");
+      err.code = "INVALID_REWARD";
+      err.statusCode = 400;
+      throw err;
+    }
+  } else if (newRewardType === "NON_CASH") {
+    if (!newRewardTitle || newRewardTitle.length < 3) {
+      const err = new Error("Reward title is required (minimum 3 characters) for Non-Cash reward type.");
+      err.code = "INVALID_REWARD_TITLE";
+      err.statusCode = 400;
+      throw err;
+    }
+    newRewardUsd = 0;
   }
   await db.query(
     `
@@ -1401,19 +1446,27 @@ async function updatePromotionRule(adminId, adminPublicId, ruleId, updates, dbCl
       required_right = $2,
       required_leader_rank = $3,
       leg_balance_rule = $4,
-      reward_usd = $5,
-      status = $6,
-      version = $7,
+      reward_type = $5,
+      reward_usd = $6,
+      reward_title = $7,
+      reward_description = $8,
+      reward_display_value_usd = $9,
+      status = $10,
+      version = $11,
       effective_date = CURRENT_TIMESTAMP,
       updated_at = CURRENT_TIMESTAMP
-    WHERE id = $8
+    WHERE id = $12
     `,
     [
       newRequiredLeft,
       newRequiredRight,
       newRequiredLeaderRank,
       newLegBalanceRule,
+      newRewardType,
       newRewardUsd,
+      newRewardTitle,
+      newRewardDescription,
+      newRewardDisplayValueUsd,
       newStatus,
       newVersion,
       ruleId
@@ -1439,14 +1492,22 @@ async function updatePromotionRule(adminId, adminPublicId, ruleId, updates, dbCl
           requiredLeft: current.required_left,
           requiredRight: current.required_right,
           requiredLeaderRank: current.required_leader_rank,
+          rewardType: current.reward_type || "USDT",
           rewardUsd: current.reward_usd,
+          rewardTitle: current.reward_title || null,
+          rewardDescription: current.reward_description || null,
+          rewardDisplayValueUsd: current.reward_display_value_usd || null,
           status: current.status
         },
         newSettings: {
           requiredLeft: newRequiredLeft,
           requiredRight: newRequiredRight,
           requiredLeaderRank: newRequiredLeaderRank,
+          rewardType: newRewardType,
           rewardUsd: newRewardUsd,
+          rewardTitle: newRewardTitle,
+          rewardDescription: newRewardDescription,
+          rewardDisplayValueUsd: newRewardDisplayValueUsd,
           status: newStatus
         }
       }),
@@ -1570,7 +1631,11 @@ async function getUserPromotionState(userId, dbClient) {
     consumedLeft: Number(r.consumed_left),
     consumedRight: Number(r.consumed_right),
     ruleVersion: Number(r.rule_version),
-    rewardUsd: Number(r.reward_usd),
+    rewardType: r.reward_type || "USDT",
+    rewardUsd: Number(r.reward_usd || 0),
+    rewardTitle: r.reward_title || null,
+    rewardDescription: r.reward_description || null,
+    rewardDisplayValueUsd: r.reward_display_value_usd !== null && r.reward_display_value_usd !== void 0 ? Number(r.reward_display_value_usd) : null,
     qualifyingLeaderIds: r.qualifying_leader_ids_json ? JSON.parse(r.qualifying_leader_ids_json) : null,
     status: "COMPLETED",
     completedAt: r.completed_at instanceof Date ? r.completed_at.toISOString() : String(r.completed_at),
@@ -1855,7 +1920,11 @@ async function evaluateUserRankPromotionInternal(userId, dbClient) {
     }
     const eventId = uuidv44();
     const publicPromotionId = generatePublicPromotionId();
-    const rewardUsd = Number(targetRule.reward_usd || 0);
+    const rewardType = targetRule.reward_type || "USDT";
+    const rewardUsd = rewardType === "NON_CASH" ? 0 : Number(targetRule.reward_usd || 0);
+    const rewardTitle = targetRule.reward_title || null;
+    const rewardDescription = targetRule.reward_description || null;
+    const rewardDisplayValueUsd = targetRule.reward_display_value_usd !== null && targetRule.reward_display_value_usd !== void 0 ? Number(targetRule.reward_display_value_usd) : null;
     const ruleVersion = Number(targetRule.version || 1);
     const insertEventRes = await db.query(
       `
@@ -1863,14 +1932,16 @@ async function evaluateUserRankPromotionInternal(userId, dbClient) {
         id, public_promotion_id, user_id, rank_key, rank_name, rank_order,
         previous_rank, qualification_type, required_left, required_right,
         actual_left, actual_right, consumed_left, consumed_right,
-        rule_version, reward_usd, qualifying_leader_ids_json, source_matching_references,
+        rule_version, reward_type, reward_usd, reward_title, reward_description, reward_display_value_usd,
+        qualifying_leader_ids_json, source_matching_references,
         status, completed_at, created_at
       )
       VALUES (
         $1, $2, $3, $4, $5, $6,
         $7, $8, $9, $10,
         $11, $12, $13, $14,
-        $15, $16, $17, $18,
+        $15, $16, $17, $18, $19, $20,
+        $21, $22,
         'COMPLETED', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
       )
       ON CONFLICT (user_id, rank_key) DO NOTHING
@@ -1892,7 +1963,11 @@ async function evaluateUserRankPromotionInternal(userId, dbClient) {
         consumedLeft,
         consumedRight,
         ruleVersion,
+        rewardType,
         rewardUsd,
+        rewardTitle,
+        rewardDescription,
+        rewardDisplayValueUsd,
         qualifyingLeadersData ? JSON.stringify(qualifyingLeadersData) : null,
         JSON.stringify({
           evaluatedAt: (/* @__PURE__ */ new Date()).toISOString(),
@@ -1988,51 +2063,58 @@ async function evaluateUserRankPromotionInternal(userId, dbClient) {
         })
       ]
     );
-    if (rewardUsd > 0) {
-      let milestoneKey = null;
+    if (rewardType === "USDT" && rewardUsd > 0) {
+      let milestoneKey = `RANK_${targetOrder}`;
       if (targetRule.rank_key === "NODE_BUILDER") milestoneKey = "20/20";
       else if (targetRule.rank_key === "NODE_MASTER") milestoneKey = "50/50";
       else if (targetRule.rank_key === "NODE_CAPTAIN") milestoneKey = "100/100";
-      if (milestoneKey) {
-        try {
-          const bonusId = uuidv44();
-          const publicBonusId = generatePromotionBonusPublicId();
-          await db.query(
-            `
-            INSERT INTO promotion_bonuses (
-              id, public_bonus_id, user_id, milestone,
-              left_units, right_units, amount_usd, status,
-              qualified_at, created_at
-            )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, 'EARNED', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-            ON CONFLICT (user_id, milestone) DO NOTHING
-            `,
-            [bonusId, publicBonusId, userId, milestoneKey, consumedLeft, consumedRight, rewardUsd]
-          );
-          await postLedgerCredit({
-            userId,
-            sourceType: "PROMOTION_BONUS",
-            sourceId: bonusId,
-            sourceRef: publicBonusId,
-            amount: rewardUsd,
-            description: `Promotion Milestone Bonus - ${milestoneKey} (${targetRule.rank_name})`,
-            createdAt: /* @__PURE__ */ new Date(),
-            dbClient: db
-          }).catch((err) => {
-            console.warn("[LeadershipRankService] Ledger credit posting notice:", err);
-          });
-        } catch (bonusErr) {
-          console.warn("[LeadershipRankService] Error recording milestone bonus:", bonusErr);
-        }
+      try {
+        const bonusId = uuidv44();
+        const publicBonusId = generatePromotionBonusPublicId();
+        await db.query(
+          `
+          INSERT INTO promotion_bonuses (
+            id, public_bonus_id, user_id, milestone,
+            left_units, right_units, amount_usd, status,
+            qualified_at, created_at
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, $7, 'EARNED', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+          ON CONFLICT (user_id, milestone) DO NOTHING
+          `,
+          [bonusId, publicBonusId, userId, milestoneKey, consumedLeft, consumedRight, rewardUsd]
+        );
+        await postLedgerCredit({
+          userId,
+          sourceType: "PROMOTION_BONUS",
+          sourceId: bonusId,
+          sourceRef: publicBonusId,
+          amount: rewardUsd,
+          description: `Promotion Milestone Bonus - ${milestoneKey} (${targetRule.rank_name})`,
+          createdAt: /* @__PURE__ */ new Date(),
+          dbClient: db
+        }).catch((err) => {
+          console.warn("[LeadershipRankService] Ledger credit posting notice:", err);
+        });
+      } catch (bonusErr) {
+        console.warn("[LeadershipRankService] Error recording milestone bonus:", bonusErr);
       }
     }
     try {
-      await notifyPromotionEarned({
-        userId,
-        bonusUsd: rewardUsd,
-        milestoneTitle: `${targetRule.rank_name} Rank Achieved`,
-        bonusId: eventId
-      });
+      if (rewardType === "NON_CASH") {
+        await notifyPromotionEarned({
+          userId,
+          bonusUsd: 0,
+          milestoneTitle: `${targetRule.rank_name} Rank Achieved: ${rewardTitle || "Non-Cash Entitlement"}`,
+          bonusId: eventId
+        });
+      } else {
+        await notifyPromotionEarned({
+          userId,
+          bonusUsd: rewardUsd,
+          milestoneTitle: `${targetRule.rank_name} Rank Achieved`,
+          bonusId: eventId
+        });
+      }
     } catch (notifErr) {
     }
     await db.query("COMMIT");
@@ -2053,7 +2135,11 @@ async function evaluateUserRankPromotionInternal(userId, dbClient) {
       consumedLeft: Number(createdEventRow.consumed_left),
       consumedRight: Number(createdEventRow.consumed_right),
       ruleVersion: Number(createdEventRow.rule_version),
-      rewardUsd: Number(createdEventRow.reward_usd),
+      rewardType: createdEventRow.reward_type || "USDT",
+      rewardUsd: Number(createdEventRow.reward_usd || 0),
+      rewardTitle: createdEventRow.reward_title || null,
+      rewardDescription: createdEventRow.reward_description || null,
+      rewardDisplayValueUsd: createdEventRow.reward_display_value_usd !== null && createdEventRow.reward_display_value_usd !== void 0 ? Number(createdEventRow.reward_display_value_usd) : null,
       qualifyingLeaderIds: createdEventRow.qualifying_leader_ids_json ? JSON.parse(createdEventRow.qualifying_leader_ids_json) : null,
       status: "COMPLETED",
       completedAt: new Date(createdEventRow.completed_at).toISOString(),
@@ -6024,8 +6110,8 @@ async function executeAdminWalletAdjustment(params) {
     createNotification({
       userId: targetUser.id,
       type: "SECURITY_ALERT",
-      title: `Wallet Adjustment (${cleanDirection})`,
-      message: `An administrative ${cleanDirection.toLowerCase()} of ${numAmount} ${cleanAsset} was applied to your wallet balance. Reason: ${cleanReason}`,
+      title: cleanDirection === "CREDIT" ? "Account Credit" : "Account Debit",
+      message: `An ${cleanDirection === "CREDIT" ? "account credit" : "account debit"} of ${numAmount} ${cleanAsset} was applied to your balance.`,
       sourceType: "ADMIN_ADJUSTMENT",
       sourceId: publicTxnId
     }).catch(console.error);
@@ -7288,22 +7374,25 @@ async function createWithdrawalRequest(params) {
         return mapRowToWithdrawalRecord(recentDuplicate.rows[0]);
       }
       await syncUserLedger(userId, trx);
-      const creditsRes = await trx.query(
-        `SELECT COALESCE(SUM(amount), 0) AS total FROM financial_ledger_entries WHERE user_id = $1 AND entry_type = 'CREDIT' AND status = 'SETTLED'`,
+      const balRes = await trx.query(
+        `
+        SELECT 
+          COALESCE(SUM(CASE 
+            WHEN entry_type = 'CREDIT' THEN amount 
+            WHEN entry_type = 'DEBIT' THEN -amount 
+            WHEN entry_type = 'REVERSAL' AND source_type = 'WITHDRAWAL' THEN amount 
+            WHEN entry_type = 'REVERSAL' THEN -amount 
+            ELSE 0 
+          END), 0) AS available_balance
+        FROM financial_ledger_entries
+        WHERE user_id = $1 
+          AND status = 'SETTLED' 
+          AND (currency = 'USDT' OR currency = 'USD') 
+          AND source_type != 'NODE_REWARD'
+        `,
         [userId]
       );
-      const debitsRes = await trx.query(
-        `SELECT COALESCE(SUM(amount), 0) AS total FROM financial_ledger_entries WHERE user_id = $1 AND entry_type = 'DEBIT' AND status = 'SETTLED'`,
-        [userId]
-      );
-      const reversalsRes = await trx.query(
-        `SELECT COALESCE(SUM(amount), 0) AS total FROM financial_ledger_entries WHERE user_id = $1 AND entry_type = 'REVERSAL' AND status = 'SETTLED'`,
-        [userId]
-      );
-      const totalCredits = Number(creditsRes.rows[0]?.total || 0);
-      const totalDebits = Number(debitsRes.rows[0]?.total || 0);
-      const totalReversals = Number(reversalsRes.rows[0]?.total || 0);
-      const availableBalance = Math.max(0, totalCredits - totalDebits + totalReversals);
+      const availableBalance = Math.max(0, Number(balRes.rows[0]?.available_balance || 0));
       console.log(`[WithdrawalService] User ${userId} available balance: ${availableBalance}, requested: ${cleanAmount}`);
       if (cleanAmount > availableBalance) {
         const err = new Error(
@@ -11701,28 +11790,53 @@ async function purchaseNodeWithDepositBalance(userId, preferredAsset = "USDT") {
     try {
       await trx.query(`SELECT id FROM users WHERE id = $1 FOR UPDATE`, [userId]);
       const nodePrice = await getNodeBasePrice(trx);
-      const depositRes = await trx.query(
-        `
-        SELECT COALESCE(SUM(amount), 0) AS total_credited
-        FROM blockchain_deposits
-        WHERE user_id = $1 AND status = 'CREDITED'
-        `,
-        [userId]
-      );
-      const totalCreditedDeposits = Number(depositRes.rows[0]?.total_credited || 0);
-      const debitsRes = await trx.query(
-        `
-        SELECT COALESCE(SUM(amount), 0) AS total_debits
-        FROM financial_ledger_entries
-        WHERE user_id = $1 AND entry_type = 'DEBIT' AND source_type = 'NODE_PURCHASE'
-        `,
-        [userId]
-      );
-      const totalNodeDebits = Number(debitsRes.rows[0]?.total_debits || 0);
-      const availableDepositBalance = Math.max(0, totalCreditedDeposits - totalNodeDebits);
+      const { syncUserLedger: syncUserLedger2 } = await Promise.resolve().then(() => (init_walletLedgerService(), walletLedgerService_exports));
+      await syncUserLedger2(userId, trx);
+      let availableDepositBalance = 0;
+      if (preferredAsset === "USDT") {
+        const balRes = await trx.query(
+          `
+          SELECT 
+            COALESCE(SUM(CASE 
+              WHEN entry_type = 'CREDIT' THEN amount 
+              WHEN entry_type = 'DEBIT' THEN -amount 
+              WHEN entry_type = 'REVERSAL' AND source_type = 'WITHDRAWAL' THEN amount 
+              WHEN entry_type = 'REVERSAL' THEN -amount 
+              ELSE 0 
+            END), 0) AS available_balance
+          FROM financial_ledger_entries
+          WHERE user_id = $1 
+            AND status = 'SETTLED' 
+            AND (currency = 'USDT' OR currency = 'USD') 
+            AND source_type != 'NODE_REWARD'
+          `,
+          [userId]
+        );
+        availableDepositBalance = Math.max(0, Number(balRes.rows[0]?.available_balance || 0));
+      } else {
+        const depositRes = await trx.query(
+          `
+          SELECT COALESCE(SUM(amount), 0) AS total_credited
+          FROM blockchain_deposits
+          WHERE user_id = $1 AND status = 'CREDITED' AND asset = 'BNB'
+          `,
+          [userId]
+        );
+        const totalCreditedDeposits = Number(depositRes.rows[0]?.total_credited || 0);
+        const debitsRes = await trx.query(
+          `
+          SELECT COALESCE(SUM(amount), 0) AS total_debits
+          FROM financial_ledger_entries
+          WHERE user_id = $1 AND entry_type = 'DEBIT' AND source_type = 'NODE_PURCHASE' AND currency = 'BNB'
+          `,
+          [userId]
+        );
+        const totalNodeDebits = Number(debitsRes.rows[0]?.total_debits || 0);
+        availableDepositBalance = Math.max(0, totalCreditedDeposits - totalNodeDebits);
+      }
       if (availableDepositBalance < nodePrice) {
         const error = new Error(
-          `Your current deposited balance is $${availableDepositBalance.toFixed(2)} USD. You need $${nodePrice.toFixed(2)} USD to activate a Genesis Node. Please deposit funds first.`
+          `Your current available balance is $${availableDepositBalance.toFixed(2)} ${preferredAsset}. You need $${nodePrice.toFixed(2)} ${preferredAsset} to activate a Genesis Node. Please deposit or add funds first.`
         );
         error.code = "INSUFFICIENT_DEPOSIT_BALANCE";
         error.statusCode = 400;
@@ -12505,6 +12619,36 @@ async function processNodePurchaseWithAssetBalance(userId, asset = "USDT") {
     }
     try {
       const result = await db.transaction(async (trx) => {
+        await trx.query(`SELECT id FROM users WHERE id = $1 FOR UPDATE`, [userId]);
+        if (selectedAsset === "USDT") {
+          const balRes = await trx.query(
+            `
+            SELECT 
+              COALESCE(SUM(CASE 
+                WHEN entry_type = 'CREDIT' THEN amount 
+                WHEN entry_type = 'DEBIT' THEN -amount 
+                WHEN entry_type = 'REVERSAL' AND source_type = 'WITHDRAWAL' THEN amount 
+                WHEN entry_type = 'REVERSAL' THEN -amount 
+                ELSE 0 
+              END), 0) AS available_balance
+            FROM financial_ledger_entries
+            WHERE user_id = $1 
+              AND status = 'SETTLED' 
+              AND (currency = 'USDT' OR currency = 'USD') 
+              AND source_type != 'NODE_REWARD'
+            `,
+            [userId]
+          );
+          const currentAvailable = Math.max(0, Number(balRes.rows[0]?.available_balance || 0));
+          if (currentAvailable < requiredAmount) {
+            const err = new Error(
+              `INSUFFICIENT_ASSET_BALANCE: Available balance of ${currentAvailable} ${selectedAsset} is insufficient for required ${requiredAmount} ${selectedAsset}.`
+            );
+            err.code = "INSUFFICIENT_ASSET_BALANCE";
+            err.statusCode = 400;
+            throw err;
+          }
+        }
         const orderId = reservation.order.id || reservation.order.publicOrderId;
         const existingDebitRes = await trx.query(
           `SELECT id FROM financial_ledger_entries WHERE source_id = $1 AND source_type = 'NODE_PURCHASE'`,
@@ -14384,7 +14528,20 @@ promotionRouter.put("/ranks/rules/:id", requireAuth, requireAdmin, async (req, r
   try {
     const admin = req.user;
     const { id } = req.params;
-    const { requiredLeft, requiredRight, requiredLeaderRank, legBalanceRule, rewardUsd, status, reason, expectedVersion } = req.body || {};
+    const {
+      requiredLeft,
+      requiredRight,
+      requiredLeaderRank,
+      legBalanceRule,
+      rewardType,
+      rewardUsd,
+      rewardTitle,
+      rewardDescription,
+      rewardDisplayValueUsd,
+      status,
+      reason,
+      expectedVersion
+    } = req.body || {};
     if (!reason || String(reason).trim().length < 5) {
       return res.status(400).json({ error: "INVALID_INPUT", message: "Reason is required (min 5 characters)." });
     }
@@ -14393,7 +14550,11 @@ promotionRouter.put("/ranks/rules/:id", requireAuth, requireAdmin, async (req, r
       requiredRight: typeof requiredRight === "number" ? requiredRight : void 0,
       requiredLeaderRank: requiredLeaderRank !== void 0 ? requiredLeaderRank : void 0,
       legBalanceRule: legBalanceRule !== void 0 ? legBalanceRule : void 0,
+      rewardType: rewardType !== void 0 ? rewardType : void 0,
       rewardUsd: typeof rewardUsd === "number" ? rewardUsd : void 0,
+      rewardTitle: rewardTitle !== void 0 ? rewardTitle : void 0,
+      rewardDescription: rewardDescription !== void 0 ? rewardDescription : void 0,
+      rewardDisplayValueUsd: rewardDisplayValueUsd !== void 0 ? rewardDisplayValueUsd === null ? null : Number(rewardDisplayValueUsd) : void 0,
       status: status !== void 0 ? status : void 0,
       expectedVersion: typeof expectedVersion === "number" ? expectedVersion : void 0,
       reason: String(reason).trim()

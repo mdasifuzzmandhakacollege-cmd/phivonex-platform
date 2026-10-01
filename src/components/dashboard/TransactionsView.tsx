@@ -30,6 +30,7 @@ import {
   Layers,
 } from 'lucide-react';
 import { UserProfile } from '../../context/AuthContext';
+import { getTransactionDisplayLabel, getTransactionUserDescription } from '../../utils/transactionDisplay';
 
 interface TransactionsViewProps {
   user: UserProfile;
@@ -81,7 +82,9 @@ const CATEGORY_OPTIONS = [
   { id: 'REFERRAL_COMMISSION', label: 'Direct Referral', icon: Users },
   { id: 'MATCHING_BONUS', label: 'Binary Matching', icon: GitFork },
   { id: 'PROMOTION_BONUS', label: 'Rank Promotion', icon: Award },
-  { id: 'BLOCKCHAIN_DEPOSIT', label: 'BSC Deposit', icon: ArrowDownLeft },
+  { id: 'BLOCKCHAIN_DEPOSIT', label: 'USDT Deposit', icon: ArrowDownLeft },
+  { id: 'ADMIN_ADJUSTMENT', label: 'Account Credit / Debit', icon: ShieldCheck },
+  { id: 'NODE_PURCHASE', label: 'Genesis Node Purchase', icon: Server },
   { id: 'WITHDRAWAL', label: 'Withdrawal', icon: ArrowUpRight },
   { id: 'COIN_SWAP', label: 'Coin Swap', icon: ArrowLeftRight },
 ];
@@ -220,8 +223,17 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({ user: _user,
     });
   };
 
-  const getSourceTypeDetails = (sourceType: string) => {
+  const getSourceTypeDetails = (sourceType: string, entryType?: string) => {
     switch (sourceType) {
+      case 'ADMIN_ADJUSTMENT':
+        return {
+          label: getTransactionDisplayLabel(sourceType, entryType),
+          icon: ShieldCheck,
+          color: 'text-[#00CFFF]',
+          bg: 'bg-[#00CFFF]/10',
+        };
+      case 'NODE_PURCHASE':
+        return { label: 'Genesis Node Purchase', icon: Server, color: 'text-amber-400', bg: 'bg-amber-400/10' };
       case 'NODE_REWARD':
         return { label: 'Genesis Mining', icon: Server, color: 'text-[#00CFFF]', bg: 'bg-[#00CFFF]/10' };
       case 'REFERRAL_COMMISSION':
@@ -231,13 +243,13 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({ user: _user,
       case 'PROMOTION_BONUS':
         return { label: 'Rank Promotion', icon: Award, color: 'text-[#FDB022]', bg: 'bg-[#FDB022]/10' };
       case 'BLOCKCHAIN_DEPOSIT':
-        return { label: 'BSC Deposit', icon: ArrowDownLeft, color: 'text-[#32D583]', bg: 'bg-[#32D583]/10' };
+        return { label: 'USDT Deposit', icon: ArrowDownLeft, color: 'text-[#32D583]', bg: 'bg-[#32D583]/10' };
       case 'WITHDRAWAL':
         return { label: 'Withdrawal', icon: ArrowUpRight, color: 'text-[#F04438]', bg: 'bg-[#F04438]/10' };
       case 'COIN_SWAP':
         return { label: 'Coin Swap', icon: ArrowLeftRight, color: 'text-[#2E90FA]', bg: 'bg-[#2E90FA]/10' };
       default:
-        return { label: sourceType.replace(/_/g, ' '), icon: FileText, color: 'text-[#98A2B3]', bg: 'bg-white/[0.04]' };
+        return { label: getTransactionDisplayLabel(sourceType, entryType), icon: FileText, color: 'text-[#98A2B3]', bg: 'bg-white/[0.04]' };
     }
   };
 
@@ -546,7 +558,7 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({ user: _user,
               </thead>
               <tbody className="divide-y divide-white/[0.04]">
                 {transactions.map((tx) => {
-                  const details = getSourceTypeDetails(tx.sourceType);
+                  const details = getSourceTypeDetails(tx.sourceType, tx.entryType);
                   const Icon = details.icon;
                   const isCredit = tx.entryType === 'CREDIT';
                   const isDebit = tx.entryType === 'DEBIT';
@@ -580,7 +592,7 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({ user: _user,
 
                       {/* Description & Reference */}
                       <td className="px-4 py-3.5 max-w-xs truncate">
-                        <div className="text-white text-xs truncate">{tx.description}</div>
+                        <div className="text-white text-xs truncate">{getTransactionUserDescription(tx)}</div>
                         {tx.sourceRef && (
                           <div className="text-[10px] text-[#98A2B3] truncate">Ref: {tx.sourceRef}</div>
                         )}
@@ -744,7 +756,7 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({ user: _user,
               {/* Source Category */}
               <div className="flex items-center justify-between p-3 rounded-xl bg-white/[0.02] border border-white/[0.04]">
                 <span className="text-[#98A2B3]">Source Channel:</span>
-                <span className="text-[#00CFFF] font-semibold">{selectedTx.sourceType.replace(/_/g, ' ')}</span>
+                <span className="text-[#00CFFF] font-semibold">{getTransactionDisplayLabel(selectedTx.sourceType, selectedTx.entryType)}</span>
               </div>
 
               {/* Source Reference */}
@@ -779,7 +791,7 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({ user: _user,
               {/* Description */}
               <div className="p-3 rounded-xl bg-white/[0.02] border border-white/[0.04] space-y-1">
                 <span className="text-[#98A2B3] block">Ledger Description:</span>
-                <p className="text-white text-xs">{selectedTx.description}</p>
+                <p className="text-white text-xs">{getTransactionUserDescription(selectedTx)}</p>
               </div>
             </div>
 
