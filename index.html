@@ -9,14 +9,22 @@
           var str = String(msg).toLowerCase();
           return str.indexOf('websocket') !== -1 || str.indexOf('failed to connect') !== -1 || str.indexOf('closed without opened') !== -1;
         }
+        function isChunkError(msg) {
+          if (!msg) return false;
+          var str = String(msg).toLowerCase();
+          return str.indexOf('loading chunk') !== -1 || str.indexOf('failed to fetch dynamically imported module') !== -1 || str.indexOf('importing a module script failed') !== -1;
+        }
         window.addEventListener('unhandledrejection', function(event) {
           var reason = event && event.reason;
           var msg = (reason && reason.message) || String(reason || '');
           if (isWsError(msg)) {
             event.preventDefault();
             event.stopPropagation();
-            if (typeof event.stopImmediatePropagation === 'function') {
-              event.stopImmediatePropagation();
+          } else if (isChunkError(msg)) {
+            console.warn('[PHIVONEX] Deployment chunk mismatch detected. Auto-refreshing...');
+            if (!sessionStorage.getItem('phx_chunk_reloaded')) {
+              sessionStorage.setItem('phx_chunk_reloaded', '1');
+              window.location.reload();
             }
           }
         }, true);
@@ -25,13 +33,88 @@
           if (isWsError(msg)) {
             event.preventDefault();
             event.stopPropagation();
-            if (typeof event.stopImmediatePropagation === 'function') {
-              event.stopImmediatePropagation();
+          } else if (isChunkError(msg)) {
+            console.warn('[PHIVONEX] Deployment chunk mismatch error. Auto-refreshing...');
+            if (!sessionStorage.getItem('phx_chunk_reloaded')) {
+              sessionStorage.setItem('phx_chunk_reloaded', '1');
+              window.location.reload();
             }
           }
         }, true);
       })();
     </script>
+    <style>
+      /* Critical Immediate Shell CSS — Guarantees dark paint on millisecond 0 */
+      html, body, #root {
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        height: 100%;
+        min-height: 100vh;
+        background-color: #05070B !important;
+        color: #F5F7FA !important;
+        font-family: 'Plus Jakarta Sans', 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        overflow-x: hidden;
+      }
+      .phx-bg-midnight {
+        background-color: #05070B !important;
+      }
+      .phx-initial-shell {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        min-height: 100vh;
+        width: 100%;
+        background: radial-gradient(circle at 50% 35%, rgba(0, 207, 255, 0.12) 0%, #05070B 75%);
+        color: #F5F7FA;
+        text-align: center;
+        box-sizing: border-box;
+        padding: 24px;
+        user-select: none;
+      }
+      .phx-initial-logo {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        font-family: 'JetBrains Mono', monospace, sans-serif;
+        font-weight: 800;
+        font-size: 22px;
+        letter-spacing: 3px;
+        color: #FFFFFF;
+        margin-bottom: 24px;
+      }
+      .phx-initial-mark {
+        width: 36px;
+        height: 36px;
+        border-radius: 10px;
+        background: linear-gradient(135deg, #00CFFF 0%, #00A3FF 100%);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        box-shadow: 0 0 20px rgba(0, 207, 255, 0.4);
+      }
+      .phx-initial-pulse {
+        width: 44px;
+        height: 44px;
+        border-radius: 50%;
+        border: 2px solid rgba(0, 207, 255, 0.2);
+        border-top-color: #00CFFF;
+        animation: phxSpin 0.9s linear infinite;
+        margin-bottom: 16px;
+      }
+      .phx-initial-sub {
+        font-size: 11px;
+        font-family: 'JetBrains Mono', monospace, sans-serif;
+        letter-spacing: 2px;
+        color: #00CFFF;
+        text-transform: uppercase;
+        opacity: 0.9;
+      }
+      @keyframes phxSpin {
+        to { transform: rotate(360deg); }
+      }
+    </style>
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>PHIVONEX | Transparent Node Economy &amp; Digital Ecosystem</title>
     <meta
@@ -171,7 +254,23 @@
     </script>
   </head>
   <body class="bg-[#05070B] text-[#F5F7FA] antialiased selection:bg-[#00CFFF]/20 selection:text-[#00CFFF] overflow-x-hidden font-sans">
-    <div id="root"></div>
+    <div id="root">
+      <div class="phx-initial-shell">
+        <div class="phx-initial-logo">
+          <div class="phx-initial-mark">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#05070B" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="2" y="2" width="20" height="8" rx="2" />
+              <rect x="2" y="14" width="20" height="8" rx="2" />
+              <line x1="6" y1="6" x2="6.01" y2="6" />
+              <line x1="6" y1="18" x2="6.01" y2="18" />
+            </svg>
+          </div>
+          <span>PHIVONEX</span>
+        </div>
+        <div class="phx-initial-pulse"></div>
+        <div class="phx-initial-sub">Synchronizing Protocol Layer...</div>
+      </div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
