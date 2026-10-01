@@ -975,12 +975,12 @@ router.post('/login', loginLimiter, async (req: Request, res: Response): Promise
     }
 
     if (!user) {
-      await logSecurityEvent(db, {
+      logSecurityEvent(db, {
         userId: null,
         eventType: 'FAILED_LOGIN',
         description: `Failed login attempt for identifier '${cleanIdentifier}' (user not found).`,
         userAgent: req.headers['user-agent'],
-      });
+      }).catch(() => {});
 
       res.status(401).json({
         error: 'INVALID_CREDENTIALS',
@@ -998,15 +998,24 @@ router.post('/login', loginLimiter, async (req: Request, res: Response): Promise
       return;
     }
 
+    // Check if user account was created via Google Sign-In without password
+    if (!user.password_hash) {
+      res.status(401).json({
+        error: 'GOOGLE_AUTH_ACCOUNT',
+        message: 'This account was registered using Google Sign-In. Please click "Continue with Google" below to sign in.',
+      });
+      return;
+    }
+
     // Verify Argon2id password hash
     const isValid = await verifyPassword(user.password_hash, password);
     if (!isValid) {
-      await logSecurityEvent(db, {
+      logSecurityEvent(db, {
         userId: user.id,
         eventType: 'FAILED_LOGIN',
         description: `Failed login attempt for user ${user.public_id} (incorrect password).`,
         userAgent: req.headers['user-agent'],
-      });
+      }).catch(() => {});
 
       res.status(401).json({
         error: 'INVALID_CREDENTIALS',
@@ -1015,49 +1024,58 @@ router.post('/login', loginLimiter, async (req: Request, res: Response): Promise
       return;
     }
 
-    // Update last_login_at
-    await db.query(`UPDATE users SET last_login_at = CURRENT_TIMESTAMP WHERE id = $1`, [user.id]);
+    try {
+      // Update last_login_at
+      await db.query(`UPDATE users SET last_login_at = CURRENT_TIMESTAMP WHERE id = $1`, [user.id]);
 
-    // Create session
-    const durationDays = rememberMe ? SESSION_DURATION_DAYS : 1;
-    const rawSessionToken = generateRandomToken(32);
-    const sessionTokenHash = hashToken(rawSessionToken);
-    const sessionExpiresAt = new Date(Date.now() + durationDays * 24 * 60 * 60 * 1000);
-    const userAgent = req.headers['user-agent'] || '';
+      // Create session
+      const durationDays = rememberMe ? SESSION_DURATION_DAYS : 1;
+      const rawSessionToken = generateRandomToken(32);
+      const sessionTokenHash = hashToken(rawSessionToken);
+      const sessionExpiresAt = new Date(Date.now() + durationDays * 24 * 60 * 60 * 1000);
+      const userAgent = (req.headers['user-agent'] || '').slice(0, 500);
 
-    await db.query(
-      `INSERT INTO sessions (id, user_id, token_hash, user_agent, expires_at, created_at, last_used_at)
-       VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
-      [uuidv4(), user.id, sessionTokenHash, userAgent, sessionExpiresAt]
-    );
+      await db.query(
+        `INSERT INTO sessions (id, user_id, token_hash, user_agent, expires_at, created_at, last_used_at)
+         VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+        [uuidv4(), user.id, sessionTokenHash, userAgent, sessionExpiresAt]
+      );
 
-    // Record login security event
-    await logSecurityEvent(db, {
-      userId: user.id,
-      eventType: 'LOGIN_SUCCESS',
-      description: 'Session authentication handshake completed.',
-      userAgent,
-    });
+      // Record login security event
+      logSecurityEvent(db, {
+        userId: user.id,
+        eventType: 'LOGIN_SUCCESS',
+        description: 'Session authentication handshake completed.',
+        userAgent,
+      }).catch(() => {});
 
-    setSessionCookie(res, rawSessionToken, rememberMe);
+      setSessionCookie(res, rawSessionToken, rememberMe);
 
-    res.status(200).json({
-      message: 'Logged in successfully',
-      user: {
-        id: user.id,
-        publicId: user.public_id,
-        referralCode: user.referral_code,
-        fullName: user.full_name,
-        email: user.email,
-        phone: user.phone,
-        country: user.country,
-        status: user.status,
-        emailVerified: Boolean(user.email_verified_at),
-      },
-    });
-  } catch (err) {
+      res.status(200).json({
+        message: 'Logged in successfully',
+        user: {
+          id: user.id,
+          publicId: user.public_id,
+          referralCode: user.referral_code,
+          fullName: user.full_name,
+          email: user.email,
+          phone: user.phone,
+          country: user.country,
+          status: user.status,
+          emailVerified: Boolean(user.email_verified_at),
+        },
+      });
+    } catch (sessionErr: any) {
+      console.error('[Auth API] Session creation error during login:', sessionErr);
+      res.status(500).json({
+        error: 'SESSION_ERROR',
+        message: 'Unable to initialize user session. Please try logging in again.',
+      });
+    }
+  } catch (err: any) {
     console.error('[Auth API] Error in /login:', err);
-    res.status(500).json({ error: 'SERVER_ERROR', message: 'An unexpected error occurred during sign in.' });
+    const errMessage = err?.message || 'Sign in failed. Please check your credentials and try again.';
+    res.status(401).json({ error: 'AUTH_FAILED', message: errMessage });
   }
 });
 
