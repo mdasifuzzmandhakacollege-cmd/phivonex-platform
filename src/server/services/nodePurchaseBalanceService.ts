@@ -174,19 +174,25 @@ export async function processNodePurchaseWithAssetBalance(
 
     // 3. Create or acquire active reservation
     let reservation: any;
-    try {
-      reservation = await createNodeReservation(
-        userId,
-        `node_bal_req_${selectedAsset}_${userId}_${uuidv4()}`,
-        `DEPOSIT_${selectedAsset}`
-      );
-    } catch (err: any) {
-      const existingOrders = await getUserOrders(userId);
-      const pending = existingOrders.find((o) => o.status === 'PENDING' && o.secondsRemaining > 0);
-      if (pending) {
-        reservation = { order: pending, isExisting: true };
-      } else {
-        throw err;
+    const existingOrders = await getUserOrders(userId);
+    const pending = existingOrders.find((o) => o.status === 'PENDING' && o.secondsRemaining > 0);
+    if (pending) {
+      reservation = { order: pending, isExisting: true };
+    } else {
+      try {
+        reservation = await createNodeReservation(
+          userId,
+          `node_bal_req_${selectedAsset}_${userId}_${uuidv4()}`,
+          `DEPOSIT_${selectedAsset}`
+        );
+      } catch (err: any) {
+        const ordersAfterErr = await getUserOrders(userId);
+        const pendingAfterErr = ordersAfterErr.find((o) => o.status === 'PENDING' && o.secondsRemaining > 0);
+        if (pendingAfterErr) {
+          reservation = { order: pendingAfterErr, isExisting: true };
+        } else {
+          throw err;
+        }
       }
     }
 

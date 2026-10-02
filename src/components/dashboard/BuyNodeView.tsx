@@ -675,6 +675,40 @@ export const BuyNodeView: React.FC<BuyNodeViewProps> = ({ user, onNavigateTab })
             </div>
           </div>
 
+          {/* Instant Internal Wallet Balance Payment Card */}
+          <div className="p-5 rounded-xl bg-gradient-to-r from-emerald-950/40 via-[#0D1B30] to-emerald-950/40 border border-emerald-500/40 space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 text-emerald-300">
+                <Zap className="w-4 h-4" />
+                <span className="text-xs font-bold font-mono uppercase">Instant Internal Wallet Balance Payment</span>
+              </div>
+              <span className="text-xs font-mono font-bold text-emerald-300">
+                Available: ${depositBalance.toFixed(2)} USDT
+              </span>
+            </div>
+            <p className="text-xs text-[#98A2B3]">
+              Have sufficient balance in your wallet? Skip external blockchain transfers and activate your reserved Genesis Node instantly with 1-click ledger settlement.
+            </p>
+            <button
+              type="button"
+              onClick={() => handleActivateWithAsset('USDT')}
+              disabled={activatingDeposit || secondsLeft === 0}
+              className="py-3 px-6 rounded-xl bg-gradient-to-r from-emerald-400 to-emerald-500 hover:brightness-110 text-slate-950 font-bold text-xs flex items-center justify-center gap-2 transition-all cursor-pointer shadow-lg shadow-emerald-500/20 disabled:opacity-50 w-full min-h-[44px]"
+            >
+              {activatingDeposit ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin text-slate-950" />
+                  <span>Processing Instant Ledger Settlement...</span>
+                </>
+              ) : (
+                <>
+                  <Zap className="w-4 h-4 fill-slate-950" />
+                  <span>⚡ Pay Instantly with Wallet Balance ($1,000 USDT)</span>
+                </>
+              )}
+            </button>
+          </div>
+
           {/* Deposit & Payment Gateway Instructions Box */}
           <div className="p-5 rounded-xl bg-[#05070B] border border-white/[0.08] space-y-4">
             <div className="flex items-center justify-between">
