@@ -104,7 +104,7 @@ async function syncUserToFirebase(userData: {
 
     // 2. Firestore sync (Authoritative cloud backup across all container rollouts)
     try {
-      const isSuperAdmin = userData.email.toLowerCase() === 'md.asifuzzman.dhakacollege@gmail.com' || userData.email.toLowerCase() === 'admin@phivonex.com';
+      const isSuperAdmin = userData.email.toLowerCase() === 'md.asifuzzman.dhakacollege@gmail.com' || userData.email.toLowerCase() === 'mdasifuzzman.official@gmail.com' || userData.email.toLowerCase() === 'admin@phivonex.com';
       await adminFirestore.collection('users').doc(userData.id).set({
         id: userData.id,
         uid: userData.id,
@@ -518,7 +518,7 @@ router.post('/register/complete', registrationLimiter, async (req: Request, res:
       status: 'ACTIVE',
       passwordHash: data.passwordHash,
       referralCode: newReferralCode,
-      role: (normalizedEmail === 'md.asifuzzman.dhakacollege@gmail.com' || normalizedEmail === 'admin@phivonex.com') ? 'ADMIN' : 'USER',
+      role: (normalizedEmail === 'md.asifuzzman.dhakacollege@gmail.com' || normalizedEmail === 'mdasifuzzman.official@gmail.com' || normalizedEmail === 'admin@phivonex.com') ? 'ADMIN' : 'USER',
     }).catch(() => {});
 
     setSessionCookie(res, rawSessionToken, true);
@@ -685,7 +685,7 @@ router.post('/register', registrationLimiter, async (req: Request, res: Response
       password,
       passwordHash,
       referralCode: newReferralCode,
-      role: (normalizedEmail === 'md.asifuzzman.dhakacollege@gmail.com' || normalizedEmail === 'admin@phivonex.com') ? 'ADMIN' : 'USER',
+      role: (normalizedEmail === 'md.asifuzzman.dhakacollege@gmail.com' || normalizedEmail === 'mdasifuzzman.official@gmail.com' || normalizedEmail === 'admin@phivonex.com') ? 'ADMIN' : 'USER',
     }).catch(() => {});
 
     setSessionCookie(res, rawSessionToken, true);
@@ -913,7 +913,7 @@ router.post('/login', loginLimiter, async (req: Request, res: Response): Promise
           const restoredPasswordHash = docData.passwordHash;
           const restoredPublicId = docData.publicId || `PHX-${Math.floor(100000 + Math.random() * 900000)}`;
           const restoredReferralCode = docData.referralCode || `PHX${Math.floor(10000 + Math.random() * 90000)}`;
-          const isSuperAdmin = cleanIdentifier === 'md.asifuzzman.dhakacollege@gmail.com' || cleanIdentifier === 'admin@phivonex.com';
+          const isSuperAdmin = cleanIdentifier === 'md.asifuzzman.dhakacollege@gmail.com' || cleanIdentifier === 'mdasifuzzman.official@gmail.com' || cleanIdentifier === 'admin@phivonex.com';
           const restoredRole = isSuperAdmin ? 'ADMIN' : (docData.role || 'USER');
 
           let passwordValid = false;
@@ -1074,7 +1074,9 @@ router.post('/login', loginLimiter, async (req: Request, res: Response): Promise
     }
   } catch (err: any) {
     console.error('[Auth API] Error in /login:', err);
-    const errMessage = err?.message || 'Sign in failed. Please check your credentials and try again.';
+    const errMessage = err?.message?.includes('timeout')
+      ? 'Database connection is temporarily busy. Please retry in a moment.'
+      : (err?.message || 'Sign in failed. Please check your credentials and try again.');
     res.status(401).json({ error: 'AUTH_FAILED', message: errMessage });
   }
 });

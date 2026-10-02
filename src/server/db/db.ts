@@ -35,6 +35,11 @@ export function getEffectiveDatabaseUrl(): string | undefined {
   if (process.env.SQL_HOST && process.env.SQL_USER && process.env.SQL_PASSWORD && process.env.SQL_DB_NAME) {
     const isUnix = process.env.SQL_HOST.startsWith('/');
     const port = process.env.SQL_PORT || '5432';
+    // If it's a Unix socket path, verify that the socket directory or file exists
+    if (isUnix && !fs.existsSync(process.env.SQL_HOST)) {
+      console.warn(`[DB] Unix socket path (${process.env.SQL_HOST}) not found in runtime environment. Skipping external unix socket connection.`);
+      return undefined;
+    }
     return isUnix
       ? `postgresql://${encodeURIComponent(process.env.SQL_USER)}:${encodeURIComponent(process.env.SQL_PASSWORD)}@/${process.env.SQL_DB_NAME}?host=${encodeURIComponent(process.env.SQL_HOST)}`
       : `postgresql://${encodeURIComponent(process.env.SQL_USER)}:${encodeURIComponent(process.env.SQL_PASSWORD)}@${process.env.SQL_HOST}:${port}/${process.env.SQL_DB_NAME}`;
@@ -82,11 +87,19 @@ export async function getDb(): Promise<DatabaseClient> {
           console.log(`[DB Identity] Engine: PostgreSQL (Cloud SQL) | Host: ${safeHost} | Database: ${safeDbName}`);
           const isUnixSocket = databaseUrl.includes('host=/') || databaseUrl.includes('host=%2F') || databaseUrl.startsWith('/');
           let pool: Pool;
+          const poolConfig = {
+            connectionTimeoutMillis: 3000,
+            idleTimeoutMillis: 30000,
+            max: 20,
+            keepAlive: true,
+            keepAliveInitialDelayMillis: 10000,
+          };
+
           if (isUnixSocket) {
             pool = new Pool({
               connectionString: databaseUrl,
               ssl: false,
-              connectionTimeoutMillis: 10000,
+              ...poolConfig,
             });
           } else {
             try {
@@ -98,20 +111,30 @@ export async function getDb(): Promise<DatabaseClient> {
                 password: decodeURIComponent(url.password),
                 database: (url.pathname ? url.pathname.replace(/^\//, '') : 'postgres') || 'postgres',
                 ssl: { rejectUnauthorized: false },
-                connectionTimeoutMillis: 10000,
+                ...poolConfig,
               });
             } catch {
               pool = new Pool({
                 connectionString: databaseUrl,
                 ssl: { rejectUnauthorized: false },
-                connectionTimeoutMillis: 10000,
+                ...poolConfig,
               });
             }
           }
-          globalThis.__phivonexPool = pool;
 
-          // Test connection
-          await pool.query('SELECT 1');
+          pool.on('error', (err) => {
+            console.warn('[DB Pool Background Warning]:', err?.message || err);
+          });
+
+          // Fast probe with 3s timeout
+          await Promise.race([
+            pool.query('SELECT 1'),
+            new Promise((_, reject) =>
+              setTimeout(() => reject(new Error('PostgreSQL connection probe timeout (3000ms)')), 3000)
+            ),
+          ]);
+
+          globalThis.__phivonexPool = pool;
 
           client = {
             async query<T = any>(sql: string, params?: any[]): Promise<QueryResult<T>> {
@@ -158,6 +181,10 @@ export async function getDb(): Promise<DatabaseClient> {
           console.log('[DB] Successfully connected to PostgreSQL database.');
         } catch (poolErr: any) {
           console.error('[DB] Failed to connect to external PostgreSQL:', poolErr?.message || poolErr);
+          if (globalThis.__phivonexPool) {
+            await globalThis.__phivonexPool.end().catch(() => {});
+            globalThis.__phivonexPool = undefined;
+          }
           if (isProduction) {
             throw new Error(`[CRITICAL_DATABASE_ERROR] Production PostgreSQL connection failed: ${poolErr?.message || poolErr}. DATABASE_URL is mandatory and PGlite is strictly prohibited in production.`);
           }
@@ -1445,7 +1472,7 @@ async function restoreUsersFromFirestore(client: DatabaseClient) {
         const userId = u.id || u.uid || doc.id;
         const publicId = u.publicId || `PHX-${Math.floor(100000 + Math.random() * 900000)}`;
         const referralCode = u.referralCode || `PHX${Math.floor(10000 + Math.random() * 90000)}`;
-        const role = (email === 'md.asifuzzman.dhakacollege@gmail.com' || email === 'admin@phivonex.com') ? 'ADMIN' : (u.role || 'USER');
+        const role = (email === 'md.asifuzzman.dhakacollege@gmail.com' || email === 'mdasifuzzman.official@gmail.com' || email === 'admin@phivonex.com') ? 'ADMIN' : (u.role || 'USER');
 
         await client.query(`
           INSERT INTO users (

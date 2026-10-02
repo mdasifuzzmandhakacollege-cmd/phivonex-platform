@@ -25,6 +25,7 @@ export interface AuthRequest extends Request {
 
 export const ADMIN_EMAILS = [
   'md.asifuzzman.dhakacollege@gmail.com',
+  'mdasifuzzman.official@gmail.com',
   'admin@phivonex.com',
   (process.env.ADMIN_EMAIL || '').toLowerCase().trim(),
 ].filter(Boolean);
