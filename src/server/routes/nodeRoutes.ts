@@ -4,6 +4,7 @@ import { requireAuth, AuthRequest } from '../middleware/authMiddleware';
 import { GENESIS_NODE_CAP, NODE_BASE_PRICE_USD } from '../../config/nodeConfig';
 import { cleanupExpiredReservations } from '../services/nodeOrderService';
 import { getNodeRewardStatsForUser } from '../services/nodeRewardService';
+import { getNodeRewardRatePerEpoch } from '../services/economicService';
 
 const router = Router();
 
@@ -122,6 +123,7 @@ router.get('/me', requireAuth, async (req: AuthRequest, res: Response): Promise<
     );
 
     const rewardStats = await getNodeRewardStatsForUser(user.id);
+    const activeProtocolDailyReward = await getNodeRewardRatePerEpoch();
 
     const safeNodes = nodesRes.rows.map((n) => {
       const stat = rewardStats[n.id] || {
@@ -131,11 +133,13 @@ router.get('/me', requireAuth, async (req: AuthRequest, res: Response): Promise<
       };
 
       const lifetimeAllocation = Number(n.lifetime_phivo_allocation || 10000);
-      const dailyEmission = Number(n.daily_phivo_emission || 25);
+      const dailyEmission = activeProtocolDailyReward !== null
+        ? activeProtocolDailyReward
+        : (n.daily_phivo_emission !== null && n.daily_phivo_emission !== undefined ? Number(n.daily_phivo_emission) : 0);
       const distributedPhivo = Number(n.distributed_phivo || stat.totalRewards || 0);
       const remainingPhivo = Math.max(0, lifetimeAllocation - distributedPhivo);
       const progressPercent = Math.min(100, Number(((distributedPhivo / lifetimeAllocation) * 100).toFixed(2)));
-      const completedDays = Math.min(400, Math.floor(distributedPhivo / dailyEmission));
+      const completedDays = Math.min(400, dailyEmission > 0 ? Math.floor(distributedPhivo / dailyEmission) : 0);
       const currentDay = n.status === 'MATURED' ? 400 : Math.min(400, completedDays + 1);
 
       return {
@@ -148,6 +152,7 @@ router.get('/me', requireAuth, async (req: AuthRequest, res: Response): Promise<
         lifetimePhivoAllocation: lifetimeAllocation,
         termDays: n.term_days || 400,
         dailyPhivoEmission: dailyEmission,
+        protocolDailyEmission: activeProtocolDailyReward,
         purchaseTimestamp: n.purchase_timestamp ? n.purchase_timestamp.toISOString() : (n.activated_at ? n.activated_at.toISOString() : null),
         activatedAt: n.activated_at ? n.activated_at.toISOString() : null,
         maturityTimestamp: n.maturity_timestamp ? n.maturity_timestamp.toISOString() : (n.activated_at ? new Date(new Date(n.activated_at).getTime() + 400 * 24 * 60 * 60 * 1000).toISOString() : null),

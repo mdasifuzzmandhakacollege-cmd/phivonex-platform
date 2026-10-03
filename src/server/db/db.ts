@@ -902,9 +902,9 @@ async function initSchema(client: DatabaseClient) {
           derivation_index INTEGER NOT NULL DEFAULT 0,
           derivation_reference VARCHAR(100) NOT NULL,
           created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
-          CONSTRAINT uq_user_deposit_chain_asset UNIQUE (user_id, chain_id, asset),
-          CONSTRAINT uq_deposit_chain_address UNIQUE (chain_id, address)
+          CONSTRAINT uq_user_deposit_chain_asset UNIQUE (user_id, chain_id, asset)
         );
+        ALTER TABLE user_deposit_addresses DROP CONSTRAINT IF EXISTS uq_deposit_chain_address;
       `);
     } catch (t171Err) {
       console.warn('[DB Migration] user_deposit_addresses init warning:', t171Err);
@@ -918,6 +918,16 @@ async function initSchema(client: DatabaseClient) {
       await client.exec(`CREATE INDEX IF NOT EXISTS idx_uda_chain_index ON user_deposit_addresses (chain_id, derivation_index);`);
     } catch (udaColErr) {
       console.warn('[DB Migration] user_deposit_addresses column migration warning:', udaColErr);
+    }
+
+    try {
+      await client.exec(`ALTER TABLE reward_epochs ADD COLUMN IF NOT EXISTS economic_config_version INTEGER NULL;`);
+      await client.exec(`ALTER TABLE reward_epochs ADD COLUMN IF NOT EXISTS reward_rate_used NUMERIC(14, 4) NULL;`);
+      await client.exec(`ALTER TABLE node_rewards ADD COLUMN IF NOT EXISTS reward_rate_used NUMERIC(14, 4) NULL;`);
+      await client.exec(`ALTER TABLE node_rewards ADD COLUMN IF NOT EXISTS economic_config_version INTEGER NULL;`);
+      await client.exec(`ALTER TABLE node_rewards ADD COLUMN IF NOT EXISTS business_date VARCHAR(20) NULL;`);
+    } catch (rewColErr) {
+      console.warn('[DB Migration] reward columns migration warning:', rewColErr);
     }
 
     try {

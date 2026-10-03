@@ -51,7 +51,7 @@ export const RewardAnalytics: React.FC<RewardAnalyticsProps> = ({ user: _user, o
     totalClaimed: 0,
     totalRewards: 0,
     activeNodesCount: 1,
-    dailyEmissionRate: 25,
+    dailyEmissionRate: 0,
     referenceRateUsd: 0.10,
     history: [],
   });
@@ -80,7 +80,7 @@ export const RewardAnalytics: React.FC<RewardAnalyticsProps> = ({ user: _user, o
           totalClaimed: data.totalClaimed ?? claimed,
           totalRewards: data.totalRewards ?? (accrued + claimed),
           activeNodesCount: data.activeNodesCount || 1,
-          dailyEmissionRate: 25,
+          dailyEmissionRate: data.dailyEmissionRate ?? data.protocolDailyEmission ?? 0,
           referenceRateUsd: 0.10,
           history,
         });
@@ -248,7 +248,9 @@ export const RewardAnalytics: React.FC<RewardAnalyticsProps> = ({ user: _user, o
               {telemetry.activeNodesCount} <span className="text-xs font-sans text-[#98A2B3]">Nodes</span>
             </div>
             <div className="text-xs font-mono text-[#98A2B3]">
-              25 PHIVO / day per node
+              {telemetry.dailyEmissionRate > 0
+                ? `Current Protocol Daily Emission: ${telemetry.dailyEmissionRate} PHIVO / Eligible Day`
+                : 'Protocol Daily Emission Governed by Admin'}
             </div>
           </div>
         </div>

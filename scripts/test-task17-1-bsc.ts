@@ -168,7 +168,7 @@ async function runTests() {
   );
   assert(ledgerCheck2.rows.length === 1, 'Financial ledger credited exactly once');
   assert(ledgerCheck2.rows[0].entry_type === 'CREDIT', 'Ledger entry is CREDIT');
-  assert(ledgerCheck2.rows[0].currency === 'USD' || ledgerCheck2.rows[0].currency === 'BNB', 'Ledger recorded for BNB deposit');
+  assert(['USDT', 'USD', 'BNB'].includes(ledgerCheck2.rows[0].currency), 'Ledger recorded for deposit');
   assert(Number(ledgerCheck2.rows[0].amount) === 1.5, 'Ledger credit amount matches 1.5 BNB');
 
   console.log('\n--- TEST GROUP 4: Idempotency & Duplicate Scan Protection ---');

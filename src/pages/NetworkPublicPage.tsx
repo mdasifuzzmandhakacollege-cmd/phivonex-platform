@@ -111,11 +111,11 @@ export const NetworkPublicPage: React.FC<NetworkPublicPageProps> = ({ onNavigate
               <span className="font-mono uppercase text-[11px] tracking-wider">Emission Schedule</span>
               <Zap className="w-4 h-4 text-[#F79009]" />
             </div>
-            <div className="text-2xl font-mono font-extrabold text-[#F79009]">
-              25 PHIVO / Day
+            <div className="text-xl sm:text-2xl font-mono font-extrabold text-[#F79009]">
+              Protocol Governed
             </div>
             <p className="text-xs text-[#98A2B3]">
-              Daily emission rate per eligible node
+              Daily PHIVO emission is governed by the active protocol economic configuration.
             </p>
           </div>
 
@@ -188,7 +188,7 @@ export const NetworkPublicPage: React.FC<NetworkPublicPageProps> = ({ onNavigate
             </div>
             <div className="p-4 rounded-2xl bg-[#05070B] border border-white/[0.06] space-y-1">
               <span className="text-[10px] text-[#98A2B3] uppercase">Daily Emissions</span>
-              <span className="text-sm font-bold text-amber-400 block">25 PHIVO / Day</span>
+              <span className="text-sm font-bold text-amber-400 block">Protocol Governed</span>
             </div>
             <div className="p-4 rounded-2xl bg-[#05070B] border border-white/[0.06] space-y-1">
               <span className="text-[10px] text-[#98A2B3] uppercase">Eligible Duration</span>

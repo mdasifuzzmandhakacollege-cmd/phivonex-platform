@@ -27,6 +27,8 @@ rewardRouter.get('/me', requireAuth, async (req: AuthRequest, res: Response): Pr
       totalAccrued: rewardsData.totalAccrued,
       totalClaimed: rewardsData.totalClaimed,
       totalRewards: rewardsData.totalRewards,
+      dailyEmissionRate: rewardsData.dailyEmissionRate,
+      protocolDailyEmission: rewardsData.protocolDailyEmission,
       latestEpoch: rewardsData.latestEpoch,
       history: rewardsData.history,
     });

@@ -25,6 +25,7 @@ const testSuites = [
   { name: 'PF-07 Auth, Session & Email Finalization', script: 'scripts/test-pf07-auth-email-finalization.ts' },
   { name: 'PF-08 Public Data Accuracy', script: 'scripts/test-pf08-public-data-accuracy.ts' },
   { name: 'PF-09 Full Production E2E Verification', script: 'scripts/test-pf09-full-e2e-verification.ts' },
+  { name: 'PF-10 Dynamic Daily Reward & Public Data Audit', script: 'scripts/test-pf10-dynamic-daily-reward.ts' },
 ];
 
 async function main() {

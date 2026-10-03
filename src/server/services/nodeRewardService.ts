@@ -3,7 +3,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { generateEpochPublicId, generateRewardPublicId } from '../utils/idGenerator';
 import { getConfiguredRewardPerNode, REWARD_CURRENCY } from '../config/rewardConfig';
 import { postLedgerCredit, postLedgerReversal } from './walletLedgerService';
-import { isNodeRewardsEnabled, getNodeRewardRatePerEpoch } from './economicService';
+import { isNodeRewardsEnabled, getNodeRewardRatePerEpoch, getEconomicConfigByKey } from './economicService';
 import { notifyPhivoReward } from './notificationService';
 import { getUtcBusinessDate } from '../utils/timezone';
 
@@ -14,6 +14,8 @@ export interface RewardEpoch {
   startAt: string;
   endAt: string;
   rewardPerNode: number | null;
+  rewardRateUsed?: number | null;
+  economicConfigVersion?: number | null;
   currency: string;
   status: 'OPEN' | 'COMPLETED';
   settledAt: string | null;
@@ -36,6 +38,9 @@ export interface NodeRewardRecord {
   accruedAt: string;
   claimedAt: string | null;
   reversedAt?: string | null;
+  rewardRateUsed?: number | null;
+  economicConfigVersion?: number | null;
+  businessDate?: string | null;
   createdAt: string;
 }
 
@@ -64,7 +69,29 @@ export async function createRewardEpoch(params?: {
   endAt?: Date;
 }): Promise<RewardEpoch> {
   const db = await getDb();
-  const rewardRate = getConfiguredRewardPerNode(params?.rewardPerNode);
+  let rewardRate: number | null = null;
+  let configVersion: number | null = null;
+
+  if (params?.rewardPerNode !== undefined) {
+    rewardRate = getConfiguredRewardPerNode(params.rewardPerNode);
+  } else {
+    const activeCfg = await getEconomicConfigByKey('NODE_REWARD_RATE_PER_EPOCH');
+    if (activeCfg && activeCfg.status === 'ACTIVE' && activeCfg.configValue !== null && activeCfg.configValue !== undefined) {
+      configVersion = activeCfg.version;
+      if (typeof activeCfg.configValue === 'object' && activeCfg.configValue !== null) {
+        const val = activeCfg.configValue;
+        rewardRate = Number(
+          val.ratePhivo !== undefined ? val.ratePhivo :
+          (val.rateUsd !== undefined ? val.rateUsd :
+          (val.rewardPerNode !== undefined ? val.rewardPerNode : NaN))
+        );
+      } else {
+        rewardRate = Number(activeCfg.configValue);
+      }
+    } else {
+      rewardRate = getConfiguredRewardPerNode();
+    }
+  }
 
   // Compute next sequential epoch number
   const maxRes = await db.query<{ next_num: string | number }>(
@@ -83,12 +110,12 @@ export async function createRewardEpoch(params?: {
   const res = await db.query<any>(
     `
     INSERT INTO reward_epochs (
-      id, public_epoch_id, epoch_number, start_at, end_at, reward_per_node, currency, status, created_at
+      id, public_epoch_id, epoch_number, start_at, end_at, reward_per_node, reward_rate_used, economic_config_version, currency, status, created_at
     )
-    VALUES ($1, $2, $3, $4, $5, $6, $7, 'OPEN', CURRENT_TIMESTAMP)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'OPEN', CURRENT_TIMESTAMP)
     RETURNING *
     `,
-    [id, publicEpochId, epochNumber, startAt, endAt, rewardRate, REWARD_CURRENCY]
+    [id, publicEpochId, epochNumber, startAt, endAt, rewardRate, rewardRate, configVersion, REWARD_CURRENCY]
   );
 
   const row = res.rows[0];
@@ -99,6 +126,8 @@ export async function createRewardEpoch(params?: {
     startAt: new Date(row.start_at).toISOString(),
     endAt: new Date(row.end_at).toISOString(),
     rewardPerNode: row.reward_per_node !== null && row.reward_per_node !== undefined ? Number(row.reward_per_node) : null,
+    rewardRateUsed: row.reward_rate_used !== null && row.reward_rate_used !== undefined ? Number(row.reward_rate_used) : null,
+    economicConfigVersion: row.economic_config_version ? Number(row.economic_config_version) : null,
     currency: row.currency,
     status: row.status,
     settledAt: row.settled_at ? new Date(row.settled_at).toISOString() : null,
@@ -206,14 +235,33 @@ export async function closeAndSettleEpoch(
     };
   }
 
-  // 3. Determine authoritative reward rate per node
+  // 3. Determine authoritative reward rate per node and snapshot configuration
   let effectiveRate: number | null = null;
+  let configVersion: number | null = epoch.economic_config_version ? Number(epoch.economic_config_version) : null;
+
   if (options?.configuredRewardPerNode !== undefined) {
     effectiveRate = getConfiguredRewardPerNode(options.configuredRewardPerNode);
+  } else if (epoch.reward_rate_used !== null && !isNaN(Number(epoch.reward_rate_used)) && Number(epoch.reward_rate_used) > 0) {
+    effectiveRate = Number(epoch.reward_rate_used);
   } else if (epoch.reward_per_node !== null && !isNaN(Number(epoch.reward_per_node)) && Number(epoch.reward_per_node) > 0) {
-    effectiveRate = getConfiguredRewardPerNode(Number(epoch.reward_per_node));
+    effectiveRate = Number(epoch.reward_per_node);
   } else {
-    effectiveRate = await getNodeRewardRatePerEpoch() || getConfiguredRewardPerNode();
+    const activeCfg = await getEconomicConfigByKey('NODE_REWARD_RATE_PER_EPOCH');
+    if (activeCfg && activeCfg.status === 'ACTIVE' && activeCfg.configValue !== null && activeCfg.configValue !== undefined) {
+      configVersion = activeCfg.version;
+      if (typeof activeCfg.configValue === 'object' && activeCfg.configValue !== null) {
+        const val = activeCfg.configValue;
+        effectiveRate = Number(
+          val.ratePhivo !== undefined ? val.ratePhivo :
+          (val.rateUsd !== undefined ? val.rateUsd :
+          (val.rewardPerNode !== undefined ? val.rewardPerNode : NaN))
+        );
+      } else {
+        effectiveRate = Number(activeCfg.configValue);
+      }
+    } else {
+      effectiveRate = getConfiguredRewardPerNode();
+    }
   }
 
   // If reward rate is NOT configured:
@@ -234,11 +282,15 @@ export async function closeAndSettleEpoch(
   }
 
   const now = new Date();
+  const epochBaseDate = epoch.start_at ? new Date(epoch.start_at) : now;
+  const businessDate = getUtcBusinessDate(epochBaseDate);
 
-  // 3. Mark epoch COMPLETED and persist configured rate
+  // Snapshot active config version and rate onto the epoch record immediately before node loop
   await db.query(
-    `UPDATE reward_epochs SET status = 'COMPLETED', reward_per_node = $1, settled_at = $2 WHERE id = $3`,
-    [effectiveRate, now, epochId]
+    `UPDATE reward_epochs 
+     SET status = 'COMPLETED', reward_per_node = $1, reward_rate_used = $1, economic_config_version = $2, settled_at = $3 
+     WHERE id = $4`,
+    [effectiveRate, configVersion, now, epochId]
   );
 
   // 4. Query all ACTIVE or EMITTING nodes with valid owners that haven't reached lifetime cap
@@ -250,13 +302,15 @@ export async function closeAndSettleEpoch(
     daily_phivo_emission: string | number;
     lifetime_phivo_allocation: string | number;
     distributed_phivo: string | number;
+    remaining_phivo: string | number;
   }>(
     `
-    SELECT id, public_node_id, node_number, owner_user_id, daily_phivo_emission, lifetime_phivo_allocation, distributed_phivo
+    SELECT id, public_node_id, node_number, owner_user_id, daily_phivo_emission, lifetime_phivo_allocation, distributed_phivo, remaining_phivo
     FROM nodes
     WHERE (status = 'ACTIVE' OR status = 'EMITTING') 
       AND owner_user_id IS NOT NULL 
       AND (distributed_phivo IS NULL OR distributed_phivo < COALESCE(lifetime_phivo_allocation, 10000.00))
+      AND (remaining_phivo IS NULL OR remaining_phivo > 0)
       AND ($1::text IS NULL OR id::text = $1 OR public_node_id = $1)
     ORDER BY node_number ASC
     `,
@@ -268,10 +322,14 @@ export async function closeAndSettleEpoch(
   let totalDistributed = 0;
 
   for (const node of eligibleNodes) {
-    const dailyEmission = Number(node.daily_phivo_emission || effectiveRate || 25);
+    const configuredDailyReward = effectiveRate;
     const lifetimeCap = Number(node.lifetime_phivo_allocation || 10000);
     const currentDist = Number(node.distributed_phivo || 0);
-    const actualEmission = Math.min(dailyEmission, Math.max(0, lifetimeCap - currentDist));
+    const remainingPhivo = node.remaining_phivo !== null && node.remaining_phivo !== undefined
+      ? Number(node.remaining_phivo)
+      : Math.max(0, lifetimeCap - currentDist);
+
+    const actualEmission = Math.min(configuredDailyReward, Math.max(0, remainingPhivo));
 
     if (actualEmission <= 0) {
       // Node has already distributed full allocation: mark MATURED
@@ -289,13 +347,26 @@ export async function closeAndSettleEpoch(
     const insRes = await db.query<any>(
       `
       INSERT INTO node_rewards (
-        id, public_reward_id, epoch_id, node_id, owner_user_id, amount, currency, status, accrued_at, created_at
+        id, public_reward_id, epoch_id, node_id, owner_user_id, amount, currency, status, accrued_at,
+        reward_rate_used, economic_config_version, business_date, created_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6, 'PHIVO', 'ACCRUED', $7, CURRENT_TIMESTAMP)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, 'ACCRUED', $8, $9, $10, $11, CURRENT_TIMESTAMP)
       ON CONFLICT (node_id, epoch_id) DO NOTHING
       RETURNING *
       `,
-      [rewardId, publicRewardId, epochId, node.id, node.owner_user_id, actualEmission, now]
+      [
+        rewardId,
+        publicRewardId,
+        epochId,
+        node.id,
+        node.owner_user_id,
+        actualEmission,
+        epoch.currency || REWARD_CURRENCY,
+        now,
+        configuredDailyReward,
+        configVersion,
+        businessDate,
+      ]
     );
 
     let actualRewardId: string;
@@ -311,8 +382,8 @@ export async function closeAndSettleEpoch(
 
       // Update node distribution accounting and status
       const newDist = currentDist + actualAmount;
-      const newRem = Math.max(0, lifetimeCap - newDist);
-      const newStatus = newDist >= lifetimeCap ? 'MATURED' : 'EMITTING';
+      const newRem = Math.max(0, remainingPhivo - actualAmount);
+      const newStatus = newRem <= 0 || newDist >= lifetimeCap ? 'MATURED' : 'EMITTING';
 
       await db.query(
         `
@@ -495,6 +566,8 @@ export async function getUserRewards(userId: string): Promise<{
   totalAccrued: number;
   totalClaimed: number;
   totalRewards: number;
+  dailyEmissionRate: number | null;
+  protocolDailyEmission: number | null;
   latestEpoch: {
     id: string;
     publicEpochId: string;
@@ -506,6 +579,7 @@ export async function getUserRewards(userId: string): Promise<{
   history: NodeRewardRecord[];
 }> {
   const db = await getDb();
+  const activeRate = await getNodeRewardRatePerEpoch();
 
   // Query user reward records joined with epoch and node information
   const res = await db.query<any>(
@@ -522,6 +596,9 @@ export async function getUserRewards(userId: string): Promise<{
       nr.accrued_at,
       nr.claimed_at,
       nr.reversed_at,
+      nr.reward_rate_used,
+      nr.economic_config_version,
+      nr.business_date,
       nr.created_at,
       re.public_epoch_id,
       re.epoch_number,
@@ -566,6 +643,9 @@ export async function getUserRewards(userId: string): Promise<{
       accruedAt: new Date(r.accrued_at).toISOString(),
       claimedAt: r.claimed_at ? new Date(r.claimed_at).toISOString() : null,
       reversedAt: r.reversed_at ? new Date(r.reversed_at).toISOString() : null,
+      rewardRateUsed: r.reward_rate_used !== null && r.reward_rate_used !== undefined ? Number(r.reward_rate_used) : null,
+      economicConfigVersion: r.economic_config_version !== null && r.economic_config_version !== undefined ? Number(r.economic_config_version) : null,
+      businessDate: r.business_date || null,
       createdAt: new Date(r.created_at).toISOString(),
     };
   });
@@ -592,6 +672,8 @@ export async function getUserRewards(userId: string): Promise<{
     totalAccrued,
     totalClaimed,
     totalRewards,
+    dailyEmissionRate: activeRate,
+    protocolDailyEmission: activeRate,
     latestEpoch,
     history,
   };
@@ -605,14 +687,16 @@ export async function getUserRewardsSummary(userId: string): Promise<{
   totalAccrued: number;
   totalClaimed: number;
   activeNodesCount: number;
+  protocolDailyEmission: number | null;
   latestEpochNumber: number;
   latestSettlementTime: string | null;
 }> {
   const db = await getDb();
+  const activeRate = await getNodeRewardRatePerEpoch();
 
   // Active nodes count for this user
   const activeNodesRes = await db.query<{ count: string | number }>(
-    `SELECT COUNT(*) as count FROM nodes WHERE owner_user_id = $1 AND status = 'ACTIVE'`,
+    `SELECT COUNT(*) as count FROM nodes WHERE owner_user_id = $1 AND status IN ('ACTIVE', 'EMITTING', 'MATURED')`,
     [userId]
   );
   const activeNodesCount = Number(activeNodesRes.rows[0]?.count || 0);
@@ -657,6 +741,7 @@ export async function getUserRewardsSummary(userId: string): Promise<{
     totalAccrued,
     totalClaimed,
     activeNodesCount,
+    protocolDailyEmission: activeRate,
     latestEpochNumber,
     latestSettlementTime,
   };

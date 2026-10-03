@@ -213,12 +213,10 @@ export async function broadcastBnbWithdrawal(params: {
 
     if (treasuryBalanceWei < totalRequiredWei) {
       console.warn(`[Secure Signer] Hot wallet balance query returned ${ethers.formatEther(treasuryBalanceWei)} BNB (required ${ethers.formatEther(totalRequiredWei)} BNB)`);
-      if (payoutKey && !isMockRpc && process.env.NODE_ENV === 'production' && treasuryBalanceWei === 0n) {
-        const errorMsg = `INSUFFICIENT_GAS_RESERVE: Payout hot wallet balance (${ethers.formatEther(treasuryBalanceWei)} BNB) is insufficient for withdrawal (${withdrawal.amount} BNB) + gas (${ethers.formatEther(requiredGasWei)} BNB). Please deposit BNB to ${activePayoutAddress}.`;
-        const gasErr = new Error(errorMsg);
-        (gasErr as any).code = 'INSUFFICIENT_GAS_RESERVE';
-        throw gasErr;
-      }
+      const errorMsg = `INSUFFICIENT_GAS_RESERVE: Payout hot wallet balance (${ethers.formatEther(treasuryBalanceWei)} BNB) is insufficient for withdrawal (${withdrawal.amount} BNB) + gas (${ethers.formatEther(requiredGasWei)} BNB). Please deposit BNB to ${activePayoutAddress}.`;
+      const gasErr = new Error(errorMsg);
+      (gasErr as any).code = 'INSUFFICIENT_GAS_RESERVE';
+      throw gasErr;
     }
 
     // 6. Allocate Nonce
@@ -293,6 +291,7 @@ export async function broadcastBnbWithdrawal(params: {
     const completedWithdrawal = await settleWithdrawalAction({
       withdrawalIdOrPublicId: withdrawal.publicWithdrawalId,
       action: 'COMPLETE',
+      txHash,
     });
 
     const bcRow = insertRes.rows[0];

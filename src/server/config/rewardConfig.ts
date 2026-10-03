@@ -12,7 +12,7 @@
  */
 
 // Reward currency standard
-export const REWARD_CURRENCY = 'USD';
+export const REWARD_CURRENCY = 'PHIVO';
 
 // Minimum allowable reward per node (when configured)
 export const MIN_REWARD_PER_NODE = 0.01;
@@ -29,7 +29,7 @@ export function getConfiguredRewardPerNode(override?: number): number | null {
   if (typeof override === 'number' && !isNaN(override) && override > 0) {
     if (override < MIN_REWARD_PER_NODE || override > MAX_REWARD_PER_NODE) {
       throw new Error(
-        `Configured reward rate ${override} USD is outside allowed bounds [${MIN_REWARD_PER_NODE}, ${MAX_REWARD_PER_NODE}]`
+        `Configured reward rate ${override} PHIVO is outside allowed bounds [${MIN_REWARD_PER_NODE}, ${MAX_REWARD_PER_NODE}]`
       );
     }
     return override;
@@ -42,7 +42,7 @@ export function getConfiguredRewardPerNode(override?: number): number | null {
     if (!isNaN(parsed) && parsed > 0) {
       if (parsed < MIN_REWARD_PER_NODE || parsed > MAX_REWARD_PER_NODE) {
         throw new Error(
-          `Configured reward rate ${parsed} USD is outside allowed bounds [${MIN_REWARD_PER_NODE}, ${MAX_REWARD_PER_NODE}]`
+          `Configured reward rate ${parsed} PHIVO is outside allowed bounds [${MIN_REWARD_PER_NODE}, ${MAX_REWARD_PER_NODE}]`
         );
       }
       return parsed;

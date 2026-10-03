@@ -428,9 +428,18 @@ export async function isNodeRewardsEnabled(): Promise<boolean> {
   return true;
 }
 
-export async function getNodeRewardRatePerEpoch(): Promise<number | null> {
-  const cfg = await getEconomicConfigByKey('NODE_REWARD_RATE_PER_EPOCH');
+export async function getNodeRewardRatePerEpoch(dbClient?: DatabaseClient): Promise<number | null> {
+  const cfg = await getEconomicConfigByKey('NODE_REWARD_RATE_PER_EPOCH', dbClient);
   if (cfg && cfg.status === 'ACTIVE' && cfg.configValue !== null && cfg.configValue !== undefined) {
+    if (typeof cfg.configValue === 'object' && cfg.configValue !== null) {
+      const val = cfg.configValue;
+      const num = Number(
+        val.ratePhivo !== undefined ? val.ratePhivo :
+        (val.rateUsd !== undefined ? val.rateUsd :
+        (val.rewardPerNode !== undefined ? val.rewardPerNode : NaN))
+      );
+      return isNaN(num) || num <= 0 ? null : num;
+    }
     const rate = Number(cfg.configValue);
     return isNaN(rate) || rate <= 0 ? null : rate;
   }

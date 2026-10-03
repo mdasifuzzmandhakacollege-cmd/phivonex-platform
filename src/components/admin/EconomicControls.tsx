@@ -219,15 +219,11 @@ export const EconomicControls: React.FC = () => {
         }
         parsedValue = num;
       } else if (editingConfig.configKey === 'NODE_REWARD_RATE_PER_EPOCH') {
-        if (editValueInput.trim() === '' || editValueInput.trim().toLowerCase() === 'null') {
-          parsedValue = null;
-        } else {
-          const num = parseFloat(editValueInput);
-          if (isNaN(num) || num <= 0) {
-            throw new Error('Reward rate must be null (unconfigured) or positive number.');
-          }
-          parsedValue = num;
+        const num = parseFloat(editValueInput);
+        if (isNaN(num) || num <= 0) {
+          throw new Error('Reward rate must be a positive numeric amount (e.g. 10, 15, 20, 25).');
         }
+        parsedValue = num;
       } else if (editingConfig.configKey === 'INTERNAL_COIN_PRICE_USDT') {
         const price = parseFloat(coinPriceInput);
         if (isNaN(price) || price <= 0) {
@@ -555,7 +551,9 @@ export const EconomicControls: React.FC = () => {
             </div>
             <div className="p-3 rounded-lg bg-[#07101D] border border-white/[0.06]">
               <span className="text-[10px] text-[#98A2B3] block">Daily PHIVO Emission</span>
-              <span className="text-sm font-bold text-[#32D583]">25 PHIVO / Day</span>
+              <span className="text-sm font-bold text-[#32D583]">
+                {rewardRate?.configValue ? `${Number(rewardRate.configValue)} PHIVO / Day (Admin Controlled)` : 'Dynamic Protocol Governed'}
+              </span>
             </div>
             <div className="p-3 rounded-lg bg-[#07101D] border border-white/[0.06]">
               <span className="text-[10px] text-[#98A2B3] block">Node Term</span>
@@ -792,18 +790,21 @@ export const EconomicControls: React.FC = () => {
             </div>
           </div>
 
-          {/* Configured Reward Rate */}
+          {/* DAILY PHIVO REWARD Control */}
           <div className="p-4 rounded-xl bg-[#05070B] border border-white/[0.06] flex flex-col justify-between space-y-3">
             <div>
               <div className="flex items-center justify-between">
-                <span className="text-xs font-semibold text-[#98A2B3]">Reward Rate per Node / Epoch</span>
+                <span className="text-xs font-bold text-white uppercase tracking-wider">DAILY PHIVO REWARD</span>
                 <span className="text-[10px] font-mono text-[#00CFFF]">v{rewardRate?.version || 1}</span>
               </div>
               <div className="mt-1">
                 {rewardRate?.configValue !== null && rewardRate?.configValue !== undefined ? (
-                  <span className="text-2xl font-extrabold font-mono text-amber-400">
-                    ${Number(rewardRate.configValue).toFixed(4)} <span className="text-xs text-[#98A2B3]">USD</span>
-                  </span>
+                  <div>
+                    <span className="text-xs text-[#98A2B3] block">Current Active Rate:</span>
+                    <span className="text-2xl font-extrabold font-mono text-amber-400">
+                      {Number(rewardRate.configValue)} <span className="text-xs text-[#98A2B3]">PHIVO / Eligible Epoch</span>
+                    </span>
+                  </div>
                 ) : (
                   <span className="text-sm font-bold font-mono text-rose-400 flex items-center gap-1">
                     <AlertTriangle className="w-4 h-4 text-rose-400" />
@@ -812,18 +813,18 @@ export const EconomicControls: React.FC = () => {
                 )}
               </div>
               <p className="text-[11px] text-[#98A2B3] mt-1">
-                Authoritative amount credited per Active Node in each settled epoch.
+                Authoritative protocol emission distributed per eligible active Node in future epochs.
               </p>
             </div>
             <div className="pt-2 flex items-center justify-between border-t border-white/[0.04]">
               <span className="text-[10px] text-white/50 font-mono">
-                {rewardRate?.configValue ? 'Rate Active' : 'No default assumed'}
+                {rewardRate?.configValue ? `${Number(rewardRate.configValue)} PHIVO / Epoch` : 'No default assumed'}
               </span>
               <button
                 onClick={() => rewardRate && handleOpenEdit(rewardRate)}
                 className="px-3 py-1 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 text-[11px] font-bold border border-amber-500/30 flex items-center gap-1 cursor-pointer"
               >
-                <Edit3 className="w-3 h-3" /> Set Reward Rate
+                <Edit3 className="w-3 h-3" /> Set Daily PHIVO Reward
               </button>
             </div>
           </div>
@@ -1388,7 +1389,9 @@ export const EconomicControls: React.FC = () => {
             ) : (
               <div className="space-y-1">
                 <label className="text-xs font-bold text-white block">
-                  New Value {editingConfig.configKey === 'NODE_REWARD_RATE_PER_EPOCH' && '(Leave blank or null for unconfigured)'}
+                  {editingConfig.configKey === 'NODE_REWARD_RATE_PER_EPOCH'
+                    ? 'New Rate (PHIVO / Eligible Epoch, e.g. 10, 15, 20, 25)'
+                    : 'New Value'}
                 </label>
                 <input
                   type="text"

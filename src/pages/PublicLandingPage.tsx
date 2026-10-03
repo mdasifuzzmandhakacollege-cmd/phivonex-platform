@@ -114,7 +114,7 @@ export const PublicLandingPage: React.FC<PublicLandingPageProps> = ({ onNavigate
     },
     {
       q: 'What is a Genesis Node?',
-      a: 'A Genesis Node is a structured participation unit within the PHIVONEX ecosystem. Genesis V1 nodes feature a configured purchase-time snapshot model with a lifetime allocation cap of 10,000 PHIVO emitted over 400 eligible daily epochs at 25 PHIVO per day.',
+      a: 'A Genesis Node is a structured participation unit within the PHIVONEX ecosystem. Genesis V1 nodes feature a lifetime allocation cap of 10,000 PHIVO emitted across eligible daily epochs. Daily PHIVO emission is governed by the active protocol economic configuration.',
     },
     {
       q: 'What is PHIVO?',
@@ -300,7 +300,7 @@ export const PublicLandingPage: React.FC<PublicLandingPageProps> = ({ onNavigate
             {/* Kicker Eyebrow Tag */}
             <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-[#00CFFF]/10 border border-[#00CFFF]/30 text-xs font-mono text-[#00CFFF]">
               <span className="w-2 h-2 rounded-full bg-[#00CFFF] animate-ping" />
-              <span className="uppercase tracking-widest font-bold">BUILDING A TRANSPARENT NODE ECONOMY</span>
+              <span className="uppercase tracking-widest font-bold">Genesis Node Economy</span>
             </div>
 
             {/* Main Headline */}
@@ -378,7 +378,7 @@ export const PublicLandingPage: React.FC<PublicLandingPageProps> = ({ onNavigate
                   <Globe className="w-3.5 h-3.5 text-[#00CFFF]" />
                   <span>Global Participation</span>
                 </div>
-                <p className="text-[11px] text-[#98A2B3]">10,000 Genesis Node cap</p>
+                <p className="text-[11px] text-[#98A2B3]">Structured Node Participation</p>
               </div>
             </div>
 
@@ -437,8 +437,8 @@ export const PublicLandingPage: React.FC<PublicLandingPageProps> = ({ onNavigate
               {/* Bottom Metrics Bar */}
               <div className="grid grid-cols-2 gap-2 pt-3 border-t border-white/[0.08] relative z-10 text-left">
                 <div className="p-2.5 rounded-xl bg-[#05070B] border border-white/[0.06]">
-                  <span className="text-[10px] font-mono text-[#98A2B3] uppercase block">Genesis Cap</span>
-                  <span className="text-xs font-bold font-mono text-white">10,000 Nodes</span>
+                  <span className="text-[10px] font-mono text-[#98A2B3] uppercase block">Architecture</span>
+                  <span className="text-xs font-bold font-mono text-white">Genesis V1 Architecture</span>
                 </div>
                 <div className="p-2.5 rounded-xl bg-[#05070B] border border-white/[0.06]">
                   <span className="text-[10px] font-mono text-[#98A2B3] uppercase block">Max Supply</span>
@@ -460,9 +460,9 @@ export const PublicLandingPage: React.FC<PublicLandingPageProps> = ({ onNavigate
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 text-left">
             
             <div className="p-4 rounded-2xl bg-[#05070B] border border-white/[0.06] hover:border-[#00CFFF]/30 transition-all duration-300">
-              <div className="flex items-center gap-2 text-xs font-bold text-[#00CFFF] font-mono uppercase mb-1">
+              <div className="flex items-center gap-2 text-xs font-bold text-[#00CFFF] font-mono mb-1">
                 <Server className="w-4 h-4" />
-                <span>GENESIS NODE ECONOMY</span>
+                <span>Genesis Node Economy</span>
               </div>
               <p className="text-xs text-slate-300">
                 Structured participation model with snapshotted lifecycle terms.
@@ -495,7 +495,7 @@ export const PublicLandingPage: React.FC<PublicLandingPageProps> = ({ onNavigate
                 <span>UNIFIED EXPERIENCE</span>
               </div>
               <p className="text-xs text-slate-300">
-                Current Genesis Capacity: 10,000 Nodes in a single unified platform.
+                Structured Genesis Node participation in a single unified platform.
               </p>
             </div>
 
@@ -621,7 +621,7 @@ export const PublicLandingPage: React.FC<PublicLandingPageProps> = ({ onNavigate
               </h2>
 
               <p className="text-sm text-slate-300 leading-relaxed">
-                Genesis V1 Nodes form the foundational infrastructure participation layer. Each Genesis V1 Node features a purchase-time economic snapshot model that locks in configured emission parameters upon activation.
+                Genesis V1 Nodes form the foundational infrastructure participation layer. Each Genesis V1 Node participates in the protocol with lifetime allocation terms, while daily PHIVO emission is governed by the active protocol economic configuration.
               </p>
 
               {/* Public-Safe Specifications Grid */}
@@ -643,7 +643,7 @@ export const PublicLandingPage: React.FC<PublicLandingPageProps> = ({ onNavigate
 
                 <div className="p-3 rounded-2xl bg-[#05070B] border border-white/[0.08]">
                   <span className="text-[10px] text-[#98A2B3] uppercase block">Daily Emission</span>
-                  <span className="font-bold text-white">25 PHIVO / Day</span>
+                  <span className="font-bold text-white">Protocol Governed</span>
                 </div>
 
                 <div className="p-3 rounded-2xl bg-[#05070B] border border-white/[0.08]">
@@ -652,8 +652,8 @@ export const PublicLandingPage: React.FC<PublicLandingPageProps> = ({ onNavigate
                 </div>
 
                 <div className="p-3 rounded-2xl bg-[#05070B] border border-white/[0.08]">
-                  <span className="text-[10px] text-[#98A2B3] uppercase block">Node Limit</span>
-                  <span className="font-bold text-purple-400">10,000 Capacity</span>
+                  <span className="text-[10px] text-[#98A2B3] uppercase block">Participation</span>
+                  <span className="font-bold text-purple-400">Structured Node Participation</span>
                 </div>
               </div>
 
@@ -661,7 +661,7 @@ export const PublicLandingPage: React.FC<PublicLandingPageProps> = ({ onNavigate
               <div className="p-4 rounded-2xl bg-[#00CFFF]/10 border border-[#00CFFF]/30 flex items-start gap-3 text-xs text-[#00CFFF]">
                 <ShieldCheck className="w-5 h-5 shrink-0 mt-0.5" />
                 <p className="text-slate-200 leading-normal">
-                  <strong className="text-white">Snapshot Guarantee:</strong> Genesis Node economics are snapshotted at activation, allowing historical node terms to remain traceable independently of future configuration changes.
+                  <strong className="text-white">Protocol Governance:</strong> Genesis Node lifetime allocations and purchase parameters are preserved, while daily PHIVO emission is governed by the active protocol economic configuration.
                 </p>
               </div>
 
@@ -808,7 +808,7 @@ export const PublicLandingPage: React.FC<PublicLandingPageProps> = ({ onNavigate
                   <div className="w-full grid grid-cols-3 gap-2.5 pt-2 border-t border-white/[0.08] relative z-10 text-center font-mono">
                     <div className="p-2.5 rounded-xl bg-[#05070B]/90 border border-white/[0.06] space-y-0.5">
                       <span className="text-[9px] text-[#98A2B3] uppercase tracking-wider block">Daily Emission</span>
-                      <span className="text-xs font-bold text-white block">25 PHIVO</span>
+                      <span className="text-xs font-bold text-white block">Protocol Governed</span>
                     </div>
 
                     <div className="p-2.5 rounded-xl bg-[#05070B]/90 border border-white/[0.06] space-y-0.5">
@@ -840,8 +840,8 @@ export const PublicLandingPage: React.FC<PublicLandingPageProps> = ({ onNavigate
                   </div>
 
                   <div className="flex items-center justify-between text-[11px] font-mono text-[#98A2B3]">
-                    <span>25 PHIVO / Eligible Day</span>
-                    <span className="text-slate-200 font-semibold">➔ 10,000 PHIVO Lifetime Allocation</span>
+                    <span>Daily PHIVO emission is governed by the active protocol economic configuration.</span>
+                    <span className="text-slate-200 font-semibold">➔ 10,000 PHIVO Cap</span>
                   </div>
                 </div>
 
@@ -1429,8 +1429,8 @@ export const PublicLandingPage: React.FC<PublicLandingPageProps> = ({ onNavigate
             {/* 4 Protocol Flow Stages */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
               {[
-                { stage: '1. Node Activation', status: 'State Validated', desc: 'Purchase-time economic snapshot recorded' },
-                { stage: '2. Epoch Processing', status: 'Emission Calculated', desc: 'Daily emission distributed to eligible nodes' },
+                { stage: '1. Node Activation', status: 'State Validated', desc: 'Node participation terms recorded' },
+                { stage: '2. Epoch Processing', status: 'Emission Calculated', desc: 'Protocol emission distributed to eligible nodes' },
                 { stage: '3. Ledger Verification', status: 'Double-Entry Posted', desc: 'Auditable balance entries updated' },
                 { stage: '4. Ecosystem Sync', status: 'Wallet Synchronized', desc: 'Unified available USDT updated' },
               ].map((stg, i) => (
@@ -1544,7 +1544,7 @@ export const PublicLandingPage: React.FC<PublicLandingPageProps> = ({ onNavigate
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5 text-left">
             {[
-              { num: '01', title: 'Purchase-Time Economic Snapshots', desc: 'Node terms are snapshotted at activation, locking in historical reward rates.' },
+              { num: '01', title: 'Dynamic Protocol Emission', desc: 'Daily PHIVO emission is governed by the active protocol economic configuration.' },
               { num: '02', title: 'Lifetime-Capped Node Allocation', desc: '10,000 PHIVO maximum lifetime emission cap per Genesis V1 Node.' },
               { num: '03', title: 'Server-Validated Reward Engines', desc: 'Epoch reward engines execute server-side with cryptographic ledger checks.' },
               { num: '04', title: 'Unified Spendable USDT Ledger', desc: 'All settled USDT credits converge into one spendable wallet balance.' },
@@ -1588,7 +1588,7 @@ export const PublicLandingPage: React.FC<PublicLandingPageProps> = ({ onNavigate
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 text-left">
             {[
-              { phase: 'PHASE 01', title: 'Genesis Infrastructure', desc: 'Launch of 10,000 Genesis Node cap, server-authoritative ledger, and BEP-20 token contract.' },
+              { phase: 'PHASE 01', title: 'Genesis Infrastructure', desc: 'Launch of Genesis Node architecture, server-authoritative ledger, and BEP-20 token contract.' },
               { phase: 'PHASE 02', title: 'Ecosystem Expansion', desc: 'Integration of unified USDT wallet, PHIVO conversion module, and multi-layer network incentives.' },
               { phase: 'PHASE 03', title: 'Utility Integration', desc: 'Enhanced platform utilities, non-cash recognition systems, and real-time in-app synchronization.' },
               { phase: 'PHASE 04', title: 'Global Network Growth', desc: 'Expanded operator tools, international leadership events, and institutional integrations.' },

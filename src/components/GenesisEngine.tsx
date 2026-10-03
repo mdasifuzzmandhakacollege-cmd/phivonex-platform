@@ -14,6 +14,7 @@ export interface GenesisEngineProps {
   currentDay?: number;
   totalDays?: number;
   isEmitting?: boolean;
+  dailyEmission?: number;
   className?: string;
 }
 
@@ -28,6 +29,7 @@ export const GenesisEngine: React.FC<GenesisEngineProps> = ({
   currentDay = 127,
   totalDays = 400,
   isEmitting = true,
+  dailyEmission,
   className = '',
 }) => {
   const prefersReducedMotion = useReducedMotion();
@@ -243,7 +245,7 @@ export const GenesisEngine: React.FC<GenesisEngineProps> = ({
               {isMatured
                 ? '400-DAY MATURED — 100% DISTRIBUTED'
                 : status === 'EMITTING'
-                ? 'EMITTING — 25 PHIVO/DAY'
+                ? (dailyEmission ? `EMITTING — ${dailyEmission} PHIVO/DAY` : 'EMITTING')
                 : isEngineActive
                 ? 'ACTIVE / EMITTING'
                 : `STATUS: ${status}`}
@@ -377,7 +379,7 @@ export const GenesisEngine: React.FC<GenesisEngineProps> = ({
 
             <div className="flex items-center justify-between text-[10px] font-mono text-[#98A2B3]">
               <span>Day {currentDay} of {totalDays}</span>
-              <span>25 PHIVO / Day ($2.50 @ $0.10)</span>
+              <span>{dailyEmission ? `${dailyEmission} PHIVO / Day` : 'Protocol Governed Emission'}</span>
             </div>
           </div>
 

@@ -60,10 +60,11 @@ export class ResendEmailProvider implements EmailProvider {
   }
 }
 
-// Instantiate Provider (Uses Resend whenever RESEND_API_KEY is provided)
+// Instantiate Provider (Uses Resend whenever RESEND_API_KEY is provided and not in test environment)
 export function getEmailProvider(): EmailProvider {
+  const isTest = process.env.NODE_ENV === 'test' || process.env.VITEST === 'true' || process.env.APP_ENV === 'test';
   const apiKey = process.env.RESEND_API_KEY;
-  if (apiKey && apiKey.trim() !== '' && !apiKey.includes('your_resend_api_key')) {
+  if (!isTest && apiKey && apiKey.trim() !== '' && !apiKey.includes('your_resend_api_key')) {
     return new ResendEmailProvider(apiKey.trim());
   }
   return new MockEmailProvider();

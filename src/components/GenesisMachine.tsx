@@ -13,6 +13,7 @@ export interface GenesisMachineProps {
   currentDay?: number;
   totalDays?: number;
   isEmitting?: boolean;
+  dailyEmission?: number;
   coinState?: PhivoCoinState;
   className?: string;
 }
@@ -27,6 +28,7 @@ export const GenesisMachine: React.FC<GenesisMachineProps> = ({
   currentDay = 127,
   totalDays = 400,
   isEmitting = true,
+  dailyEmission,
   coinState = 'GENERATED',
   className = '',
 }) => {
@@ -77,7 +79,7 @@ export const GenesisMachine: React.FC<GenesisMachineProps> = ({
               }`}
             />
             <span>
-              {isMatured ? '400-DAY MATURED — 100% DISTRIBUTED' : status === 'EMITTING' ? 'EMITTING — 25 PHIVO/DAY' : 'ACTIVE / EMITTING'}
+              {isMatured ? '400-DAY MATURED — 100% DISTRIBUTED' : status === 'EMITTING' ? (dailyEmission ? `EMITTING — ${dailyEmission} PHIVO/DAY` : 'EMITTING') : 'ACTIVE / EMITTING'}
             </span>
           </div>
         </div>

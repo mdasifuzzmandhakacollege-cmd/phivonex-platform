@@ -489,7 +489,7 @@ async function getWalletSummary(userId) {
       COALESCE(SUM(amount), 0) AS total_amount,
       COUNT(*) AS count
     FROM financial_ledger_entries
-    WHERE user_id = $1 AND status = 'SETTLED' AND (currency = 'USDT' OR currency = 'USD') AND source_type != 'NODE_REWARD'
+    WHERE user_id = $1 AND status = 'SETTLED' AND (currency = 'USDT' OR currency = 'USD')
     GROUP BY entry_type, source_type
     `,
     [userId]
@@ -519,8 +519,12 @@ async function getWalletSummary(userId) {
     const amt = Number(row.total_amount);
     const cnt = Number(row.count);
     transactionCount += cnt;
+    const st = row.source_type;
+    const isEarningSource = st === "REFERRAL_COMMISSION" || st === "MATCHING_BONUS" || st === "PROMOTION_BONUS" || st === "NODE_REWARD" || st === "ADMIN_ADJUSTMENT";
     if (row.entry_type === "CREDIT") {
-      totalEarned += amt;
+      if (isEarningSource) {
+        totalEarned += amt;
+      }
       if (row.source_type === "REFERRAL_COMMISSION") grossCredits.referral += amt;
       else if (row.source_type === "MATCHING_BONUS") grossCredits.matching += amt;
       else if (row.source_type === "PROMOTION_BONUS") grossCredits.promotion += amt;
@@ -531,7 +535,9 @@ async function getWalletSummary(userId) {
       if (row.source_type === "WITHDRAWAL") {
         withdrawalReversals += amt;
       } else {
-        earningReversals += amt;
+        if (isEarningSource) {
+          earningReversals += amt;
+        }
         if (row.source_type === "REFERRAL_COMMISSION") reversals.referral += amt;
         else if (row.source_type === "MATCHING_BONUS") reversals.matching += amt;
         else if (row.source_type === "PROMOTION_BONUS") reversals.promotion += amt;
@@ -551,15 +557,54 @@ async function getWalletSummary(userId) {
     swap: Math.max(0, grossCredits.swap - reversals.swap),
     deposit: Math.max(0, grossCredits.deposit - reversals.deposit)
   };
-  const netEarned = Math.max(0, totalEarned - earningReversals);
   const netWithdrawn = Math.max(0, totalDebited - withdrawalReversals);
-  const ledgerBalance = Math.max(0, netEarned - netWithdrawn);
+  const balRes = await db.query(
+    `
+    SELECT 
+      COALESCE(SUM(CASE 
+        WHEN entry_type = 'CREDIT' THEN amount 
+        WHEN entry_type = 'DEBIT' THEN -amount 
+        WHEN entry_type = 'REVERSAL' AND source_type = 'WITHDRAWAL' THEN amount 
+        WHEN entry_type = 'REVERSAL' THEN -amount 
+        ELSE 0 
+      END), 0) AS available_balance
+    FROM financial_ledger_entries
+    WHERE user_id = $1 AND status = 'SETTLED' AND (currency = 'USDT' OR currency = 'USD')
+    `,
+    [userId]
+  );
+  const ledgerBalance = Math.max(0, Number(balRes.rows[0]?.available_balance || 0));
+  const transfersRes = await db.query(
+    `
+    SELECT entry_type, source_type, description, amount
+    FROM financial_ledger_entries
+    WHERE user_id = $1 AND status = 'SETTLED' AND (currency = 'USDT' OR currency = 'USD') AND source_type IN ('WALLET_TRANSFER', 'NODE_PURCHASE')
+    `,
+    [userId]
+  );
+  let nodeVaultCredits = 0;
+  let nodeVaultDebits = 0;
+  for (const tr of transfersRes.rows) {
+    const amt = Number(tr.amount);
+    const desc = (tr.description || "").toLowerCase();
+    if (tr.source_type === "WALLET_TRANSFER") {
+      if (tr.entry_type === "CREDIT" && (desc.includes("main") || desc.includes("transfer from"))) {
+        nodeVaultCredits += amt;
+      }
+    } else if (tr.source_type === "NODE_PURCHASE" && tr.entry_type === "DEBIT") {
+      nodeVaultDebits += amt;
+    }
+  }
+  const nodeVaultBalance = Math.max(0, nodeVaultCredits - nodeVaultDebits);
+  const mainWalletBalance = Math.max(0, ledgerBalance - nodeVaultBalance);
   return {
     totalEarned,
     totalReversed: earningReversals,
     totalWithdrawn: netWithdrawn,
     ledgerBalance,
     availableBalance: ledgerBalance,
+    mainWalletBalance,
+    nodeVaultBalance,
     transactionCount,
     breakdown,
     grossBreakdown: grossCredits
@@ -2352,6 +2397,10 @@ function getEffectiveDatabaseUrl() {
   if (process.env.SQL_HOST && process.env.SQL_USER && process.env.SQL_PASSWORD && process.env.SQL_DB_NAME) {
     const isUnix = process.env.SQL_HOST.startsWith("/");
     const port = process.env.SQL_PORT || "5432";
+    if (isUnix && !fs.existsSync(process.env.SQL_HOST)) {
+      console.warn(`[DB] Unix socket path (${process.env.SQL_HOST}) not found in runtime environment. Skipping external unix socket connection.`);
+      return void 0;
+    }
     return isUnix ? `postgresql://${encodeURIComponent(process.env.SQL_USER)}:${encodeURIComponent(process.env.SQL_PASSWORD)}@/${process.env.SQL_DB_NAME}?host=${encodeURIComponent(process.env.SQL_HOST)}` : `postgresql://${encodeURIComponent(process.env.SQL_USER)}:${encodeURIComponent(process.env.SQL_PASSWORD)}@${process.env.SQL_HOST}:${port}/${process.env.SQL_DB_NAME}`;
   }
   return void 0;
@@ -2382,11 +2431,18 @@ async function getDb() {
           console.log(`[DB Identity] Engine: PostgreSQL (Cloud SQL) | Host: ${safeHost} | Database: ${safeDbName}`);
           const isUnixSocket = databaseUrl.includes("host=/") || databaseUrl.includes("host=%2F") || databaseUrl.startsWith("/");
           let pool;
+          const poolConfig = {
+            connectionTimeoutMillis: 3e3,
+            idleTimeoutMillis: 3e4,
+            max: 20,
+            keepAlive: true,
+            keepAliveInitialDelayMillis: 1e4
+          };
           if (isUnixSocket) {
             pool = new Pool({
               connectionString: databaseUrl,
               ssl: false,
-              connectionTimeoutMillis: 1e4
+              ...poolConfig
             });
           } else {
             try {
@@ -2398,18 +2454,26 @@ async function getDb() {
                 password: decodeURIComponent(url.password),
                 database: (url.pathname ? url.pathname.replace(/^\//, "") : "postgres") || "postgres",
                 ssl: { rejectUnauthorized: false },
-                connectionTimeoutMillis: 1e4
+                ...poolConfig
               });
             } catch {
               pool = new Pool({
                 connectionString: databaseUrl,
                 ssl: { rejectUnauthorized: false },
-                connectionTimeoutMillis: 1e4
+                ...poolConfig
               });
             }
           }
+          pool.on("error", (err) => {
+            console.warn("[DB Pool Background Warning]:", err?.message || err);
+          });
+          await Promise.race([
+            pool.query("SELECT 1"),
+            new Promise(
+              (_, reject) => setTimeout(() => reject(new Error("PostgreSQL connection probe timeout (3000ms)")), 3e3)
+            )
+          ]);
           globalThis.__phivonexPool = pool;
-          await pool.query("SELECT 1");
           client = {
             async query(sql, params) {
               const res = await pool.query(sql, params);
@@ -2455,6 +2519,11 @@ async function getDb() {
           console.log("[DB] Successfully connected to PostgreSQL database.");
         } catch (poolErr) {
           console.error("[DB] Failed to connect to external PostgreSQL:", poolErr?.message || poolErr);
+          if (globalThis.__phivonexPool) {
+            await globalThis.__phivonexPool.end().catch(() => {
+            });
+            globalThis.__phivonexPool = void 0;
+          }
           if (isProduction) {
             throw new Error(`[CRITICAL_DATABASE_ERROR] Production PostgreSQL connection failed: ${poolErr?.message || poolErr}. DATABASE_URL is mandatory and PGlite is strictly prohibited in production.`);
           }
@@ -3118,9 +3187,9 @@ async function initSchema(client) {
           derivation_index INTEGER NOT NULL DEFAULT 0,
           derivation_reference VARCHAR(100) NOT NULL,
           created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
-          CONSTRAINT uq_user_deposit_chain_asset UNIQUE (user_id, chain_id, asset),
-          CONSTRAINT uq_deposit_chain_address UNIQUE (chain_id, address)
+          CONSTRAINT uq_user_deposit_chain_asset UNIQUE (user_id, chain_id, asset)
         );
+        ALTER TABLE user_deposit_addresses DROP CONSTRAINT IF EXISTS uq_deposit_chain_address;
       `);
     } catch (t171Err) {
       console.warn("[DB Migration] user_deposit_addresses init warning:", t171Err);
@@ -3133,6 +3202,15 @@ async function initSchema(client) {
       await client.exec(`CREATE INDEX IF NOT EXISTS idx_uda_chain_index ON user_deposit_addresses (chain_id, derivation_index);`);
     } catch (udaColErr) {
       console.warn("[DB Migration] user_deposit_addresses column migration warning:", udaColErr);
+    }
+    try {
+      await client.exec(`ALTER TABLE reward_epochs ADD COLUMN IF NOT EXISTS economic_config_version INTEGER NULL;`);
+      await client.exec(`ALTER TABLE reward_epochs ADD COLUMN IF NOT EXISTS reward_rate_used NUMERIC(14, 4) NULL;`);
+      await client.exec(`ALTER TABLE node_rewards ADD COLUMN IF NOT EXISTS reward_rate_used NUMERIC(14, 4) NULL;`);
+      await client.exec(`ALTER TABLE node_rewards ADD COLUMN IF NOT EXISTS economic_config_version INTEGER NULL;`);
+      await client.exec(`ALTER TABLE node_rewards ADD COLUMN IF NOT EXISTS business_date VARCHAR(20) NULL;`);
+    } catch (rewColErr) {
+      console.warn("[DB Migration] reward columns migration warning:", rewColErr);
     }
     try {
       await client.exec(`
@@ -3643,7 +3721,7 @@ async function restoreUsersFromFirestore(client) {
         const userId = u.id || u.uid || doc.id;
         const publicId = u.publicId || `PHX-${Math.floor(1e5 + Math.random() * 9e5)}`;
         const referralCode = u.referralCode || `PHX${Math.floor(1e4 + Math.random() * 9e4)}`;
-        const role = email === "md.asifuzzman.dhakacollege@gmail.com" || email === "admin@phivonex.com" ? "ADMIN" : u.role || "USER";
+        const role = email === "md.asifuzzman.dhakacollege@gmail.com" || email === "mdasifuzzman.official@gmail.com" || email === "admin@phivonex.com" ? "ADMIN" : u.role || "USER";
         await client.query(`
           INSERT INTO users (
             id, public_id, full_name, email, phone, country, password_hash,
@@ -4524,9 +4602,16 @@ async function isNodeRewardsEnabled() {
   }
   return true;
 }
-async function getNodeRewardRatePerEpoch() {
-  const cfg = await getEconomicConfigByKey("NODE_REWARD_RATE_PER_EPOCH");
+async function getNodeRewardRatePerEpoch(dbClient) {
+  const cfg = await getEconomicConfigByKey("NODE_REWARD_RATE_PER_EPOCH", dbClient);
   if (cfg && cfg.status === "ACTIVE" && cfg.configValue !== null && cfg.configValue !== void 0) {
+    if (typeof cfg.configValue === "object" && cfg.configValue !== null) {
+      const val = cfg.configValue;
+      const num = Number(
+        val.ratePhivo !== void 0 ? val.ratePhivo : val.rateUsd !== void 0 ? val.rateUsd : val.rewardPerNode !== void 0 ? val.rewardPerNode : NaN
+      );
+      return isNaN(num) || num <= 0 ? null : num;
+    }
     const rate = Number(cfg.configValue);
     return isNaN(rate) || rate <= 0 ? null : rate;
   }
@@ -6342,8 +6427,9 @@ __export(emailService_exports, {
 });
 import { v4 as uuidv410 } from "uuid";
 function getEmailProvider() {
+  const isTest = process.env.NODE_ENV === "test" || process.env.VITEST === "true" || process.env.APP_ENV === "test";
   const apiKey = process.env.RESEND_API_KEY;
-  if (apiKey && apiKey.trim() !== "" && !apiKey.includes("your_resend_api_key")) {
+  if (!isTest && apiKey && apiKey.trim() !== "" && !apiKey.includes("your_resend_api_key")) {
     return new ResendEmailProvider(apiKey.trim());
   }
   return new MockEmailProvider();
@@ -7459,7 +7545,6 @@ async function createWithdrawalRequest(params) {
         WHERE user_id = $1 
           AND status = 'SETTLED' 
           AND (currency = 'USDT' OR currency = 'USD') 
-          AND source_type != 'NODE_REWARD'
         `,
         [userId]
       );
@@ -8578,12 +8663,10 @@ async function broadcastBnbWithdrawal(params) {
     }
     if (treasuryBalanceWei < totalRequiredWei) {
       console.warn(`[Secure Signer] Hot wallet balance query returned ${ethers3.formatEther(treasuryBalanceWei)} BNB (required ${ethers3.formatEther(totalRequiredWei)} BNB)`);
-      if (payoutKey && !isMockRpc && process.env.NODE_ENV === "production" && treasuryBalanceWei === 0n) {
-        const errorMsg = `INSUFFICIENT_GAS_RESERVE: Payout hot wallet balance (${ethers3.formatEther(treasuryBalanceWei)} BNB) is insufficient for withdrawal (${withdrawal.amount} BNB) + gas (${ethers3.formatEther(requiredGasWei)} BNB). Please deposit BNB to ${activePayoutAddress}.`;
-        const gasErr = new Error(errorMsg);
-        gasErr.code = "INSUFFICIENT_GAS_RESERVE";
-        throw gasErr;
-      }
+      const errorMsg = `INSUFFICIENT_GAS_RESERVE: Payout hot wallet balance (${ethers3.formatEther(treasuryBalanceWei)} BNB) is insufficient for withdrawal (${withdrawal.amount} BNB) + gas (${ethers3.formatEther(requiredGasWei)} BNB). Please deposit BNB to ${activePayoutAddress}.`;
+      const gasErr = new Error(errorMsg);
+      gasErr.code = "INSUFFICIENT_GAS_RESERVE";
+      throw gasErr;
     }
     const nonce = await getNextTreasuryNonce(provider, activePayoutAddress);
     const bcwId = uuidv422();
@@ -8646,7 +8729,8 @@ async function broadcastBnbWithdrawal(params) {
     );
     const completedWithdrawal = await settleWithdrawalAction({
       withdrawalIdOrPublicId: withdrawal.publicWithdrawalId,
-      action: "COMPLETE"
+      action: "COMPLETE",
+      txHash
     });
     const bcRow = insertRes.rows[0];
     const blockchainRecord = {
@@ -8710,6 +8794,7 @@ async function hashPassword(password) {
 }
 async function verifyPassword(hash, plain) {
   try {
+    if (!hash || typeof hash !== "string" || !plain) return false;
     return await argon2.verify(hash, plain);
   } catch (err) {
     return false;
@@ -8729,6 +8814,7 @@ init_idGenerator();
 init_db();
 var ADMIN_EMAILS = [
   "md.asifuzzman.dhakacollege@gmail.com",
+  "mdasifuzzman.official@gmail.com",
   "admin@phivonex.com",
   (process.env.ADMIN_EMAIL || "").toLowerCase().trim()
 ].filter(Boolean);
@@ -9096,7 +9182,7 @@ async function syncUserToFirebase(userData) {
       }
     }
     try {
-      const isSuperAdmin = userData.email.toLowerCase() === "md.asifuzzman.dhakacollege@gmail.com" || userData.email.toLowerCase() === "admin@phivonex.com";
+      const isSuperAdmin = userData.email.toLowerCase() === "md.asifuzzman.dhakacollege@gmail.com" || userData.email.toLowerCase() === "mdasifuzzman.official@gmail.com" || userData.email.toLowerCase() === "admin@phivonex.com";
       await adminFirestore2.collection("users").doc(userData.id).set({
         id: userData.id,
         uid: userData.id,
@@ -9411,7 +9497,7 @@ router.post("/register/complete", registrationLimiter, async (req, res) => {
       status: "ACTIVE",
       passwordHash: data.passwordHash,
       referralCode: newReferralCode,
-      role: normalizedEmail === "md.asifuzzman.dhakacollege@gmail.com" || normalizedEmail === "admin@phivonex.com" ? "ADMIN" : "USER"
+      role: normalizedEmail === "md.asifuzzman.dhakacollege@gmail.com" || normalizedEmail === "mdasifuzzman.official@gmail.com" || normalizedEmail === "admin@phivonex.com" ? "ADMIN" : "USER"
     }).catch(() => {
     });
     setSessionCookie(res, rawSessionToken, true);
@@ -9543,7 +9629,7 @@ router.post("/register", registrationLimiter, async (req, res) => {
       password,
       passwordHash,
       referralCode: newReferralCode,
-      role: normalizedEmail === "md.asifuzzman.dhakacollege@gmail.com" || normalizedEmail === "admin@phivonex.com" ? "ADMIN" : "USER"
+      role: normalizedEmail === "md.asifuzzman.dhakacollege@gmail.com" || normalizedEmail === "mdasifuzzman.official@gmail.com" || normalizedEmail === "admin@phivonex.com" ? "ADMIN" : "USER"
     }).catch(() => {
     });
     setSessionCookie(res, rawSessionToken, true);
@@ -9711,7 +9797,7 @@ router.post("/login", loginLimiter, async (req, res) => {
           const restoredPasswordHash = docData.passwordHash;
           const restoredPublicId = docData.publicId || `PHX-${Math.floor(1e5 + Math.random() * 9e5)}`;
           const restoredReferralCode = docData.referralCode || `PHX${Math.floor(1e4 + Math.random() * 9e4)}`;
-          const isSuperAdmin = cleanIdentifier === "md.asifuzzman.dhakacollege@gmail.com" || cleanIdentifier === "admin@phivonex.com";
+          const isSuperAdmin = cleanIdentifier === "md.asifuzzman.dhakacollege@gmail.com" || cleanIdentifier === "mdasifuzzman.official@gmail.com" || cleanIdentifier === "admin@phivonex.com";
           const restoredRole = isSuperAdmin ? "ADMIN" : docData.role || "USER";
           let passwordValid = false;
           if (restoredPasswordHash) {
@@ -9767,11 +9853,12 @@ router.post("/login", loginLimiter, async (req, res) => {
       }
     }
     if (!user) {
-      await logSecurityEvent(db, {
+      logSecurityEvent(db, {
         userId: null,
         eventType: "FAILED_LOGIN",
         description: `Failed login attempt for identifier '${cleanIdentifier}' (user not found).`,
         userAgent: req.headers["user-agent"]
+      }).catch(() => {
       });
       res.status(401).json({
         error: "INVALID_CREDENTIALS",
@@ -9786,13 +9873,21 @@ router.post("/login", loginLimiter, async (req, res) => {
       });
       return;
     }
+    if (!user.password_hash) {
+      res.status(401).json({
+        error: "GOOGLE_AUTH_ACCOUNT",
+        message: 'This account was registered using Google Sign-In. Please click "Continue with Google" below to sign in.'
+      });
+      return;
+    }
     const isValid = await verifyPassword(user.password_hash, password);
     if (!isValid) {
-      await logSecurityEvent(db, {
+      logSecurityEvent(db, {
         userId: user.id,
         eventType: "FAILED_LOGIN",
         description: `Failed login attempt for user ${user.public_id} (incorrect password).`,
         userAgent: req.headers["user-agent"]
+      }).catch(() => {
       });
       res.status(401).json({
         error: "INVALID_CREDENTIALS",
@@ -9800,41 +9895,51 @@ router.post("/login", loginLimiter, async (req, res) => {
       });
       return;
     }
-    await db.query(`UPDATE users SET last_login_at = CURRENT_TIMESTAMP WHERE id = $1`, [user.id]);
-    const durationDays = rememberMe ? SESSION_DURATION_DAYS : 1;
-    const rawSessionToken = generateRandomToken(32);
-    const sessionTokenHash = hashToken(rawSessionToken);
-    const sessionExpiresAt = new Date(Date.now() + durationDays * 24 * 60 * 60 * 1e3);
-    const userAgent = req.headers["user-agent"] || "";
-    await db.query(
-      `INSERT INTO sessions (id, user_id, token_hash, user_agent, expires_at, created_at, last_used_at)
-       VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
-      [uuidv411(), user.id, sessionTokenHash, userAgent, sessionExpiresAt]
-    );
-    await logSecurityEvent(db, {
-      userId: user.id,
-      eventType: "LOGIN_SUCCESS",
-      description: "Session authentication handshake completed.",
-      userAgent
-    });
-    setSessionCookie(res, rawSessionToken, rememberMe);
-    res.status(200).json({
-      message: "Logged in successfully",
-      user: {
-        id: user.id,
-        publicId: user.public_id,
-        referralCode: user.referral_code,
-        fullName: user.full_name,
-        email: user.email,
-        phone: user.phone,
-        country: user.country,
-        status: user.status,
-        emailVerified: Boolean(user.email_verified_at)
-      }
-    });
+    try {
+      await db.query(`UPDATE users SET last_login_at = CURRENT_TIMESTAMP WHERE id = $1`, [user.id]);
+      const durationDays = rememberMe ? SESSION_DURATION_DAYS : 1;
+      const rawSessionToken = generateRandomToken(32);
+      const sessionTokenHash = hashToken(rawSessionToken);
+      const sessionExpiresAt = new Date(Date.now() + durationDays * 24 * 60 * 60 * 1e3);
+      const userAgent = (req.headers["user-agent"] || "").slice(0, 500);
+      await db.query(
+        `INSERT INTO sessions (id, user_id, token_hash, user_agent, expires_at, created_at, last_used_at)
+         VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+        [uuidv411(), user.id, sessionTokenHash, userAgent, sessionExpiresAt]
+      );
+      logSecurityEvent(db, {
+        userId: user.id,
+        eventType: "LOGIN_SUCCESS",
+        description: "Session authentication handshake completed.",
+        userAgent
+      }).catch(() => {
+      });
+      setSessionCookie(res, rawSessionToken, rememberMe);
+      res.status(200).json({
+        message: "Logged in successfully",
+        user: {
+          id: user.id,
+          publicId: user.public_id,
+          referralCode: user.referral_code,
+          fullName: user.full_name,
+          email: user.email,
+          phone: user.phone,
+          country: user.country,
+          status: user.status,
+          emailVerified: Boolean(user.email_verified_at)
+        }
+      });
+    } catch (sessionErr) {
+      console.error("[Auth API] Session creation error during login:", sessionErr);
+      res.status(500).json({
+        error: "SESSION_ERROR",
+        message: "Unable to initialize user session. Please try logging in again."
+      });
+    }
   } catch (err) {
     console.error("[Auth API] Error in /login:", err);
-    res.status(500).json({ error: "SERVER_ERROR", message: "An unexpected error occurred during sign in." });
+    const errMessage = err?.message?.includes("timeout") ? "Database connection is temporarily busy. Please retry in a moment." : err?.message || "Sign in failed. Please check your credentials and try again.";
+    res.status(401).json({ error: "AUTH_FAILED", message: errMessage });
   }
 });
 router.get("/me", requireAuth, async (req, res) => {
@@ -10724,6 +10829,19 @@ async function processNodeActivationCommission(db, orderId, nodeId, buyerUserId)
     return null;
   }
   const sponsorUser = sponsorUserRes.rows[0];
+  const sponsorNodeRes = await db.query(
+    `
+    SELECT COUNT(*)::int AS count 
+    FROM nodes 
+    WHERE owner_user_id = $1 AND status = 'ACTIVE'
+    `,
+    [sponsorUserId]
+  );
+  const sponsorActiveNodes = Number(sponsorNodeRes.rows[0]?.count || 0);
+  if (sponsorActiveNodes === 0) {
+    console.warn(`[ReferralCommission] Sponsor ${sponsorUserId} has no active Genesis Node. Direct referral commission skipped.`);
+    return null;
+  }
   const existingRes = await db.query(
     `
     SELECT 
@@ -10910,6 +11028,13 @@ function getPreviousDhakaBusinessDate(date = /* @__PURE__ */ new Date()) {
   d.setUTCDate(d.getUTCDate() - 1);
   return d.toISOString().split("T")[0];
 }
+function getPreviousUtcBusinessDate(date = /* @__PURE__ */ new Date()) {
+  const currentUtcStr = getUtcBusinessDate(date);
+  const [year, month, day] = currentUtcStr.split("-").map(Number);
+  const d = new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
+  d.setUTCDate(d.getUTCDate() - 1);
+  return d.toISOString().split("T")[0];
+}
 function getNextDhakaMidnightTime(from = /* @__PURE__ */ new Date()) {
   const currentDhakaStr = getDhakaBusinessDate(from);
   const [year, month, day] = currentDhakaStr.split("-").map(Number);
@@ -10923,6 +11048,26 @@ function getNextDhakaMidnightTime(from = /* @__PURE__ */ new Date()) {
   return {
     nextMidnightIso: nextMidnightDate.toISOString(),
     msUntilMidnight: diffMs
+  };
+}
+function getNextUtc0600Time(from = /* @__PURE__ */ new Date()) {
+  const now = from.getTime();
+  const d = new Date(now);
+  const targetToday = new Date(Date.UTC(
+    d.getUTCFullYear(),
+    d.getUTCMonth(),
+    d.getUTCDate(),
+    6,
+    0,
+    0,
+    0
+  ));
+  if (now >= targetToday.getTime()) {
+    targetToday.setUTCDate(targetToday.getUTCDate() + 1);
+  }
+  return {
+    nextRunIso: targetToday.toISOString(),
+    msUntilRun: Math.max(0, targetToday.getTime() - now)
   };
 }
 
@@ -11879,7 +12024,6 @@ async function purchaseNodeWithDepositBalance(userId, preferredAsset = "USDT") {
           WHERE user_id = $1 
             AND status = 'SETTLED' 
             AND (currency = 'USDT' OR currency = 'USD') 
-            AND source_type != 'NODE_REWARD'
           `,
           [userId]
         );
@@ -11975,14 +12119,14 @@ init_idGenerator();
 import { v4 as uuidv416 } from "uuid";
 
 // src/server/config/rewardConfig.ts
-var REWARD_CURRENCY = "USD";
+var REWARD_CURRENCY = "PHIVO";
 var MIN_REWARD_PER_NODE = 0.01;
 var MAX_REWARD_PER_NODE = 1e3;
 function getConfiguredRewardPerNode(override) {
   if (typeof override === "number" && !isNaN(override) && override > 0) {
     if (override < MIN_REWARD_PER_NODE || override > MAX_REWARD_PER_NODE) {
       throw new Error(
-        `Configured reward rate ${override} USD is outside allowed bounds [${MIN_REWARD_PER_NODE}, ${MAX_REWARD_PER_NODE}]`
+        `Configured reward rate ${override} PHIVO is outside allowed bounds [${MIN_REWARD_PER_NODE}, ${MAX_REWARD_PER_NODE}]`
       );
     }
     return override;
@@ -11993,7 +12137,7 @@ function getConfiguredRewardPerNode(override) {
     if (!isNaN(parsed) && parsed > 0) {
       if (parsed < MIN_REWARD_PER_NODE || parsed > MAX_REWARD_PER_NODE) {
         throw new Error(
-          `Configured reward rate ${parsed} USD is outside allowed bounds [${MIN_REWARD_PER_NODE}, ${MAX_REWARD_PER_NODE}]`
+          `Configured reward rate ${parsed} PHIVO is outside allowed bounds [${MIN_REWARD_PER_NODE}, ${MAX_REWARD_PER_NODE}]`
         );
       }
       return parsed;
@@ -12008,7 +12152,26 @@ init_economicService();
 init_notificationService();
 async function createRewardEpoch(params) {
   const db = await getDb();
-  const rewardRate = getConfiguredRewardPerNode(params?.rewardPerNode);
+  let rewardRate = null;
+  let configVersion = null;
+  if (params?.rewardPerNode !== void 0) {
+    rewardRate = getConfiguredRewardPerNode(params.rewardPerNode);
+  } else {
+    const activeCfg = await getEconomicConfigByKey("NODE_REWARD_RATE_PER_EPOCH");
+    if (activeCfg && activeCfg.status === "ACTIVE" && activeCfg.configValue !== null && activeCfg.configValue !== void 0) {
+      configVersion = activeCfg.version;
+      if (typeof activeCfg.configValue === "object" && activeCfg.configValue !== null) {
+        const val = activeCfg.configValue;
+        rewardRate = Number(
+          val.ratePhivo !== void 0 ? val.ratePhivo : val.rateUsd !== void 0 ? val.rateUsd : val.rewardPerNode !== void 0 ? val.rewardPerNode : NaN
+        );
+      } else {
+        rewardRate = Number(activeCfg.configValue);
+      }
+    } else {
+      rewardRate = getConfiguredRewardPerNode();
+    }
+  }
   const maxRes = await db.query(
     `SELECT COALESCE(MAX(epoch_number), 0) + 1 AS next_num FROM reward_epochs`
   );
@@ -12023,12 +12186,12 @@ async function createRewardEpoch(params) {
   const res = await db.query(
     `
     INSERT INTO reward_epochs (
-      id, public_epoch_id, epoch_number, start_at, end_at, reward_per_node, currency, status, created_at
+      id, public_epoch_id, epoch_number, start_at, end_at, reward_per_node, reward_rate_used, economic_config_version, currency, status, created_at
     )
-    VALUES ($1, $2, $3, $4, $5, $6, $7, 'OPEN', CURRENT_TIMESTAMP)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'OPEN', CURRENT_TIMESTAMP)
     RETURNING *
     `,
-    [id, publicEpochId, epochNumber, startAt, endAt, rewardRate, REWARD_CURRENCY]
+    [id, publicEpochId, epochNumber, startAt, endAt, rewardRate, rewardRate, configVersion, REWARD_CURRENCY]
   );
   const row = res.rows[0];
   return {
@@ -12038,6 +12201,8 @@ async function createRewardEpoch(params) {
     startAt: new Date(row.start_at).toISOString(),
     endAt: new Date(row.end_at).toISOString(),
     rewardPerNode: row.reward_per_node !== null && row.reward_per_node !== void 0 ? Number(row.reward_per_node) : null,
+    rewardRateUsed: row.reward_rate_used !== null && row.reward_rate_used !== void 0 ? Number(row.reward_rate_used) : null,
+    economicConfigVersion: row.economic_config_version ? Number(row.economic_config_version) : null,
     currency: row.currency,
     status: row.status,
     settledAt: row.settled_at ? new Date(row.settled_at).toISOString() : null,
@@ -12089,12 +12254,28 @@ async function closeAndSettleEpoch(epochId, options) {
     };
   }
   let effectiveRate = null;
+  let configVersion = epoch.economic_config_version ? Number(epoch.economic_config_version) : null;
   if (options?.configuredRewardPerNode !== void 0) {
     effectiveRate = getConfiguredRewardPerNode(options.configuredRewardPerNode);
+  } else if (epoch.reward_rate_used !== null && !isNaN(Number(epoch.reward_rate_used)) && Number(epoch.reward_rate_used) > 0) {
+    effectiveRate = Number(epoch.reward_rate_used);
   } else if (epoch.reward_per_node !== null && !isNaN(Number(epoch.reward_per_node)) && Number(epoch.reward_per_node) > 0) {
-    effectiveRate = getConfiguredRewardPerNode(Number(epoch.reward_per_node));
+    effectiveRate = Number(epoch.reward_per_node);
   } else {
-    effectiveRate = await getNodeRewardRatePerEpoch() || getConfiguredRewardPerNode();
+    const activeCfg = await getEconomicConfigByKey("NODE_REWARD_RATE_PER_EPOCH");
+    if (activeCfg && activeCfg.status === "ACTIVE" && activeCfg.configValue !== null && activeCfg.configValue !== void 0) {
+      configVersion = activeCfg.version;
+      if (typeof activeCfg.configValue === "object" && activeCfg.configValue !== null) {
+        const val = activeCfg.configValue;
+        effectiveRate = Number(
+          val.ratePhivo !== void 0 ? val.ratePhivo : val.rateUsd !== void 0 ? val.rateUsd : val.rewardPerNode !== void 0 ? val.rewardPerNode : NaN
+        );
+      } else {
+        effectiveRate = Number(activeCfg.configValue);
+      }
+    } else {
+      effectiveRate = getConfiguredRewardPerNode();
+    }
   }
   if (effectiveRate === null || effectiveRate <= 0) {
     return {
@@ -12111,17 +12292,22 @@ async function closeAndSettleEpoch(epochId, options) {
     };
   }
   const now = /* @__PURE__ */ new Date();
+  const epochBaseDate = epoch.start_at ? new Date(epoch.start_at) : now;
+  const businessDate = getUtcBusinessDate(epochBaseDate);
   await db.query(
-    `UPDATE reward_epochs SET status = 'COMPLETED', reward_per_node = $1, settled_at = $2 WHERE id = $3`,
-    [effectiveRate, now, epochId]
+    `UPDATE reward_epochs 
+     SET status = 'COMPLETED', reward_per_node = $1, reward_rate_used = $1, economic_config_version = $2, settled_at = $3 
+     WHERE id = $4`,
+    [effectiveRate, configVersion, now, epochId]
   );
   const activeNodesRes = await db.query(
     `
-    SELECT id, public_node_id, node_number, owner_user_id, daily_phivo_emission, lifetime_phivo_allocation, distributed_phivo
+    SELECT id, public_node_id, node_number, owner_user_id, daily_phivo_emission, lifetime_phivo_allocation, distributed_phivo, remaining_phivo
     FROM nodes
     WHERE (status = 'ACTIVE' OR status = 'EMITTING') 
       AND owner_user_id IS NOT NULL 
       AND (distributed_phivo IS NULL OR distributed_phivo < COALESCE(lifetime_phivo_allocation, 10000.00))
+      AND (remaining_phivo IS NULL OR remaining_phivo > 0)
       AND ($1::text IS NULL OR id::text = $1 OR public_node_id = $1)
     ORDER BY node_number ASC
     `,
@@ -12131,10 +12317,11 @@ async function closeAndSettleEpoch(epochId, options) {
   let rewardsCreated = 0;
   let totalDistributed = 0;
   for (const node of eligibleNodes) {
-    const dailyEmission = Number(node.daily_phivo_emission || effectiveRate || 25);
+    const configuredDailyReward = effectiveRate;
     const lifetimeCap = Number(node.lifetime_phivo_allocation || 1e4);
     const currentDist = Number(node.distributed_phivo || 0);
-    const actualEmission = Math.min(dailyEmission, Math.max(0, lifetimeCap - currentDist));
+    const remainingPhivo = node.remaining_phivo !== null && node.remaining_phivo !== void 0 ? Number(node.remaining_phivo) : Math.max(0, lifetimeCap - currentDist);
+    const actualEmission = Math.min(configuredDailyReward, Math.max(0, remainingPhivo));
     if (actualEmission <= 0) {
       await db.query(
         `UPDATE nodes SET status = 'MATURED', remaining_phivo = 0, updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
@@ -12147,13 +12334,26 @@ async function closeAndSettleEpoch(epochId, options) {
     const insRes = await db.query(
       `
       INSERT INTO node_rewards (
-        id, public_reward_id, epoch_id, node_id, owner_user_id, amount, currency, status, accrued_at, created_at
+        id, public_reward_id, epoch_id, node_id, owner_user_id, amount, currency, status, accrued_at,
+        reward_rate_used, economic_config_version, business_date, created_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6, 'PHIVO', 'ACCRUED', $7, CURRENT_TIMESTAMP)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, 'ACCRUED', $8, $9, $10, $11, CURRENT_TIMESTAMP)
       ON CONFLICT (node_id, epoch_id) DO NOTHING
       RETURNING *
       `,
-      [rewardId, publicRewardId, epochId, node.id, node.owner_user_id, actualEmission, now]
+      [
+        rewardId,
+        publicRewardId,
+        epochId,
+        node.id,
+        node.owner_user_id,
+        actualEmission,
+        epoch.currency || REWARD_CURRENCY,
+        now,
+        configuredDailyReward,
+        configVersion,
+        businessDate
+      ]
     );
     let actualRewardId;
     let actualPublicRewardId;
@@ -12165,8 +12365,8 @@ async function closeAndSettleEpoch(epochId, options) {
       rewardsCreated++;
       totalDistributed += actualAmount;
       const newDist = currentDist + actualAmount;
-      const newRem = Math.max(0, lifetimeCap - newDist);
-      const newStatus = newDist >= lifetimeCap ? "MATURED" : "EMITTING";
+      const newRem = Math.max(0, remainingPhivo - actualAmount);
+      const newStatus = newRem <= 0 || newDist >= lifetimeCap ? "MATURED" : "EMITTING";
       await db.query(
         `
         UPDATE nodes
@@ -12264,6 +12464,7 @@ async function claimUserRewards(userId) {
 }
 async function getUserRewards(userId) {
   const db = await getDb();
+  const activeRate = await getNodeRewardRatePerEpoch();
   const res = await db.query(
     `
     SELECT 
@@ -12278,6 +12479,9 @@ async function getUserRewards(userId) {
       nr.accrued_at,
       nr.claimed_at,
       nr.reversed_at,
+      nr.reward_rate_used,
+      nr.economic_config_version,
+      nr.business_date,
       nr.created_at,
       re.public_epoch_id,
       re.epoch_number,
@@ -12319,6 +12523,9 @@ async function getUserRewards(userId) {
       accruedAt: new Date(r.accrued_at).toISOString(),
       claimedAt: r.claimed_at ? new Date(r.claimed_at).toISOString() : null,
       reversedAt: r.reversed_at ? new Date(r.reversed_at).toISOString() : null,
+      rewardRateUsed: r.reward_rate_used !== null && r.reward_rate_used !== void 0 ? Number(r.reward_rate_used) : null,
+      economicConfigVersion: r.economic_config_version !== null && r.economic_config_version !== void 0 ? Number(r.economic_config_version) : null,
+      businessDate: r.business_date || null,
       createdAt: new Date(r.created_at).toISOString()
     };
   });
@@ -12341,14 +12548,17 @@ async function getUserRewards(userId) {
     totalAccrued,
     totalClaimed,
     totalRewards,
+    dailyEmissionRate: activeRate,
+    protocolDailyEmission: activeRate,
     latestEpoch,
     history
   };
 }
 async function getUserRewardsSummary(userId) {
   const db = await getDb();
+  const activeRate = await getNodeRewardRatePerEpoch();
   const activeNodesRes = await db.query(
-    `SELECT COUNT(*) as count FROM nodes WHERE owner_user_id = $1 AND status = 'ACTIVE'`,
+    `SELECT COUNT(*) as count FROM nodes WHERE owner_user_id = $1 AND status IN ('ACTIVE', 'EMITTING', 'MATURED')`,
     [userId]
   );
   const activeNodesCount = Number(activeNodesRes.rows[0]?.count || 0);
@@ -12379,6 +12589,7 @@ async function getUserRewardsSummary(userId) {
     totalAccrued,
     totalClaimed,
     activeNodesCount,
+    protocolDailyEmission: activeRate,
     latestEpochNumber,
     latestSettlementTime
   };
@@ -12423,6 +12634,7 @@ async function getNodeRewardStatsForUser(userId) {
 }
 
 // src/server/routes/nodeRoutes.ts
+init_economicService();
 var router4 = Router4();
 router4.get("/stats", async (_req, res) => {
   try {
@@ -12503,6 +12715,7 @@ router4.get("/me", requireAuth, async (req, res) => {
       [user.id]
     );
     const rewardStats = await getNodeRewardStatsForUser(user.id);
+    const activeProtocolDailyReward = await getNodeRewardRatePerEpoch();
     const safeNodes = nodesRes.rows.map((n) => {
       const stat = rewardStats[n.id] || {
         totalRewards: 0,
@@ -12510,11 +12723,11 @@ router4.get("/me", requireAuth, async (req, res) => {
         latestRewardEpoch: null
       };
       const lifetimeAllocation = Number(n.lifetime_phivo_allocation || 1e4);
-      const dailyEmission = Number(n.daily_phivo_emission || 25);
+      const dailyEmission = activeProtocolDailyReward !== null ? activeProtocolDailyReward : n.daily_phivo_emission !== null && n.daily_phivo_emission !== void 0 ? Number(n.daily_phivo_emission) : 0;
       const distributedPhivo = Number(n.distributed_phivo || stat.totalRewards || 0);
       const remainingPhivo = Math.max(0, lifetimeAllocation - distributedPhivo);
       const progressPercent = Math.min(100, Number((distributedPhivo / lifetimeAllocation * 100).toFixed(2)));
-      const completedDays = Math.min(400, Math.floor(distributedPhivo / dailyEmission));
+      const completedDays = Math.min(400, dailyEmission > 0 ? Math.floor(distributedPhivo / dailyEmission) : 0);
       const currentDay = n.status === "MATURED" ? 400 : Math.min(400, completedDays + 1);
       return {
         publicNodeId: n.public_node_id,
@@ -12526,6 +12739,7 @@ router4.get("/me", requireAuth, async (req, res) => {
         lifetimePhivoAllocation: lifetimeAllocation,
         termDays: n.term_days || 400,
         dailyPhivoEmission: dailyEmission,
+        protocolDailyEmission: activeProtocolDailyReward,
         purchaseTimestamp: n.purchase_timestamp ? n.purchase_timestamp.toISOString() : n.activated_at ? n.activated_at.toISOString() : null,
         activatedAt: n.activated_at ? n.activated_at.toISOString() : null,
         maturityTimestamp: n.maturity_timestamp ? n.maturity_timestamp.toISOString() : n.activated_at ? new Date(new Date(n.activated_at).getTime() + 400 * 24 * 60 * 60 * 1e3).toISOString() : null,
@@ -12579,6 +12793,8 @@ async function validateUserNodePurchaseBalances(userId) {
   const usdtRequired = nodePriceUsd;
   const walletSummary = await getWalletSummary(userId);
   const availableUsdt = walletSummary.availableBalance;
+  const nodeVaultBalance = walletSummary.nodeVaultBalance;
+  const mainWalletBalance = walletSummary.mainWalletBalance;
   const bnbDepositsRes = await db.query(
     `
     SELECT COALESCE(SUM(amount), 0) AS total
@@ -12618,6 +12834,8 @@ async function validateUserNodePurchaseBalances(userId) {
       sufficient: bnbSufficient,
       missing: bnbSufficient ? 0 : bnbRequired > 0 ? Number((bnbRequired - availableBnb).toFixed(4)) : 0
     },
+    mainWalletBalance,
+    nodeVaultBalance,
     canActivateWithUsdt: usdtSufficient,
     canActivateWithBnb: bnbSufficient
   };
@@ -12661,19 +12879,25 @@ async function processNodePurchaseWithAssetBalance(userId, asset = "USDT") {
       throw error;
     }
     let reservation;
-    try {
-      reservation = await createNodeReservation(
-        userId,
-        `node_bal_req_${selectedAsset}_${userId}_${uuidv417()}`,
-        `DEPOSIT_${selectedAsset}`
-      );
-    } catch (err) {
-      const existingOrders = await getUserOrders(userId);
-      const pending = existingOrders.find((o) => o.status === "PENDING" && o.secondsRemaining > 0);
-      if (pending) {
-        reservation = { order: pending, isExisting: true };
-      } else {
-        throw err;
+    const existingOrders = await getUserOrders(userId);
+    const pending = existingOrders.find((o) => o.status === "PENDING" && o.secondsRemaining > 0);
+    if (pending) {
+      reservation = { order: pending, isExisting: true };
+    } else {
+      try {
+        reservation = await createNodeReservation(
+          userId,
+          `node_bal_req_${selectedAsset}_${userId}_${uuidv417()}`,
+          `DEPOSIT_${selectedAsset}`
+        );
+      } catch (err) {
+        const ordersAfterErr = await getUserOrders(userId);
+        const pendingAfterErr = ordersAfterErr.find((o) => o.status === "PENDING" && o.secondsRemaining > 0);
+        if (pendingAfterErr) {
+          reservation = { order: pendingAfterErr, isExisting: true };
+        } else {
+          throw err;
+        }
       }
     }
     if (reservation.order.status === "COMPLETED") {
@@ -12706,7 +12930,6 @@ async function processNodePurchaseWithAssetBalance(userId, asset = "USDT") {
             WHERE user_id = $1 
               AND status = 'SETTLED' 
               AND (currency = 'USDT' OR currency = 'USD') 
-              AND source_type != 'NODE_REWARD'
             `,
             [userId]
           );
@@ -15030,6 +15253,8 @@ rewardRouter.get("/me", requireAuth, async (req, res) => {
       totalAccrued: rewardsData.totalAccrued,
       totalClaimed: rewardsData.totalClaimed,
       totalRewards: rewardsData.totalRewards,
+      dailyEmissionRate: rewardsData.dailyEmissionRate,
+      protocolDailyEmission: rewardsData.protocolDailyEmission,
       latestEpoch: rewardsData.latestEpoch,
       history: rewardsData.history
     });
@@ -16232,7 +16457,7 @@ async function runFinancialReconciliation(options) {
           COALESCE(SUM(CASE WHEN entry_type = 'DEBIT' THEN amount ELSE 0 END), 0) as debits,
           COALESCE(SUM(CASE WHEN entry_type = 'REVERSAL' THEN amount ELSE 0 END), 0) as reversals
         FROM financial_ledger_entries
-        WHERE user_id = $1 AND (currency = 'USDT' OR currency = 'USD') AND source_type != 'NODE_REWARD'
+        WHERE user_id = $1 AND (currency = 'USDT' OR currency = 'USD')
         `,
         [u.id]
       );
@@ -17643,25 +17868,103 @@ import { Router as Router15 } from "express";
 
 // src/server/services/bscKeyService.ts
 init_bscConfig();
+init_db();
 import { ethers as ethers6 } from "ethers";
+import { v4 as uuidv424 } from "uuid";
 async function getOrCreateUserDepositAddress(userId, requestedAsset = "USDT") {
+  const db = await getDb();
   const assetName = requestedAsset.toUpperCase() === "BNB" ? "BNB" : "USDT";
   const chainId = BSC_CONFIG.CHAIN_ID;
-  const rawTreasury = BSC_CONFIG.TREASURY_WALLET_ADDRESS || process.env.TREASURY_WALLET_ADDRESS;
-  const treasury = rawTreasury && ethers6.isAddress(rawTreasury) ? rawTreasury : "0x39F47C356d45eA49826a76C252794c4C83572D76";
-  const checksumTreasury = ethers6.getAddress(treasury);
+  const existing = await db.query(
+    `SELECT * FROM user_deposit_addresses WHERE user_id = $1 AND chain_id = $2 AND asset = $3`,
+    [userId, chainId, assetName]
+  );
+  if (existing.rows.length > 0) {
+    const row2 = existing.rows[0];
+    return {
+      id: row2.id,
+      userId: row2.user_id,
+      chainId: row2.chain_id,
+      asset: row2.asset,
+      address: row2.address,
+      derivationIndex: row2.derivation_index,
+      derivationReference: row2.derivation_reference,
+      createdAt: new Date(row2.created_at).toISOString()
+    };
+  }
+  const xpub = getDepositAddressXpub();
+  let address;
+  let derivationIndex = 0;
+  let derivationReference;
+  if (xpub && xpub.startsWith("xpub")) {
+    const countRes = await db.query(
+      `SELECT COUNT(*) AS cnt FROM user_deposit_addresses WHERE chain_id = $1`,
+      [chainId]
+    );
+    derivationIndex = Number(countRes.rows[0]?.cnt || 0) + 1;
+    const derived = deriveAddressFromXpub(xpub, derivationIndex);
+    address = derived.address;
+    derivationReference = derived.derivationReference;
+  } else {
+    address = ethers6.getAddress(BSC_CONFIG.TREASURY_WALLET_ADDRESS);
+    derivationReference = "direct-treasury";
+    derivationIndex = 0;
+  }
+  const id = uuidv424();
+  await db.query(
+    `
+    INSERT INTO user_deposit_addresses (
+      id, user_id, chain_id, asset, address, derivation_index, derivation_reference, created_at
+    )
+    VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP)
+    ON CONFLICT (user_id, chain_id, asset) DO UPDATE SET
+      address = EXCLUDED.address,
+      derivation_reference = EXCLUDED.derivation_reference,
+      derivation_index = EXCLUDED.derivation_index
+    `,
+    [id, userId, chainId, assetName, address, derivationIndex, derivationReference]
+  );
+  const finalRes = await db.query(
+    `SELECT * FROM user_deposit_addresses WHERE user_id = $1 AND chain_id = $2 AND asset = $3`,
+    [userId, chainId, assetName]
+  );
+  const row = finalRes.rows[0];
   return {
-    id: `treasury-${userId}-${assetName}`,
-    userId,
-    chainId,
-    asset: assetName,
-    address: checksumTreasury,
-    derivationIndex: 0,
-    derivationReference: "direct-treasury",
-    createdAt: (/* @__PURE__ */ new Date()).toISOString()
+    id: row.id,
+    userId: row.user_id,
+    chainId: row.chain_id,
+    asset: row.asset,
+    address: row.address,
+    derivationIndex: row.derivation_index,
+    derivationReference: row.derivation_reference,
+    createdAt: new Date(row.created_at).toISOString()
   };
 }
-async function findUserByDepositAddress(_address, _chainId) {
+function getDepositAddressXpub() {
+  return (process.env.DEPOSIT_ADDRESS_XPUB || "").trim();
+}
+function deriveAddressFromXpub(xpub, index) {
+  if (!xpub || !xpub.startsWith("xpub")) {
+    throw new Error("INVALID_XPUB: A valid public extended key (xpub) is required.");
+  }
+  if (typeof index !== "number" || index < 0) {
+    throw new Error("INVALID_INDEX: Derivation index must be a non-negative integer.");
+  }
+  const root = ethers6.HDNodeWallet.fromExtendedKey(xpub);
+  const child = root.deriveChild(index);
+  return { address: ethers6.getAddress(child.address), derivationReference: `m/44'/60'/0'/0/${index}` };
+}
+async function findUserByDepositAddress(address, chainId) {
+  const db = await getDb();
+  const targetChainId = chainId || BSC_CONFIG.CHAIN_ID;
+  const checksumAddress = ethers6.isAddress(address) ? ethers6.getAddress(address) : address;
+  const res = await db.query(
+    `SELECT user_id FROM user_deposit_addresses WHERE address = $1 AND chain_id = $2`,
+    [checksumAddress, targetChainId]
+  );
+  if (res.rows.length > 0) {
+    return res.rows[0].user_id;
+  }
   return null;
 }
 
@@ -17669,7 +17972,7 @@ async function findUserByDepositAddress(_address, _chainId) {
 init_db();
 init_bscConfig();
 init_idGenerator();
-import { v4 as uuidv424 } from "uuid";
+import { v4 as uuidv425 } from "uuid";
 init_walletLedgerService();
 init_notificationService();
 init_bscRpcProvider();
@@ -17756,7 +18059,7 @@ async function processBlockchainDepositEvent(params) {
     let depositRow;
     const now = /* @__PURE__ */ new Date();
     if (existing.rows.length === 0) {
-      const id = uuidv424();
+      const id = uuidv425();
       const publicDepositId = generateDepositPublicId();
       const initialStatus = isMatured ? "CONFIRMED" : confirmations > 0 ? "CONFIRMING" : "DETECTED";
       const confirmedAt = isMatured ? now : null;
@@ -18009,7 +18312,7 @@ init_db();
 init_idGenerator();
 init_notificationService();
 import { ethers as ethers9 } from "ethers";
-import { v4 as uuidv425 } from "uuid";
+import { v4 as uuidv426 } from "uuid";
 var DepositTransactionError = class extends Error {
   constructor(code, statusCode, message) {
     super(message);
@@ -18348,7 +18651,7 @@ depositRouter.post("/submit-txhash", requireAuth, depositLimiter, async (req, re
     let actualPublicDepositId = "";
     try {
       await db.transaction(async (trx) => {
-        const depositId = uuidv425();
+        const depositId = uuidv426();
         const publicDepositId = generateDepositPublicId();
         const insertRes = await trx.query(
           `
@@ -18385,7 +18688,7 @@ depositRouter.post("/submit-txhash", requireAuth, depositLimiter, async (req, re
         if (actualUserId !== userId) {
           throw new DepositTransactionError("DUPLICATE_TX_USER_MISMATCH", 409, "Transaction already linked to another user account.");
         }
-        const ledgerId = uuidv425();
+        const ledgerId = uuidv426();
         const publicTxnId = generateLedgerTransactionPublicId();
         const ledgerRes = await trx.query(
           `
@@ -19238,37 +19541,37 @@ init_db();
 // src/server/services/binaryMatchingScheduler.ts
 var schedulerTimer = null;
 var isRunning = false;
-async function executeMidnightCycle() {
-  const previousDate = getPreviousDhakaBusinessDate();
-  console.log(`[MatchingScheduler] \u{1F55B} 00:00 Asia/Dhaka reached. Starting settlement for previous business date: ${previousDate}`);
+async function executeDailyCycle() {
+  const previousDate = getPreviousUtcBusinessDate();
+  console.log(`[MatchingScheduler] \u{1F55B} 06:00 UTC reached. Starting daily matching settlement for previous business date: ${previousDate}`);
   try {
     const result = await runDailyMatchingSettlementCycle(previousDate);
     console.log(
-      `[MatchingScheduler] \u2705 Midnight settlement cycle finished for ${previousDate}: status=${result.status}, usersSettled=${result.usersSettled}, totalBonus=$${result.totalBonusUsd}, duration=${result.durationMs}ms`
+      `[MatchingScheduler] \u2705 Daily settlement cycle finished for ${previousDate}: status=${result.status}, usersSettled=${result.usersSettled}, totalBonus=$${result.totalBonusUsd}, duration=${result.durationMs}ms`
     );
   } catch (err) {
-    console.error(`[MatchingScheduler] \u274C Midnight settlement cycle failed for ${previousDate}:`, err);
+    console.error(`[MatchingScheduler] \u274C Daily settlement cycle failed for ${previousDate}:`, err);
   } finally {
-    scheduleNextMidnightRun();
+    scheduleNextDailyRun();
   }
 }
-function scheduleNextMidnightRun() {
-  const { nextMidnightIso, msUntilMidnight } = getNextDhakaMidnightTime();
-  console.log(`[MatchingScheduler] Next daily settlement scheduled for ${nextMidnightIso} (in ${Math.round(msUntilMidnight / 1e3)}s)`);
+function scheduleNextDailyRun() {
+  const { nextRunIso, msUntilRun } = getNextUtc0600Time();
+  console.log(`[MatchingScheduler] Next daily settlement scheduled for ${nextRunIso} (in ${Math.round(msUntilRun / 1e3)}s)`);
   if (schedulerTimer) {
     clearTimeout(schedulerTimer);
   }
   schedulerTimer = setTimeout(() => {
-    executeMidnightCycle().catch((err) => {
-      console.error("[MatchingScheduler] Unhandled error during midnight execution:", err);
+    executeDailyCycle().catch((err) => {
+      console.error("[MatchingScheduler] Unhandled error during 06:00 UTC execution:", err);
     });
-  }, msUntilMidnight);
+  }, msUntilRun);
 }
 function startMatchingScheduler() {
   if (isRunning) return;
   isRunning = true;
-  console.log("[MatchingScheduler] Initializing Daily Binary Matching Settlement Scheduler (Asia/Dhaka)...");
-  scheduleNextMidnightRun();
+  console.log("[MatchingScheduler] Initializing Daily Binary Matching Settlement Scheduler (06:00 UTC)...");
+  scheduleNextDailyRun();
 }
 
 // server.ts

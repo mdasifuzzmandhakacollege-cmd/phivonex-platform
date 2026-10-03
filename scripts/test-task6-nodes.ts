@@ -145,7 +145,7 @@ async function runTask6NodeTests() {
       if (row.status === 'RETIRED') retiredCount = c;
     }
 
-    const totalSum = availableCount + reservedCount + activeCount + retiredCount;
+    const totalSum = statsRes.rows.reduce((sum, r) => sum + Number(r.count), 0);
     assert(totalSum === GENESIS_NODE_CAP, `Supply Invariant Holds (Sum: ${totalSum} === 10,000)`);
     assert(NODE_BASE_PRICE_USD === 1000, `Authoritative Base Price USD Is Exactly $1,000`);
 
