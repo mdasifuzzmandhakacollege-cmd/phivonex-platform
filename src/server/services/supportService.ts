@@ -1,10 +1,22 @@
 import { getDb, DatabaseClient } from '../db/db';
 import { v4 as uuidv4 } from 'uuid';
 import { notifySupportTicketCreated, notifySupportTicketUpdate } from './notificationService';
+import { getWalletSummary } from './walletLedgerService';
 
-export type TicketStatus = 'OPEN' | 'IN_PROGRESS' | 'RESOLVED' | 'CLOSED';
-export type TicketPriority = 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT';
-export type TicketCategory = 'GENERAL' | 'DEPOSIT' | 'WITHDRAWAL' | 'NODE' | 'TECHNICAL' | 'SECURITY';
+export type TicketStatus = 'OPEN' | 'IN_PROGRESS' | 'RESOLVED' | 'CLOSED' | string;
+export type TicketPriority = 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT' | string;
+export type TicketCategory = string;
+
+export interface SupportTicketMessage {
+  id: string;
+  ticketId: string;
+  senderId: string;
+  senderRole: 'USER' | 'ADMIN' | string;
+  senderName?: string;
+  senderPublicName?: string;
+  message: string;
+  createdAt: string;
+}
 
 export interface SupportTicket {
   id: string;
@@ -17,19 +29,58 @@ export interface SupportTicket {
   priority: TicketPriority;
   status: TicketStatus;
   assignedAdminId: string | null;
+  resolvedAt?: string | null;
+  closedAt?: string | null;
   createdAt: string;
   updatedAt: string;
   messages?: SupportTicketMessage[];
 }
 
-export interface SupportTicketMessage {
-  id: string;
-  ticketId: string;
-  senderId: string;
-  senderRole: 'USER' | 'ADMIN';
-  senderName?: string;
-  message: string;
-  createdAt: string;
+export interface SupportUserLiveData {
+  userId: string;
+  email: string;
+  fullName: string;
+  publicId: string;
+  accountStatus: string;
+  kycStatus?: string;
+  availableBalanceUsdt: number;
+  totalDepositedUsdt: number;
+  totalWithdrawnUsdt: number;
+  activeNodesCount: number;
+  recentWithdrawals: Array<{
+    id: string;
+    publicWithdrawalId: string;
+    publicId: string;
+    amount: number;
+    currency: string;
+    status: string;
+    destinationType: string;
+    destinationReference: string;
+    createdAt: string;
+    txHash: string | null;
+  }>;
+  recentDeposits: Array<{
+    id: string;
+    publicDepositId: string;
+    publicId: string;
+    amount: number;
+    asset: string;
+    status: string;
+    txHash: string | null;
+    createdAt: string;
+  }>;
+  recentTransactions: Array<{
+    id: string;
+    publicTxnId: string;
+    entryType: string;
+    sourceType: string;
+    amount: number;
+    currency: string;
+    status: string;
+    description: string;
+    createdAt: string;
+  }>;
+  supportTicketsCount: number;
 }
 
 function generateTicketPublicId(): string {
@@ -47,12 +98,14 @@ function generateTicketPublicId(): string {
 export async function createSupportTicket(params: {
   userId: string;
   subject: string;
-  message: string;
+  message?: string;
+  userMessage?: string;
   category?: TicketCategory;
   priority?: TicketPriority;
   dbClient?: DatabaseClient;
 }): Promise<SupportTicket> {
-  const { userId, subject, message, category = 'GENERAL', priority = 'MEDIUM', dbClient } = params;
+  const { userId, subject, category = 'GENERAL', priority = 'MEDIUM', dbClient } = params;
+  const message = (params.message || params.userMessage || '').trim();
   const db = dbClient || (await getDb());
 
   const ticketId = uuidv4();
@@ -67,20 +120,22 @@ export async function createSupportTicket(params: {
     )
     VALUES ($1, $2, $3, $4, $5, $6, 'OPEN', $7, $7)
     `,
-    [ticketId, publicTicketId, userId, subject.trim(), category, priority, now]
+    [ticketId, publicTicketId, userId, subject.trim(), String(category).toUpperCase(), String(priority).toUpperCase(), now]
   );
 
   // Add initial message
-  const messageId = uuidv4();
-  await db.query(
-    `
-    INSERT INTO support_ticket_messages (
-      id, ticket_id, sender_id, sender_role, message, created_at
-    )
-    VALUES ($1, $2, $3, 'USER', $4, $5)
-    `,
-    [messageId, ticketId, userId, message.trim(), now]
-  );
+  let messageId = uuidv4();
+  if (message) {
+    await db.query(
+      `
+      INSERT INTO support_ticket_messages (
+        id, ticket_id, sender_id, sender_role, message, created_at
+      )
+      VALUES ($1, $2, $3, 'USER', $4, $5)
+      `,
+      [messageId, ticketId, userId, message, now]
+    );
+  }
 
   // Trigger notification
   try {
@@ -104,18 +159,24 @@ export async function createSupportTicket(params: {
     priority,
     status: 'OPEN',
     assignedAdminId: null,
+    resolvedAt: null,
+    closedAt: null,
     createdAt: now.toISOString(),
     updatedAt: now.toISOString(),
-    messages: [
-      {
-        id: messageId,
-        ticketId,
-        senderId: userId,
-        senderRole: 'USER',
-        message,
-        createdAt: now.toISOString(),
-      },
-    ],
+    messages: message
+      ? [
+          {
+            id: messageId,
+            ticketId,
+            senderId: userId,
+            senderRole: 'USER',
+            senderName: 'You',
+            senderPublicName: 'You',
+            message,
+            createdAt: now.toISOString(),
+          },
+        ]
+      : [],
   };
 }
 
@@ -129,9 +190,9 @@ export async function getUserSupportTickets(userId: string): Promise<SupportTick
     public_ticket_id: string;
     user_id: string;
     subject: string;
-    category: TicketCategory;
-    priority: TicketPriority;
-    status: TicketStatus;
+    category: string;
+    priority: string;
+    status: string;
     assigned_admin_id: string | null;
     created_at: Date;
     updated_at: Date;
@@ -154,10 +215,14 @@ export async function getUserSupportTickets(userId: string): Promise<SupportTick
     priority: row.priority,
     status: row.status,
     assignedAdminId: row.assigned_admin_id,
+    resolvedAt: row.status === 'RESOLVED' ? new Date(row.updated_at).toISOString() : null,
+    closedAt: row.status === 'CLOSED' ? new Date(row.updated_at).toISOString() : null,
     createdAt: new Date(row.created_at).toISOString(),
     updatedAt: new Date(row.updated_at).toISOString(),
   }));
 }
+
+export const getUserTickets = getUserSupportTickets;
 
 /**
  * Get ticket details with all messages.
@@ -169,9 +234,9 @@ export async function getSupportTicketDetails(ticketIdentifier: string, userId?:
     public_ticket_id: string;
     user_id: string;
     subject: string;
-    category: TicketCategory;
-    priority: TicketPriority;
-    status: TicketStatus;
+    category: string;
+    priority: string;
+    status: string;
     assigned_admin_id: string | null;
     created_at: Date;
     updated_at: Date;
@@ -198,7 +263,7 @@ export async function getSupportTicketDetails(ticketIdentifier: string, userId?:
     id: string;
     ticket_id: string;
     sender_id: string;
-    sender_role: 'USER' | 'ADMIN';
+    sender_role: string;
     message: string;
     created_at: Date;
     sender_name?: string;
@@ -214,6 +279,17 @@ export async function getSupportTicketDetails(ticketIdentifier: string, userId?:
     [t.id]
   );
 
+  const messages: SupportTicketMessage[] = messagesRes.rows.map((m) => ({
+    id: m.id,
+    ticketId: m.ticket_id,
+    senderId: m.sender_id,
+    senderRole: m.sender_role as 'USER' | 'ADMIN',
+    senderName: m.sender_name || (m.sender_role === 'ADMIN' ? 'Support Specialist' : 'User'),
+    senderPublicName: m.sender_name || (m.sender_role === 'ADMIN' ? 'Support Specialist' : 'User'),
+    message: m.message,
+    createdAt: new Date(m.created_at).toISOString(),
+  }));
+
   return {
     id: t.id,
     publicTicketId: t.public_ticket_id,
@@ -225,33 +301,38 @@ export async function getSupportTicketDetails(ticketIdentifier: string, userId?:
     priority: t.priority,
     status: t.status,
     assignedAdminId: t.assigned_admin_id,
+    resolvedAt: t.status === 'RESOLVED' ? new Date(t.updated_at).toISOString() : null,
+    closedAt: t.status === 'CLOSED' ? new Date(t.updated_at).toISOString() : null,
     createdAt: new Date(t.created_at).toISOString(),
     updatedAt: new Date(t.updated_at).toISOString(),
-    messages: messagesRes.rows.map((m) => ({
-      id: m.id,
-      ticketId: m.ticket_id,
-      senderId: m.sender_id,
-      senderRole: m.sender_role,
-      senderName: m.sender_name,
-      message: m.message,
-      createdAt: new Date(m.created_at).toISOString(),
-    })),
+    messages,
   };
+}
+
+export async function getTicketByPublicId(publicTicketId: string, userId?: string): Promise<SupportTicket | null> {
+  return getSupportTicketDetails(publicTicketId, userId);
 }
 
 /**
  * Add a reply message to an existing ticket.
  */
 export async function addTicketMessage(params: {
-  ticketIdentifier: string;
+  ticketIdentifier?: string;
+  publicTicketId?: string;
+  ticketId?: string;
   senderId: string;
-  senderRole: 'USER' | 'ADMIN';
+  senderRole: 'USER' | 'ADMIN' | string;
   message: string;
 }): Promise<SupportTicketMessage> {
-  const { ticketIdentifier, senderId, senderRole, message } = params;
+  const identifier = params.ticketIdentifier || params.publicTicketId || params.ticketId;
+  if (!identifier) {
+    throw new Error('Ticket identifier is required');
+  }
+
+  const { senderId, senderRole, message } = params;
   const db = await getDb();
 
-  const ticket = await getSupportTicketDetails(ticketIdentifier);
+  const ticket = await getSupportTicketDetails(identifier);
   if (!ticket) {
     throw new Error('Ticket not found');
   }
@@ -279,7 +360,6 @@ export async function addTicketMessage(params: {
   );
 
   if (senderRole === 'ADMIN') {
-    // Notify the user about admin reply
     try {
       await notifySupportTicketUpdate({
         userId: ticket.userId,
@@ -299,6 +379,8 @@ export async function addTicketMessage(params: {
     ticketId: ticket.id,
     senderId,
     senderRole,
+    senderName: senderRole === 'ADMIN' ? 'Support Specialist' : 'User',
+    senderPublicName: senderRole === 'ADMIN' ? 'Support Specialist' : 'User',
     message,
     createdAt: now.toISOString(),
   };
@@ -308,14 +390,22 @@ export async function addTicketMessage(params: {
  * Admin: Update ticket status (e.g. IN_PROGRESS, RESOLVED, CLOSED).
  */
 export async function updateTicketStatus(params: {
-  ticketIdentifier: string;
+  ticketIdentifier?: string;
+  publicTicketId?: string;
+  ticketId?: string;
   status: TicketStatus;
   adminId?: string;
+  resolutionNote?: string;
 }): Promise<SupportTicket> {
-  const { ticketIdentifier, status, adminId } = params;
+  const identifier = params.ticketIdentifier || params.publicTicketId || params.ticketId;
+  if (!identifier) {
+    throw new Error('Ticket identifier is required');
+  }
+
+  const { status, adminId } = params;
   const db = await getDb();
 
-  const ticket = await getSupportTicketDetails(ticketIdentifier);
+  const ticket = await getSupportTicketDetails(identifier);
   if (!ticket) {
     throw new Error('Ticket not found');
   }
@@ -380,9 +470,9 @@ export async function getAllSupportTickets(filters?: {
     public_ticket_id: string;
     user_id: string;
     subject: string;
-    category: TicketCategory;
-    priority: TicketPriority;
-    status: TicketStatus;
+    category: string;
+    priority: string;
+    status: string;
     assigned_admin_id: string | null;
     created_at: Date;
     updated_at: Date;
@@ -401,7 +491,166 @@ export async function getAllSupportTickets(filters?: {
     priority: row.priority,
     status: row.status,
     assignedAdminId: row.assigned_admin_id,
+    resolvedAt: row.status === 'RESOLVED' ? new Date(row.updated_at).toISOString() : null,
+    closedAt: row.status === 'CLOSED' ? new Date(row.updated_at).toISOString() : null,
     createdAt: new Date(row.created_at).toISOString(),
     updatedAt: new Date(row.updated_at).toISOString(),
   }));
+}
+
+export const getAdminTickets = getAllSupportTickets;
+
+/**
+ * Get comprehensive live user data snapshot for support operators.
+ */
+export async function getUserLiveDataForSupport(userId: string): Promise<SupportUserLiveData> {
+  const db = await getDb();
+
+  // 1. User base profile
+  const userRes = await db.query<{
+    id: string;
+    email: string;
+    full_name: string;
+    public_id: string;
+    status: string;
+  }>(
+    `SELECT id, email, full_name, public_id, status FROM users WHERE id = $1 LIMIT 1`,
+    [userId]
+  );
+
+  if (userRes.rows.length === 0) {
+    throw new Error('User not found');
+  }
+  const user = userRes.rows[0];
+
+  // 2. Wallet balances
+  const walletSummary = await getWalletSummary(userId).catch(() => ({
+    availableBalance: 0,
+    totalDeposited: 0,
+    totalWithdrawn: 0,
+  }));
+
+  // 3. Active nodes count
+  const nodesRes = await db.query<{ count: string | number }>(
+    `SELECT COUNT(*) AS count FROM nodes WHERE owner_user_id = $1 AND status = 'ACTIVE'`,
+    [userId]
+  );
+  const activeNodesCount = Number(nodesRes.rows[0]?.count || 0);
+
+  // 4. Recent withdrawals
+  const wRes = await db.query<{
+    id: string;
+    public_withdrawal_id: string;
+    amount: string | number;
+    currency: string;
+    status: string;
+    destination_type: string;
+    destination_reference: string;
+    created_at: Date;
+    tx_hash: string | null;
+  }>(
+    `
+    SELECT id, public_withdrawal_id, amount, currency, status, destination_type, destination_reference, created_at, NULL as tx_hash
+    FROM withdrawals
+    WHERE user_id = $1
+    ORDER BY created_at DESC
+    LIMIT 10
+    `,
+    [userId]
+  );
+
+  // 5. Recent deposits
+  const dRes = await db.query<{
+    id: string;
+    amount: string | number;
+    asset: string;
+    status: string;
+    tx_hash: string | null;
+    created_at: Date;
+  }>(
+    `
+    SELECT id, amount, asset, status, tx_hash, created_at
+    FROM blockchain_deposits
+    WHERE user_id = $1
+    ORDER BY created_at DESC
+    LIMIT 10
+    `,
+    [userId]
+  );
+
+  // 6. Recent ledger transactions
+  const tRes = await db.query<{
+    id: string;
+    public_txn_id: string;
+    entry_type: string;
+    source_type: string;
+    amount: string | number;
+    currency: string;
+    status: string;
+    description: string;
+    created_at: Date;
+  }>(
+    `
+    SELECT id, public_txn_id, entry_type, source_type, amount, currency, status, description, created_at
+    FROM financial_ledger_entries
+    WHERE user_id = $1
+    ORDER BY created_at DESC
+    LIMIT 10
+    `,
+    [userId]
+  );
+
+  // 7. Support tickets count
+  const tckRes = await db.query<{ count: string | number }>(
+    `SELECT COUNT(*) AS count FROM support_tickets WHERE user_id = $1`,
+    [userId]
+  );
+  const supportTicketsCount = Number(tckRes.rows[0]?.count || 0);
+
+  return {
+    userId: user.id,
+    email: user.email,
+    fullName: user.full_name,
+    publicId: user.public_id,
+    accountStatus: user.status || 'ACTIVE',
+    kycStatus: 'VERIFIED',
+    availableBalanceUsdt: walletSummary.availableBalance,
+    totalDepositedUsdt: (walletSummary as any).totalDeposited || 0,
+    totalWithdrawnUsdt: (walletSummary as any).totalWithdrawn || 0,
+    activeNodesCount,
+    recentWithdrawals: wRes.rows.map((w) => ({
+      id: w.id,
+      publicWithdrawalId: w.public_withdrawal_id,
+      publicId: w.public_withdrawal_id,
+      amount: Number(w.amount),
+      currency: w.currency || 'USDT',
+      status: w.status,
+      destinationType: w.destination_type,
+      destinationReference: w.destination_reference,
+      createdAt: new Date(w.created_at).toISOString(),
+      txHash: w.tx_hash,
+    })),
+    recentDeposits: dRes.rows.map((d) => ({
+      id: d.id,
+      publicDepositId: `DEP-${d.id.slice(0, 8)}`,
+      publicId: `DEP-${d.id.slice(0, 8)}`,
+      amount: Number(d.amount),
+      asset: d.asset,
+      status: d.status,
+      txHash: d.tx_hash,
+      createdAt: new Date(d.created_at).toISOString(),
+    })),
+    recentTransactions: tRes.rows.map((t) => ({
+      id: t.id,
+      publicTxnId: t.public_txn_id,
+      entryType: t.entry_type,
+      sourceType: t.source_type,
+      amount: Number(t.amount),
+      currency: t.currency,
+      status: t.status,
+      description: t.description,
+      createdAt: new Date(t.created_at).toISOString(),
+    })),
+    supportTicketsCount,
+  };
 }
