@@ -1019,7 +1019,7 @@ export async function getUserMatchingSummary(userId: string): Promise<MatchingSu
       sponsorQualificationRequired: activeConfig.sponsorQualificationRequired,
     },
     nextSettlement: {
-      scheduledTime: '00:00 Asia/Dhaka',
+      scheduledTime: '18:00 UTC',
       nextSettlementIso: nextDhakaInfo.nextMidnightIso,
       msUntilNext: nextDhakaInfo.msUntilMidnight,
     },

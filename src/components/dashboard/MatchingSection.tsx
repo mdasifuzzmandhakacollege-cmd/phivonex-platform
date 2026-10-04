@@ -146,7 +146,7 @@ export const MatchingSection: React.FC<MatchingSectionProps> = ({
         <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-white/[0.04] border border-white/[0.08] text-xs font-mono self-start sm:self-auto">
           <Clock className="w-3.5 h-3.5 text-[#00CFFF]" />
           <span className="text-[#98A2B3]">Next Settlement:</span>
-          <span className="font-bold text-white">00:00 Asia/Dhaka</span>
+          <span className="font-bold text-white">{summary?.nextSettlement?.scheduledTime || '18:00 UTC'}</span>
         </div>
       </div>
 
@@ -311,7 +311,7 @@ export const MatchingSection: React.FC<MatchingSectionProps> = ({
           <div className="p-6 rounded-xl bg-[#05070B] border border-dashed border-white/[0.06] text-center space-y-1">
             <div className="text-xs font-mono text-white">No matching settlements yet.</div>
             <div className="text-[11px] text-[#667085]">
-              The matching engine settles automatically at 00:00 Asia/Dhaka.
+              The matching engine settles automatically at 18:00 UTC.
             </div>
           </div>
         ) : (

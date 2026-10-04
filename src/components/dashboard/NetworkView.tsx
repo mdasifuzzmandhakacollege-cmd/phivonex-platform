@@ -202,7 +202,7 @@ export const NetworkView: React.FC = () => {
                 Binary Structure
               </span>
               <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md bg-white/[0.04] border border-white/[0.08] text-[#98A2B3] text-[11px] font-mono">
-                Daily Dhaka Settlement
+                Daily Global Settlement (18:00 UTC)
               </span>
             </div>
 
@@ -368,7 +368,7 @@ export const NetworkView: React.FC = () => {
           </div>
           <div className="flex items-center gap-1.5 text-xs font-mono text-[#98A2B3] self-start sm:self-auto">
             <Calendar className="w-3.5 h-3.5 text-[#00CFFF]" />
-            <span>Dhaka Date:</span>
+            <span>Cycle Date:</span>
             <span className="text-white font-bold">{volumeSummary?.businessDate || '—'}</span>
           </div>
         </div>

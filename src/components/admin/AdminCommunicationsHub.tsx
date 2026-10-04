@@ -29,7 +29,9 @@ import {
   ExternalLink,
   ChevronRight,
   Info,
+  BellRing,
 } from 'lucide-react';
+import { sendTestPushNotification } from '../../services/webPushService';
 
 export interface EmailTemplateItem {
   id: string;
@@ -130,6 +132,27 @@ export const AdminCommunicationsHub: React.FC<AdminCommunicationsHubProps> = () 
 
   // Global Feedback
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+
+  // Diagnostic Web Push Test
+  const [testPushLoading, setTestPushLoading] = useState<boolean>(false);
+  const [testPushResult, setTestPushResult] = useState<{ success: boolean; message: string } | null>(null);
+
+  const handleAdminTestPush = async () => {
+    try {
+      setTestPushLoading(true);
+      setTestPushResult(null);
+      const res = await sendTestPushNotification();
+      if (res.success) {
+        setTestPushResult({ success: true, message: 'Test push notification dispatched successfully.' });
+      } else {
+        setTestPushResult({ success: false, message: res.error || 'Failed to dispatch test push notification.' });
+      }
+    } catch (err: any) {
+      setTestPushResult({ success: false, message: err?.message || 'Error executing test push.' });
+    } finally {
+      setTestPushLoading(false);
+    }
+  };
 
   // 1. Fetch Stats
   const fetchStats = useCallback(async () => {
@@ -1103,6 +1126,49 @@ export const AdminCommunicationsHub: React.FC<AdminCommunicationsHubProps> = () 
                 <p className="text-[11px] text-[#98A2B3]">
                   Processes delivered, bounced, and failed notifications in real-time. Verified using Svix / HMAC-SHA256 signatures with 300s replay prevention.
                 </p>
+              </div>
+
+              <div className="p-4 rounded-xl bg-[#05070B] border border-white/[0.06] space-y-2 md:col-span-2">
+                <div className="flex items-center justify-between">
+                  <div className="text-xs font-mono uppercase text-[#00CFFF] flex items-center gap-1.5">
+                    <BellRing className="w-3.5 h-3.5" />
+                    <span>Real-Time Web Push Diagnostics</span>
+                  </div>
+                  <button
+                    onClick={handleAdminTestPush}
+                    disabled={testPushLoading}
+                    className="px-3.5 py-1.5 rounded-lg bg-[#00CFFF]/10 hover:bg-[#00CFFF]/20 border border-[#00CFFF]/30 text-[#00CFFF] font-bold text-xs flex items-center gap-1.5 transition-all cursor-pointer disabled:opacity-50"
+                  >
+                    {testPushLoading ? (
+                      <>
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                        <span>Sending Push...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Send className="w-3.5 h-3.5" />
+                        <span>Dispatch Test Push Alert</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+                <p className="text-[11px] text-[#98A2B3]">
+                  Dispatches a live cryptographic push message directly to your current administrative session to verify active browser subscription tokens and background delivery channels.
+                </p>
+                {testPushResult && (
+                  <div className={`mt-2 p-2.5 rounded-lg text-xs flex items-center gap-2 ${
+                    testPushResult.success
+                      ? 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-300'
+                      : 'bg-rose-500/10 border border-rose-500/20 text-rose-300'
+                  }`}>
+                    {testPushResult.success ? (
+                      <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                    ) : (
+                      <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
+                    )}
+                    <span>{testPushResult.message}</span>
+                  </div>
+                )}
               </div>
             </div>
           </div>

@@ -21,7 +21,6 @@ import {
   VolumeX,
   Radio,
   Zap,
-  Send,
   Smartphone,
   CheckCircle2,
   BellRing,
@@ -34,7 +33,6 @@ import { DashboardTab } from './Sidebar';
 import {
   checkPushSupport,
   requestPushPermissionAndToken,
-  sendTestPushNotification
 } from '../../services/webPushService';
 
 interface NotificationsViewProps {
@@ -70,7 +68,6 @@ export const NotificationsView: React.FC<NotificationsViewProps> = ({ user, onNa
   const [pushSupported, setPushSupported] = useState<boolean>(true);
   const [pushPermission, setPushPermission] = useState<NotificationPermission>('default');
   const [pushLoading, setPushLoading] = useState<boolean>(false);
-  const [testPushLoading, setTestPushLoading] = useState<boolean>(false);
   const [isSubscribed, setIsSubscribed] = useState<boolean>(false);
   const [pushFeedback, setPushFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
@@ -104,7 +101,7 @@ export const NotificationsView: React.FC<NotificationsViewProps> = ({ user, onNa
         setIsSubscribed(true);
         setPushFeedback({
           type: 'success',
-          message: '🎉 Web Push Notifications successfully activated! You will now receive real-time background push alerts for deposits, node rewards, commissions, and withdrawals.',
+          message: 'Notifications successfully activated! You will receive real-time alerts for deposits, node rewards, commissions, and withdrawals.',
         });
       } else {
         if (typeof window !== 'undefined' && 'Notification' in window) {
@@ -112,32 +109,11 @@ export const NotificationsView: React.FC<NotificationsViewProps> = ({ user, onNa
         }
         setPushFeedback({
           type: 'error',
-          message: res.error || 'Failed to enable Web Push notifications.',
+          message: res.error || 'Failed to enable notifications.',
         });
       }
     } finally {
       setPushLoading(false);
-    }
-  };
-
-  const handleSendTestPush = async () => {
-    try {
-      setTestPushLoading(true);
-      setPushFeedback(null);
-      const res = await sendTestPushNotification();
-      if (res.success) {
-        setPushFeedback({
-          type: 'success',
-          message: '🔔 Test Web Push notification dispatched! Check your device screen for the popup alert.',
-        });
-      } else {
-        setPushFeedback({
-          type: 'error',
-          message: res.error || 'Failed to dispatch test push notification.',
-        });
-      }
-    } finally {
-      setTestPushLoading(false);
     }
   };
 
@@ -345,7 +321,7 @@ export const NotificationsView: React.FC<NotificationsViewProps> = ({ user, onNa
         </div>
       </div>
 
-      {/* FIREBASE WEB PUSH MESSAGING CONTROL CARD */}
+      {/* REAL-TIME NOTIFICATIONS CONTROL CARD */}
       <div className={`p-5 rounded-2xl border transition-all ${
         pushPermission === 'granted'
           ? 'bg-gradient-to-r from-[#07101D] via-[#052e16]/25 to-[#07101D] border-emerald-500/30 shadow-lg shadow-emerald-500/5'
@@ -362,7 +338,7 @@ export const NotificationsView: React.FC<NotificationsViewProps> = ({ user, onNa
                 <BellRing className="w-5 h-5" />
               </div>
               <h3 className="text-base font-bold text-white flex items-center gap-2">
-                <span>Real-Time Web Push Messaging</span>
+                <span>Real-Time Notifications</span>
               </h3>
               <span className={`px-2.5 py-0.5 rounded-full text-[11px] font-mono font-semibold flex items-center gap-1.5 border ${
                 pushPermission === 'granted'
@@ -380,13 +356,10 @@ export const NotificationsView: React.FC<NotificationsViewProps> = ({ user, onNa
                   ? 'Blocked in Browser'
                   : 'Ready to Activate'}
               </span>
-              <span className="text-[10px] font-mono text-[#98A2B3] bg-black/40 px-2 py-0.5 rounded border border-white/[0.08]">
-                Sender: 1077670417334
-              </span>
             </div>
 
             <p className="text-xs text-[#98A2B3] leading-relaxed">
-              Powered by Firebase Cloud Messaging (FCM). Receive instant browser and device push alerts for crypto deposits, daily node coin mining, referral rewards, and withdrawal disbursements—even when your browser tab is closed.
+              Receive real-time account, transaction, node, reward and security notifications — even when the PHIVONEX tab is not open.
             </p>
           </div>
 
@@ -406,38 +379,20 @@ export const NotificationsView: React.FC<NotificationsViewProps> = ({ user, onNa
                 ) : (
                   <>
                     <Radio className="w-4 h-4" />
-                    <span>Enable Web Push Alerts</span>
+                    <span>Enable Notifications</span>
                   </>
                 )}
               </button>
             ) : (
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={handleSendTestPush}
-                  disabled={testPushLoading}
-                  className="px-4 py-2.5 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/40 text-emerald-300 font-bold text-xs flex items-center gap-2 transition-all cursor-pointer disabled:opacity-50 min-h-[40px]"
-                >
-                  {testPushLoading ? (
-                    <>
-                      <Loader2 className="w-4 h-4 animate-spin text-emerald-300" />
-                      <span>Sending Push...</span>
-                    </>
-                  ) : (
-                    <>
-                      <Send className="w-4 h-4 text-emerald-400" />
-                      <span>Send Test Push Alert</span>
-                    </>
-                  )}
-                </button>
-                <button
-                  onClick={handleEnablePush}
-                  disabled={pushLoading}
-                  className="px-3 py-2.5 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.08] text-xs text-[#98A2B3] hover:text-white transition-all cursor-pointer min-h-[40px]"
-                  title="Re-sync FCM Push Token"
-                >
-                  <RefreshCw className={`w-3.5 h-3.5 ${pushLoading ? 'animate-spin' : ''}`} />
-                </button>
-              </div>
+              <button
+                onClick={handleEnablePush}
+                disabled={pushLoading}
+                className="px-3.5 py-2.5 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.08] text-xs text-[#98A2B3] hover:text-white transition-all cursor-pointer min-h-[40px] flex items-center gap-2"
+                title="Sync notification settings"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${pushLoading ? 'animate-spin' : ''}`} />
+                <span className="font-medium">Sync Settings</span>
+              </button>
             )}
           </div>
         </div>

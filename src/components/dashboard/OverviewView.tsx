@@ -28,6 +28,7 @@ import { buildPublicReferralUrl } from '../../utils/referralUrl';
 import { PhivoCoinIcon, UsdtIcon } from '../brand/CryptoIcons';
 import { TokenPriceTrendChart } from './TokenPriceTrendChart';
 import { PromotionalBannerCarousel } from './PromotionalBannerCarousel';
+import { Premium3DFlipCard } from './Premium3DFlipCard';
 import { useSystemConfig } from '../../context/SystemConfigContext';
 import { getTransactionUserDescription } from '../../utils/transactionDisplay';
 
@@ -362,51 +363,19 @@ export const OverviewView: React.FC<OverviewViewProps> = ({ user, onNavigateTab 
       <PromotionalBannerCarousel onNavigateTab={navigateTo} />
 
       {/* ========================================================
-          1. WELCOME / ACCOUNT HERO (Compact & Premium)
+          1. PREMIUM 3D FLIP OVERVIEW HERO CARD
          ======================================================== */}
-      <div className="relative overflow-hidden rounded-2xl bg-gradient-to-r from-[#07101D] via-[#0B1728] to-[#07101D] border border-white/[0.08] p-5 sm:p-7 shadow-xl">
-        <div className="absolute top-0 right-0 -mt-10 -mr-10 w-72 h-72 bg-[#00CFFF]/10 rounded-full blur-3xl pointer-events-none" />
-        
-        <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-5">
-          <div className="space-y-2">
-            <div className="flex flex-wrap items-center gap-2 text-xs font-medium">
-              <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md bg-[#32D583]/10 border border-[#32D583]/25 text-[#32D583] text-[11px] font-semibold">
-                <span className="w-1.5 h-1.5 rounded-full bg-[#32D583] animate-pulse" />
-                Account Active
-              </span>
-              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md bg-white/[0.04] border border-white/[0.08] text-[#98A2B3] text-[11px]">
-                <Mail className="w-3 h-3 text-[#00CFFF]" />
-                {user?.emailVerified ? 'Email Verified' : 'Primary Confirmed'}
-              </span>
-              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md bg-white/[0.04] border border-white/[0.08] text-[#98A2B3] text-[11px]">
-                <Globe className="w-3 h-3 text-[#168BFF]" />
-                Network Synchronized
-              </span>
-            </div>
-
-            <h1 className="text-2xl sm:text-3xl font-bold text-white tracking-tight">
-              Welcome back, {firstName}
-            </h1>
-            <p className="text-xs sm:text-sm text-[#98A2B3] max-w-2xl leading-relaxed">
-              Manage your PHIVONEX nodes, wallet balance, network growth, and daily rewards from your unified dashboard.
-            </p>
-          </div>
-
-          {/* Sync & Refresh Status Trigger */}
-          <div className="flex items-center gap-2 shrink-0 self-start md:self-auto">
-            <button
-              onClick={() => fetchDashboardData(true)}
-              disabled={isRefreshing}
-              className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.08] text-xs font-medium text-[#98A2B3] hover:text-white transition-all cursor-pointer min-h-[44px] shadow-sm active:scale-95 disabled:opacity-50"
-              title="Refresh dashboard metrics"
-              aria-label="Refresh dashboard data"
-            >
-              <RefreshCw className={`w-3.5 h-3.5 text-[#00CFFF] ${isRefreshing ? 'animate-spin' : ''}`} />
-              <span>{isRefreshing ? 'Syncing...' : 'Up to date'}</span>
-            </button>
-          </div>
-        </div>
-      </div>
+      <Premium3DFlipCard
+        user={user}
+        displayName={firstName}
+        availableUsdt={availableUsdt}
+        activeNodes={activeNodesCount}
+        currentRankName={currentRankName}
+        networkStatus="Synchronized"
+        onNavigateTab={navigateTo}
+        onRefresh={() => fetchDashboardData(true)}
+        isRefreshing={isRefreshing}
+      />
 
       {/* ========================================================
           2. PRIMARY KPI STRIP (6 Compact & High-Impact Cards)
@@ -708,7 +677,7 @@ export const OverviewView: React.FC<OverviewViewProps> = ({ user, onNavigateTab 
               </div>
               <span className="text-[11px] font-mono text-[#98A2B3] bg-white/[0.04] px-2 py-0.5 rounded-md flex items-center gap-1">
                 <Clock className="w-3 h-3 text-[#00CFFF]" />
-                <span>Daily 00:00 UTC+6</span>
+                <span>Daily 18:00 UTC</span>
               </span>
             </div>
 

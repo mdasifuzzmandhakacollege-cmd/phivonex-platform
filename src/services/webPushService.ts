@@ -100,7 +100,7 @@ export async function requestPushPermissionAndToken(): Promise<{
     console.error('[WebPush] Error subscribing to push notifications:', err);
     let errorMsg = err?.message || 'An unexpected error occurred while setting up Web Push.';
     if (errorMsg.includes('token-subscribe-failed') || errorMsg.includes('authentication credential')) {
-      errorMsg = 'Browser background push is synchronizing with Google FCM. Real-time in-app notifications remain 100% active and operational.';
+      errorMsg = 'Browser background push is synchronizing. Real-time in-app notifications remain 100% active and operational.';
     }
     return {
       success: false,
