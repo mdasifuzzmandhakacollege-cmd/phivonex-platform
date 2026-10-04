@@ -4,9 +4,12 @@
  */
 
 process.env.NODE_ENV = 'test';
+import path from 'path';
+import { v4 as uuidv4 } from 'uuid';
+const testDataDir = path.resolve(process.cwd(), `.data/test_task17_bsc_${uuidv4()}`);
+process.env.PGLITE_DATA_DIR = testDataDir;
 
 import { getDb } from '../src/server/db/db';
-import { v4 as uuidv4 } from 'uuid';
 import { BSC_CONFIG } from '../src/config/bscConfig';
 import {
   getOrCreateUserDepositAddress,

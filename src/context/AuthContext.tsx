@@ -55,7 +55,7 @@ interface AuthContextType {
   loginWithGoogle: (referralCode?: string) => Promise<UserProfile>;
   logout: () => Promise<void>;
   forgotPassword: (email: string, captchaToken?: string) => Promise<{ message: string }>;
-  resetPassword: (token: string, newPassword: string) => Promise<{ message: string }>;
+  resetPassword: (tokenOrCode: string, newPassword: string, email?: string) => Promise<{ message: string }>;
   verifyEmail: (token: string) => Promise<{ message: string }>;
   resendVerification: (email?: string) => Promise<{ message: string }>;
   refreshUser: () => Promise<void>;
@@ -322,12 +322,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   // 5. Reset Password
-  const resetPassword = async (token: string, newPassword: string) => {
+  const resetPassword = async (tokenOrCode: string, newPassword: string, email?: string) => {
     const res = await fetch('/api/auth/reset-password', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
-      body: JSON.stringify({ token, newPassword }),
+      body: JSON.stringify({
+        token: tokenOrCode,
+        code: tokenOrCode,
+        email,
+        newPassword
+      }),
     });
 
     const result = await res.json();

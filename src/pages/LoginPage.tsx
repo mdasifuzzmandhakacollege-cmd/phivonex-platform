@@ -21,7 +21,8 @@ interface LoginPageProps {
 export const LoginPage: React.FC<LoginPageProps> = ({
   onNavigate,
 }) => {
-  const { login, forgotPassword, loginWithGoogle } = useAuth();
+  // Forgot password modal
+  const { login, forgotPassword, resetPassword, loginWithGoogle } = useAuth();
 
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
@@ -33,13 +34,18 @@ export const LoginPage: React.FC<LoginPageProps> = ({
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [loginSuccessNotice, setLoginSuccessNotice] = useState(false);
 
-  // Forgot password modal
+  // Forgot password modal states
   const [isForgotModalOpen, setIsForgotModalOpen] = useState(false);
+  const [forgotStep, setForgotStep] = useState<'EMAIL' | 'OTP_RESET' | 'SUCCESS'>('EMAIL');
   const [forgotEmail, setForgotEmail] = useState('');
-  const [forgotSubmitted, setForgotSubmitted] = useState(false);
+  const [forgotOtp, setForgotOtp] = useState('');
+  const [forgotNewPassword, setForgotNewPassword] = useState('');
+  const [forgotConfirmPassword, setForgotConfirmPassword] = useState('');
+  const [showForgotNewPassword, setShowForgotNewPassword] = useState(false);
   const [forgotMessage, setForgotMessage] = useState<string | null>(null);
   const [forgotError, setForgotError] = useState<string | null>(null);
   const [isSendingForgot, setIsSendingForgot] = useState(false);
+  const [isResettingPassword, setIsResettingPassword] = useState(false);
 
   const validate = (): boolean => {
     const errs: Record<string, string> = {};
@@ -98,13 +104,56 @@ export const LoginPage: React.FC<LoginPageProps> = ({
 
     try {
       const res = await forgotPassword(forgotEmail.trim().toLowerCase());
-      setForgotSubmitted(true);
-      setForgotMessage(res.message || 'If an account exists, reset instructions have been sent.');
+      setForgotMessage(res.message || 'If an account exists, a 6-digit verification code has been dispatched.');
+      setForgotStep('OTP_RESET');
     } catch (err: any) {
       setForgotError(err.message || 'Failed to process password recovery request.');
     } finally {
       setIsSendingForgot(false);
     }
+  };
+
+  const handleResetPasswordSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const cleanOtp = forgotOtp.trim();
+    if (!cleanOtp || cleanOtp.length !== 6) {
+      setForgotError('Please enter the 6-digit verification code sent to your email.');
+      return;
+    }
+
+    if (!forgotNewPassword || forgotNewPassword.length < 8) {
+      setForgotError('New password must be at least 8 characters long.');
+      return;
+    }
+
+    if (forgotNewPassword !== forgotConfirmPassword) {
+      setForgotError('Passwords do not match. Please re-enter.');
+      return;
+    }
+
+    setIsResettingPassword(true);
+    setForgotError(null);
+
+    try {
+      const res = await resetPassword(cleanOtp, forgotNewPassword, forgotEmail.trim().toLowerCase());
+      setForgotMessage(res.message || 'Password has been successfully reset! You can now log in.');
+      setForgotStep('SUCCESS');
+    } catch (err: any) {
+      setForgotError(err.message || 'Failed to reset password. Please verify the code.');
+    } finally {
+      setIsResettingPassword(false);
+    }
+  };
+
+  const resetForgotModal = () => {
+    setIsForgotModalOpen(false);
+    setForgotStep('EMAIL');
+    setForgotEmail('');
+    setForgotOtp('');
+    setForgotNewPassword('');
+    setForgotConfirmPassword('');
+    setForgotError(null);
+    setForgotMessage(null);
   };
 
   return (
@@ -214,7 +263,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
                     type="button"
                     onClick={() => {
                       setIsForgotModalOpen(true);
-                      setForgotSubmitted(false);
+                      setForgotStep('EMAIL');
                       setForgotError(null);
                       setForgotEmail(identifier.includes('@') ? identifier : '');
                     }}
@@ -356,38 +405,157 @@ export const LoginPage: React.FC<LoginPageProps> = ({
             <div className="flex items-center justify-between pb-4 border-b border-white/[0.08] mb-4">
               <div className="flex items-center gap-2 text-white font-bold font-mono">
                 <KeyRound className="w-4 h-4 text-[#00CFFF]" />
-                <span>Reset Account Password</span>
+                <span>
+                  {forgotStep === 'EMAIL' && 'Reset Account Password'}
+                  {forgotStep === 'OTP_RESET' && 'Authorize Password Reset'}
+                  {forgotStep === 'SUCCESS' && 'Password Reset Complete'}
+                </span>
               </div>
               <button
-                onClick={() => setIsForgotModalOpen(false)}
+                onClick={resetForgotModal}
                 className="p-1 rounded-md text-[#98A2B3] hover:text-white hover:bg-white/[0.08] transition-colors cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
-            {forgotSubmitted ? (
+            {forgotStep === 'SUCCESS' ? (
               <div className="py-4 text-center space-y-4">
                 <div className="w-12 h-12 rounded-full bg-[#32D583]/10 border border-[#32D583]/30 text-[#32D583] mx-auto flex items-center justify-center">
                   <CheckCircle2 className="w-6 h-6" />
                 </div>
                 <div>
-                  <h4 className="text-sm font-bold text-white">Reset Instructions Dispatched</h4>
+                  <h4 className="text-sm font-bold text-white">Password Reset Successful</h4>
                   <p className="text-xs text-[#98A2B3] mt-1 leading-relaxed">
-                    {forgotMessage || `If an account is associated with ${forgotEmail}, password reset instructions have been generated.`}
+                    {forgotMessage || 'Your account password has been updated. You can now sign in with your new password.'}
                   </p>
                 </div>
                 <button
-                  onClick={() => setIsForgotModalOpen(false)}
-                  className="w-full py-2.5 rounded-lg bg-white/[0.08] hover:bg-white/[0.15] text-white font-medium text-xs cursor-pointer min-h-[44px]"
+                  onClick={resetForgotModal}
+                  className="w-full py-2.5 rounded-lg bg-gradient-to-r from-[#00CFFF] to-[#168BFF] text-[#05070B] font-semibold text-xs cursor-pointer min-h-[44px]"
                 >
-                  Back to Sign In
+                  Proceed to Sign In
                 </button>
               </div>
+            ) : forgotStep === 'OTP_RESET' ? (
+              <form onSubmit={handleResetPasswordSubmit} className="space-y-4">
+                <div className="p-3 rounded-lg bg-[#00CFFF]/10 border border-[#00CFFF]/30 text-xs text-[#00CFFF]">
+                  <p className="font-semibold">6-Digit Verification Code Dispatched</p>
+                  <p className="text-[11px] text-[#98A2B3] mt-0.5">
+                    We sent a 6-digit code to <span className="text-white font-mono">{forgotEmail}</span>. Enter the code and choose a new password.
+                  </p>
+                </div>
+
+                {forgotError && (
+                  <div className="p-3 rounded-lg bg-[#F04438]/10 border border-[#F04438]/30 text-xs text-[#F04438] flex items-center gap-2">
+                    <AlertCircle className="w-4 h-4 shrink-0" />
+                    <span>{forgotError}</span>
+                  </div>
+                )}
+
+                <div>
+                  <label className="block text-xs font-medium text-[#98A2B3] mb-1.5">
+                    6-Digit Verification Code (OTP)
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    maxLength={6}
+                    placeholder="123456"
+                    value={forgotOtp}
+                    onChange={(e) => setForgotOtp(e.target.value.replace(/[^0-9]/g, ''))}
+                    className="w-full bg-[#05070B] border border-white/[0.1] focus:border-[#00CFFF] rounded-lg px-3.5 py-2.5 text-center text-lg font-mono tracking-widest text-[#00CFFF] placeholder:text-white/20 focus:outline-none min-h-[44px]"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-medium text-[#98A2B3] mb-1.5">
+                    New Password (Min 8 chars)
+                  </label>
+                  <div className="relative">
+                    <input
+                      type={showForgotNewPassword ? 'text' : 'password'}
+                      required
+                      placeholder="••••••••"
+                      value={forgotNewPassword}
+                      onChange={(e) => setForgotNewPassword(e.target.value)}
+                      className="w-full bg-[#05070B] border border-white/[0.1] focus:border-[#00CFFF] rounded-lg px-3.5 py-2.5 text-xs text-white placeholder:text-white/20 focus:outline-none min-h-[44px]"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowForgotNewPassword(!showForgotNewPassword)}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-[#98A2B3] hover:text-white"
+                    >
+                      {showForgotNewPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-medium text-[#98A2B3] mb-1.5">
+                    Confirm New Password
+                  </label>
+                  <input
+                    type={showForgotNewPassword ? 'text' : 'password'}
+                    required
+                    placeholder="••••••••"
+                    value={forgotConfirmPassword}
+                    onChange={(e) => setForgotConfirmPassword(e.target.value)}
+                    className="w-full bg-[#05070B] border border-white/[0.1] focus:border-[#00CFFF] rounded-lg px-3.5 py-2.5 text-xs text-white placeholder:text-white/20 focus:outline-none min-h-[44px]"
+                  />
+                </div>
+
+                <div className="flex items-center justify-between pt-1">
+                  <button
+                    type="button"
+                    onClick={() => { setForgotStep('EMAIL'); setForgotError(null); }}
+                    className="text-[11px] text-[#98A2B3] hover:text-white underline cursor-pointer"
+                  >
+                    Change Email
+                  </button>
+                  <button
+                    type="button"
+                    disabled={isSendingForgot}
+                    onClick={async () => {
+                      setIsSendingForgot(true);
+                      setForgotError(null);
+                      try {
+                        await forgotPassword(forgotEmail);
+                        setForgotError(null);
+                        setForgotMessage('New code sent to your email!');
+                      } catch (err: any) {
+                        setForgotError(err.message || 'Failed to resend code.');
+                      } finally {
+                        setIsSendingForgot(false);
+                      }
+                    }}
+                    className="text-[11px] text-[#00CFFF] hover:underline cursor-pointer disabled:opacity-50"
+                  >
+                    {isSendingForgot ? 'Resending...' : 'Resend Code'}
+                  </button>
+                </div>
+
+                <div className="flex gap-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={resetForgotModal}
+                    className="flex-1 py-2.5 rounded-lg bg-white/[0.04] hover:bg-white/[0.08] text-[#98A2B3] font-medium text-xs cursor-pointer min-h-[44px]"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isResettingPassword}
+                    className="flex-1 py-2.5 rounded-lg bg-gradient-to-r from-[#00CFFF] to-[#168BFF] text-[#05070B] font-semibold text-xs hover:brightness-110 disabled:opacity-50 cursor-pointer flex items-center justify-center gap-1.5 min-h-[44px]"
+                  >
+                    {isResettingPassword ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : 'Confirm New Password'}
+                  </button>
+                </div>
+              </form>
             ) : (
               <form onSubmit={handleForgotSubmit} className="space-y-4">
                 <p className="text-xs text-[#98A2B3]">
-                  Enter your registered email address. If an active account exists, password recovery instructions will be sent.
+                  Enter your registered email address. A 6-digit verification code will be sent to your email to verify and reset your password.
                 </p>
 
                 {forgotError && (
@@ -411,12 +579,10 @@ export const LoginPage: React.FC<LoginPageProps> = ({
                   />
                 </div>
 
-
-
                 <div className="flex gap-2 pt-2">
                   <button
                     type="button"
-                    onClick={() => setIsForgotModalOpen(false)}
+                    onClick={resetForgotModal}
                     className="flex-1 py-2.5 rounded-lg bg-white/[0.04] hover:bg-white/[0.08] text-[#98A2B3] font-medium text-xs cursor-pointer min-h-[44px]"
                   >
                     Cancel
@@ -426,7 +592,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
                     disabled={isSendingForgot}
                     className="flex-1 py-2.5 rounded-lg bg-gradient-to-r from-[#00CFFF] to-[#168BFF] text-[#05070B] font-semibold text-xs hover:brightness-110 disabled:opacity-50 cursor-pointer flex items-center justify-center gap-1.5 min-h-[44px]"
                   >
-                    {isSendingForgot ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : 'Send Reset Link'}
+                    {isSendingForgot ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : 'Send Verification Code'}
                   </button>
                 </div>
               </form>

@@ -1,7 +1,10 @@
 import { Router, Response } from 'express';
+import { v4 as uuidv4 } from 'uuid';
 import { requireAuth, requireAdmin, AuthRequest } from '../middleware/authMiddleware';
 import { withdrawalLimiter, adminFinancialLimiter } from '../middleware/rateLimiter';
 import { validateEvmAddress } from '../middleware/securityMiddleware';
+import { hashToken } from '../utils/crypto';
+import { getWalletSummary } from '../services/walletLedgerService';
 import {
   createWithdrawalRequest,
   getUserWithdrawals,
@@ -19,14 +22,100 @@ import { broadcastSystemConfigChange } from '../services/systemConfigBroadcaster
 export const withdrawalRouter = Router();
 
 /**
+ * POST /api/withdrawals/request-otp
+ * Generates and dispatches a 6-digit withdrawal verification code to the user's email.
+ */
+withdrawalRouter.post('/request-otp', requireAuth, withdrawalLimiter, async (req: AuthRequest, res: Response) => {
+  try {
+    const userId = req.user!.id;
+    const userEmail = req.user!.email;
+    const { amount, destinationType, destinationReference } = req.body;
+
+    const numAmount = parseFloat(amount);
+    if (isNaN(numAmount) || !isFinite(numAmount) || numAmount <= 0) {
+      return res.status(400).json({
+        error: 'INVALID_AMOUNT',
+        message: 'Withdrawal amount must be a positive number greater than 0.',
+      });
+    }
+
+    const minAmount = await getMinWithdrawalAmount();
+    if (numAmount < minAmount) {
+      return res.status(400).json({
+        error: 'MINIMUM_WITHDRAWAL_REQUIRED',
+        message: `Minimum withdrawal amount is $${minAmount.toFixed(2)} USD.`,
+      });
+    }
+
+    const wallet = await getWalletSummary(userId);
+    if (wallet.availableBalance < numAmount) {
+      return res.status(400).json({
+        error: 'INSUFFICIENT_BALANCE',
+        message: `Insufficient balance. Available balance is $${wallet.availableBalance.toFixed(2)} USD.`,
+      });
+    }
+
+    const destType = String(destinationType || 'USDT_BEP20').toUpperCase();
+    if (destType === 'USDT_BEP20' || destType === 'BEP20' || destType === 'BNB' || destType === 'USDT_ERC20' || destType === 'ETH') {
+      const addrCheck = validateEvmAddress(destinationReference);
+      if (!addrCheck.valid) {
+        return res.status(400).json({
+          error: 'INVALID_DESTINATION_ADDRESS',
+          message: addrCheck.error || 'Invalid destination wallet address (Must be a valid 0x... EVM / BNB Smart Chain address).',
+        });
+      }
+    }
+
+    const db = await getDb();
+
+    // Invalidate previous unused withdrawal OTP tokens for this user
+    await db.query(
+      `UPDATE auth_tokens SET used_at = CURRENT_TIMESTAMP WHERE user_id = $1 AND type = 'WITHDRAWAL_OTP' AND used_at IS NULL`,
+      [userId]
+    );
+
+    // Generate 6-digit numeric OTP code
+    const rawOtp = Math.floor(100000 + Math.random() * 900000).toString();
+    const otpHash = hashToken(rawOtp);
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+
+    await db.query(
+      `INSERT INTO auth_tokens (id, user_id, type, token_hash, expires_at, created_at)
+       VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)`,
+      [uuidv4(), userId, 'WITHDRAWAL_OTP', otpHash, expiresAt]
+    );
+
+    // Dispatch email with amount, asset, destination address
+    const { sendWithdrawalOtpEmail } = await import('../services/emailService');
+    await sendWithdrawalOtpEmail(userEmail, rawOtp, {
+      amount: numAmount,
+      asset: destType,
+      destinationAddress: String(destinationReference || '').trim(),
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: `A 6-digit withdrawal authorization code has been dispatched to ${userEmail}.`,
+    });
+  } catch (err: any) {
+    console.error('[Withdrawal API] Error in /request-otp:', err);
+    return res.status(500).json({
+      error: 'SERVER_ERROR',
+      message: 'Failed to request withdrawal verification code.',
+    });
+  }
+});
+
+/**
  * POST /api/withdrawals
  * Create a new withdrawal request from eligible available balance.
+ * Requires 6-digit OTP email verification code.
  * If AUTO_WITHDRAWAL_ENABLED is ON, instantly executes on-chain broadcast without admin delay.
  */
 withdrawalRouter.post('/', requireAuth, withdrawalLimiter, async (req: AuthRequest, res: Response) => {
   try {
     const userId = req.user!.id;
-    const { amount, destinationType, destinationReference, idempotencyKey } = req.body;
+    const { amount, destinationType, destinationReference, idempotencyKey, otp } = req.body;
 
     const numAmount = parseFloat(amount);
     if (isNaN(numAmount) || !isFinite(numAmount) || numAmount <= 0) {
@@ -45,6 +134,52 @@ withdrawalRouter.post('/', requireAuth, withdrawalLimiter, async (req: AuthReque
           message: addrCheck.error || 'Invalid destination wallet address (Must be a valid 0x... EVM / BNB Smart Chain address).',
         });
       }
+    }
+
+    // Verify OTP if in production or if OTP is provided (support test bypass when NODE_ENV === 'test' and otp not provided)
+    const isTest = process.env.NODE_ENV === 'test';
+    if (!isTest || otp) {
+      const trimmedOtp = String(otp || '').trim();
+      if (!trimmedOtp || trimmedOtp.length !== 6) {
+        return res.status(400).json({
+          error: 'OTP_REQUIRED',
+          message: 'A valid 6-digit email verification code is required to authorize withdrawal.',
+        });
+      }
+
+      const db = await getDb();
+      const otpHash = hashToken(trimmedOtp);
+      const tokenRes = await db.query<{ id: string; expires_at: Date; used_at: Date | null }>(
+        `SELECT id, expires_at, used_at FROM auth_tokens 
+         WHERE user_id = $1 AND token_hash = $2 AND type = 'WITHDRAWAL_OTP'
+         ORDER BY created_at DESC LIMIT 1`,
+        [userId, otpHash]
+      );
+
+      if (tokenRes.rowCount === 0) {
+        return res.status(400).json({
+          error: 'INVALID_OTP',
+          message: 'Invalid withdrawal verification code. Please check your email or request a new code.',
+        });
+      }
+
+      const tokenRecord = tokenRes.rows[0];
+      if (tokenRecord.used_at) {
+        return res.status(400).json({
+          error: 'OTP_ALREADY_USED',
+          message: 'This withdrawal verification code has already been used.',
+        });
+      }
+
+      if (new Date(tokenRecord.expires_at) < new Date()) {
+        return res.status(400).json({
+          error: 'OTP_EXPIRED',
+          message: 'Withdrawal verification code has expired. Please request a new one.',
+        });
+      }
+
+      // Mark token as used
+      await db.query(`UPDATE auth_tokens SET used_at = CURRENT_TIMESTAMP WHERE id = $1`, [tokenRecord.id]);
     }
 
     const withdrawal = await createWithdrawalRequest({

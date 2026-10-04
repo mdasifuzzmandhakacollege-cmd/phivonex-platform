@@ -1521,7 +1521,7 @@ router.post('/resend-verification', async (req: Request, res: Response): Promise
 
 /**
  * POST /api/auth/forgot-password
- * Enumeration-safe password reset token generation.
+ * Enumeration-safe password reset OTP generation and dispatch.
  */
 router.post('/forgot-password', passwordResetLimiter, async (req: Request, res: Response): Promise<void> => {
   try {
@@ -1531,27 +1531,49 @@ router.post('/forgot-password', passwordResetLimiter, async (req: Request, res: 
       return;
     }
 
+    const normalizedEmail = email.trim().toLowerCase();
     const db = await getDb();
     const userRes = await db.query<{ id: string; email: string }>(
       `SELECT id, email FROM users WHERE LOWER(email) = $1`,
-      [email.trim().toLowerCase()]
+      [normalizedEmail]
     );
 
     if (userRes.rowCount > 0) {
       const user = userRes.rows[0];
+      // Generate 6-digit numeric OTP code
+      const rawOtp = Math.floor(100000 + Math.random() * 900000).toString();
+      const otpHash = hashToken(rawOtp);
       const rawResetToken = generateRandomToken(32);
       const tokenHash = hashToken(rawResetToken);
-      const expiresAt = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
+      const expiresAt = new Date(Date.now() + 15 * 60 * 1000); // 15 minutes
 
+      // Invalidate previous unused reset tokens for this user
+      await db.query(
+        `UPDATE auth_tokens SET used_at = CURRENT_TIMESTAMP WHERE user_id = $1 AND type = 'PASSWORD_RESET' AND used_at IS NULL`,
+        [user.id]
+      );
+
+      // Insert 6-digit OTP token
+      await db.query(
+        `INSERT INTO auth_tokens (id, user_id, type, token_hash, expires_at, created_at)
+         VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)`,
+        [uuidv4(), user.id, 'PASSWORD_RESET', otpHash, expiresAt]
+      );
+
+      // Insert full token
       await db.query(
         `INSERT INTO auth_tokens (id, user_id, type, token_hash, expires_at, created_at)
          VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)`,
         [uuidv4(), user.id, 'PASSWORD_RESET', tokenHash, expiresAt]
       );
+
+      // Dispatch OTP Email
+      const { sendPasswordResetOtpEmail } = await import('../services/emailService');
+      await sendPasswordResetOtpEmail(user.email, rawOtp);
     }
 
     res.status(200).json({
-      message: 'If an account exists with this email, password reset instructions have been generated.',
+      message: 'If an account exists with this email, password reset instructions and a 6-digit verification code have been dispatched to your inbox.',
     });
   } catch (err) {
     console.error('[Auth API] Error in /forgot-password:', err);
@@ -1561,44 +1583,57 @@ router.post('/forgot-password', passwordResetLimiter, async (req: Request, res: 
 
 /**
  * POST /api/auth/reset-password
- * Validates token, hashes new password with Argon2id, marks token used, and revokes all active sessions.
+ * Validates 6-digit OTP code or reset token, hashes new password with Argon2id, marks token used, and revokes all active sessions.
  */
 router.post('/reset-password', passwordResetLimiter, async (req: Request, res: Response): Promise<void> => {
   try {
-    const { token, newPassword } = req.body;
+    const { token, code, email, newPassword } = req.body;
 
-    if (!token || !newPassword) {
-      res.status(400).json({ error: 'MISSING_FIELDS', message: 'Token and new password are required.' });
+    const tokenOrCode = (code || token || '').toString().trim();
+    if (!tokenOrCode || !newPassword) {
+      res.status(400).json({ error: 'MISSING_FIELDS', message: 'Verification code (or reset token) and new password are required.' });
       return;
     }
 
-    if (typeof newPassword !== 'string' || newPassword.length < 10) {
-      res.status(400).json({ error: 'WEAK_PASSWORD', message: 'Password must be at least 10 characters long.' });
+    if (typeof newPassword !== 'string' || newPassword.length < 8) {
+      res.status(400).json({ error: 'WEAK_PASSWORD', message: 'Password must be at least 8 characters long.' });
       return;
     }
 
     const db = await getDb();
-    const tokenHash = hashToken(token);
+    const tokenHash = hashToken(tokenOrCode);
 
-    const tokenRes = await db.query<{ id: string; user_id: string; expires_at: Date; used_at: Date | null }>(
-      `SELECT id, user_id, expires_at, used_at FROM auth_tokens WHERE token_hash = $1 AND type = 'PASSWORD_RESET'`,
-      [tokenHash]
-    );
+    let tokenRes: any;
+    if (email && typeof email === 'string') {
+      const normalizedEmail = email.trim().toLowerCase();
+      tokenRes = await db.query<{ id: string; user_id: string; expires_at: Date; used_at: Date | null }>(
+        `SELECT t.id, t.user_id, t.expires_at, t.used_at 
+         FROM auth_tokens t
+         INNER JOIN users u ON t.user_id = u.id
+         WHERE t.token_hash = $1 AND t.type = 'PASSWORD_RESET' AND LOWER(u.email) = $2`,
+        [tokenHash, normalizedEmail]
+      );
+    } else {
+      tokenRes = await db.query<{ id: string; user_id: string; expires_at: Date; used_at: Date | null }>(
+        `SELECT id, user_id, expires_at, used_at FROM auth_tokens WHERE token_hash = $1 AND type = 'PASSWORD_RESET'`,
+        [tokenHash]
+      );
+    }
 
     if (tokenRes.rowCount === 0) {
-      res.status(400).json({ error: 'INVALID_TOKEN', message: 'Invalid or expired password reset token.' });
+      res.status(400).json({ error: 'INVALID_TOKEN', message: 'Invalid or expired password reset verification code.' });
       return;
     }
 
     const tokenRecord = tokenRes.rows[0];
 
     if (tokenRecord.used_at) {
-      res.status(400).json({ error: 'TOKEN_USED', message: 'This password reset token has already been used.' });
+      res.status(400).json({ error: 'TOKEN_USED', message: 'This password reset verification code has already been used.' });
       return;
     }
 
     if (new Date(tokenRecord.expires_at) < new Date()) {
-      res.status(400).json({ error: 'TOKEN_EXPIRED', message: 'Password reset token has expired.' });
+      res.status(400).json({ error: 'TOKEN_EXPIRED', message: 'Password reset verification code has expired. Please request a new one.' });
       return;
     }
 
@@ -1614,6 +1649,12 @@ router.post('/reset-password', passwordResetLimiter, async (req: Request, res: R
       [tokenRecord.id]
     );
 
+    // Invalidate all tokens of this type for user
+    await db.query(
+      `UPDATE auth_tokens SET used_at = CURRENT_TIMESTAMP WHERE user_id = $1 AND type = 'PASSWORD_RESET' AND used_at IS NULL`,
+      [tokenRecord.user_id]
+    );
+
     await db.query(
       `UPDATE sessions SET revoked_at = CURRENT_TIMESTAMP WHERE user_id = $1 AND revoked_at IS NULL`,
       [tokenRecord.user_id]
@@ -1622,11 +1663,13 @@ router.post('/reset-password', passwordResetLimiter, async (req: Request, res: R
     await logSecurityEvent(db, {
       userId: tokenRecord.user_id,
       eventType: 'PASSWORD_CHANGED',
-      description: 'Password reset via cryptographic recovery token.',
+      description: 'Password reset via cryptographic recovery code.',
       userAgent: req.headers['user-agent'],
     });
 
-    res.status(200).json({ message: 'Password has been reset successfully. Please log in with your new password.' });
+    res.status(200).json({
+      message: 'Your password has been successfully reset. You may now sign in with your new password.',
+    });
   } catch (err) {
     console.error('[Auth API] Error in /reset-password:', err);
     res.status(500).json({ error: 'SERVER_ERROR', message: 'Failed to reset password.' });

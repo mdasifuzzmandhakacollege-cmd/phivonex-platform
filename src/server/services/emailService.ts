@@ -738,3 +738,137 @@ export async function sendVerificationCodeEmail(toEmail: string, code: string): 
   }
   return !result.error;
 }
+
+/**
+ * Sends a premium PHIVONEX HTML email containing a 6-digit password reset verification code.
+ */
+export async function sendPasswordResetOtpEmail(toEmail: string, code: string): Promise<boolean> {
+  const provider = getEmailProvider();
+  const subject = `PHIVONEX Password Reset Code: ${code}`;
+  const html = `
+    <div style="background-color: #05070c; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #f8fafc; padding: 40px 15px; margin: 0; width: 100%;">
+      <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width: 620px; margin: 0 auto; background-color: #0b1329; border: 1px solid #1e293b; border-radius: 16px; overflow: hidden; box-shadow: 0 20px 50px rgba(0, 207, 255, 0.08);">
+        <tr>
+          <td style="background: linear-gradient(135deg, #0f172a 0%, #070d1e 100%); padding: 32px 30px; border-bottom: 1px solid rgba(0, 207, 255, 0.2); text-align: center;">
+            <div style="font-size: 26px; font-weight: 900; letter-spacing: 4px; color: #ffffff; font-family: monospace;">PHIVONEX</div>
+            <div style="font-size: 10px; font-weight: 700; letter-spacing: 2px; color: #00CFFF; margin-top: 6px; text-transform: uppercase;">SECURITY PROTOCOL &amp; ACCOUNT RECOVERY</div>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding: 35px 30px; text-align: center;">
+            <div style="display: inline-block; padding: 6px 14px; background: rgba(240, 68, 56, 0.12); border: 1px solid rgba(240, 68, 56, 0.3); border-radius: 20px; font-size: 11px; font-weight: 700; color: #F04438; font-family: monospace; text-transform: uppercase; margin-bottom: 20px;">
+              PASSWORD RESET AUTHORIZATION
+            </div>
+            <h1 style="font-size: 22px; font-weight: 800; color: #ffffff; margin: 0 0 14px 0; line-height: 1.3;">Reset Your Password</h1>
+            <p style="font-size: 14px; color: #94a3b8; line-height: 1.6; max-width: 480px; margin: 0 auto 25px auto;">
+              A password reset request was initiated for your PHIVONEX account. Use the 6-digit verification code below to authorize and complete your password change. This code expires in 15 minutes.
+            </p>
+            <div style="background: rgba(0, 207, 255, 0.08); border: 1px solid rgba(0, 207, 255, 0.3); border-radius: 12px; padding: 18px 30px; display: inline-block; font-size: 36px; font-weight: 900; letter-spacing: 8px; color: #00CFFF; font-family: monospace; margin-bottom: 30px; box-shadow: 0 0 25px rgba(0, 207, 255, 0.2);">
+              ${code}
+            </div>
+            <div style="border-top: 1px solid rgba(255,255,255,0.06); padding-top: 20px; max-width: 480px; margin: 0 auto; text-align: left; font-size: 11px; color: #64748b; line-height: 1.5;">
+              <p style="margin-bottom: 6px;"><strong>Critical Security Notice:</strong> If you did not initiate this password recovery request, your account may be under reconnaissance. Please contact support immediately.</p>
+              <p style="margin: 0;">Never disclose this code to anyone under any circumstance.</p>
+            </div>
+          </td>
+        </tr>
+        <tr>
+          <td style="background-color: #070c1a; padding: 20px 30px; border-top: 1px solid rgba(255, 255, 255, 0.06); font-size: 11px; color: #475569; line-height: 1.5; text-align: center;">
+            <p style="margin: 0 0 4px 0; font-family: monospace; color: #64748b;">PHIVONEX Security Matrix • Single-Use Cryptographic Challenge</p>
+            <p style="margin: 0;">Automated Security Dispatch.</p>
+          </td>
+        </tr>
+      </table>
+    </div>
+  `;
+  const result = await provider.sendEmail(toEmail, subject, html);
+  if (result.error) {
+    console.warn(`[EmailService] Failed to send password reset email to ${toEmail}:`, result.error);
+  } else {
+    console.log(`[EmailService] Password reset OTP sent to ${toEmail}`);
+  }
+  return !result.error;
+}
+
+/**
+ * Sends a premium PHIVONEX HTML email containing a 6-digit withdrawal verification code.
+ */
+export async function sendWithdrawalOtpEmail(
+  toEmail: string,
+  code: string,
+  details: {
+    amount: number;
+    asset: string;
+    destinationAddress: string;
+  }
+): Promise<boolean> {
+  const provider = getEmailProvider();
+  const subject = `PHIVONEX Withdrawal Authorization Code: ${code} (${details.amount} ${details.asset})`;
+  const html = `
+    <div style="background-color: #05070c; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #f8fafc; padding: 40px 15px; margin: 0; width: 100%;">
+      <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width: 620px; margin: 0 auto; background-color: #0b1329; border: 1px solid #1e293b; border-radius: 16px; overflow: hidden; box-shadow: 0 20px 50px rgba(0, 207, 255, 0.08);">
+        <tr>
+          <td style="background: linear-gradient(135deg, #0f172a 0%, #070d1e 100%); padding: 32px 30px; border-bottom: 1px solid rgba(0, 207, 255, 0.2); text-align: center;">
+            <div style="font-size: 26px; font-weight: 900; letter-spacing: 4px; color: #ffffff; font-family: monospace;">PHIVONEX</div>
+            <div style="font-size: 10px; font-weight: 700; letter-spacing: 2px; color: #00CFFF; margin-top: 6px; text-transform: uppercase;">FINANCIAL SECURITY &amp; ASSET DISBURSEMENT</div>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding: 35px 30px; text-align: center;">
+            <div style="display: inline-block; padding: 6px 14px; background: rgba(50, 213, 131, 0.12); border: 1px solid rgba(50, 213, 131, 0.3); border-radius: 20px; font-size: 11px; font-weight: 700; color: #32D583; font-family: monospace; text-transform: uppercase; margin-bottom: 20px;">
+              WITHDRAWAL AUTHORIZATION REQUIRED
+            </div>
+            <h1 style="font-size: 22px; font-weight: 800; color: #ffffff; margin: 0 0 14px 0; line-height: 1.3;">Authorize Fund Withdrawal</h1>
+            <p style="font-size: 14px; color: #94a3b8; line-height: 1.6; max-width: 480px; margin: 0 auto 20px auto;">
+              A withdrawal request has been initiated from your PHIVONEX available balance. Use the 6-digit one-time authorization code below to confirm execution.
+            </p>
+
+            <!-- Withdrawal Details Summary Table -->
+            <div style="background: #070e20; border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 12px; padding: 16px 20px; max-width: 480px; margin: 0 auto 24px auto; text-align: left;">
+              <table width="100%" cellspacing="0" cellpadding="6" style="font-size: 13px;">
+                <tr>
+                  <td style="color: #64748b; font-weight: 500;">Withdrawal Amount:</td>
+                  <td style="color: #ffffff; font-weight: 700; text-align: right;">${details.amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 4 })} ${details.asset}</td>
+                </tr>
+                <tr>
+                  <td style="color: #64748b; font-weight: 500;">Network / Asset:</td>
+                  <td style="color: #00CFFF; font-weight: 600; text-align: right; font-family: monospace;">${details.asset}</td>
+                </tr>
+                <tr>
+                  <td style="color: #64748b; font-weight: 500;">Destination Address:</td>
+                  <td style="color: #94a3b8; text-align: right; font-family: monospace; word-break: break-all; font-size: 11px;">${details.destinationAddress}</td>
+                </tr>
+                <tr>
+                  <td style="color: #64748b; font-weight: 500;">Code Validity:</td>
+                  <td style="color: #f59e0b; font-weight: 600; text-align: right;">10 Minutes</td>
+                </tr>
+              </table>
+            </div>
+
+            <div style="background: rgba(0, 207, 255, 0.08); border: 1px solid rgba(0, 207, 255, 0.3); border-radius: 12px; padding: 18px 30px; display: inline-block; font-size: 36px; font-weight: 900; letter-spacing: 8px; color: #00CFFF; font-family: monospace; margin-bottom: 25px; box-shadow: 0 0 25px rgba(0, 207, 255, 0.2);">
+              ${code}
+            </div>
+
+            <div style="border-top: 1px solid rgba(255,255,255,0.06); padding-top: 20px; max-width: 480px; margin: 0 auto; text-align: left; font-size: 11px; color: #64748b; line-height: 1.5;">
+              <p style="margin-bottom: 6px;"><strong>Security Warning:</strong> Submitting this code will commit your withdrawal. If you did not initiate this request, change your password immediately and notify security.</p>
+              <p style="margin: 0;">Never share this authorization code with anyone.</p>
+            </div>
+          </td>
+        </tr>
+        <tr>
+          <td style="background-color: #070c1a; padding: 20px 30px; border-top: 1px solid rgba(255, 255, 255, 0.06); font-size: 11px; color: #475569; line-height: 1.5; text-align: center;">
+            <p style="margin: 0 0 4px 0; font-family: monospace; color: #64748b;">PHIVONEX Financial Cryptographic Authorization Matrix</p>
+            <p style="margin: 0;">Automated Transmission • Do Not Reply</p>
+          </td>
+        </tr>
+      </table>
+    </div>
+  `;
+  const result = await provider.sendEmail(toEmail, subject, html);
+  if (result.error) {
+    console.warn(`[EmailService] Failed to send withdrawal OTP email to ${toEmail}:`, result.error);
+  } else {
+    console.log(`[EmailService] Withdrawal OTP email sent to ${toEmail}`);
+  }
+  return !result.error;
+}

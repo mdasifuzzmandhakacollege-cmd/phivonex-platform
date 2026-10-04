@@ -21,6 +21,8 @@ import {
   Check,
   X,
   Sparkles,
+  Mail,
+  KeyRound,
 } from 'lucide-react';
 import { UserProfile } from '../../context/AuthContext';
 import { useSystemConfig } from '../../context/SystemConfigContext';
@@ -74,6 +76,23 @@ export const WithdrawalsView: React.FC<WithdrawalsViewProps> = ({ user: _user, o
   const [destinationRef, setDestinationRef] = useState<string>('');
   const [formError, setFormError] = useState<string | null>(null);
   const [formSuccess, setFormSuccess] = useState<string | null>(null);
+
+  // OTP Verification Modal State
+  const [isOtpModalOpen, setIsOtpModalOpen] = useState<boolean>(false);
+  const [withdrawalOtp, setWithdrawalOtp] = useState<string>('');
+  const [isRequestingOtp, setIsRequestingOtp] = useState<boolean>(false);
+  const [isConfirmingWithdrawal, setIsConfirmingWithdrawal] = useState<boolean>(false);
+  const [otpModalError, setOtpModalError] = useState<string | null>(null);
+  const [otpResendCountdown, setOtpResendCountdown] = useState<number>(0);
+
+  // Countdown timer for OTP resend
+  useEffect(() => {
+    if (otpResendCountdown <= 0) return;
+    const timer = setInterval(() => {
+      setOtpResendCountdown((prev) => Math.max(prev - 1, 0));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [otpResendCountdown]);
 
   // Filter & Search
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
@@ -136,11 +155,12 @@ export const WithdrawalsView: React.FC<WithdrawalsViewProps> = ({ user: _user, o
     return () => window.removeEventListener('phivonex:balance-or-tx-updated', handleUpdate);
   }, [fetchData]);
 
-  // Handle Form Submission
+  // Handle Form Submission (Initiates 6-Digit OTP Verification)
   const handleSubmitRequest = async (e: React.FormEvent) => {
     e.preventDefault();
     setFormError(null);
     setFormSuccess(null);
+    setOtpModalError(null);
 
     const numAmount = parseFloat(amountInput);
     if (isNaN(numAmount) || numAmount <= 0) {
@@ -172,11 +192,94 @@ export const WithdrawalsView: React.FC<WithdrawalsViewProps> = ({ user: _user, o
       }
     }
 
+    setIsRequestingOtp(true);
+
+    try {
+      const res = await fetch('/api/withdrawals/request-otp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          amount: numAmount,
+          destinationType,
+          destinationReference: trimmedRef,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        setFormError(data.message || 'Failed to request withdrawal authorization code.');
+        return;
+      }
+
+      setWithdrawalOtp('');
+      setOtpModalError(null);
+      setIsOtpModalOpen(true);
+      setOtpResendCountdown(60);
+    } catch (err: any) {
+      console.warn('[WithdrawalsView] OTP request error:', err);
+      setFormError(err?.message || 'Network error occurred while requesting verification code.');
+    } finally {
+      setIsRequestingOtp(false);
+    }
+  };
+
+  // Handle OTP Resend
+  const handleResendOtp = async () => {
+    if (otpResendCountdown > 0) return;
+    const numAmount = parseFloat(amountInput);
+    const trimmedRef = destinationRef.trim();
+    if (isNaN(numAmount) || !trimmedRef) return;
+
+    setIsRequestingOtp(true);
+    setOtpModalError(null);
+
+    try {
+      const res = await fetch('/api/withdrawals/request-otp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          amount: numAmount,
+          destinationType,
+          destinationReference: trimmedRef,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        setOtpModalError(data.message || 'Failed to resend code.');
+        return;
+      }
+
+      setOtpResendCountdown(60);
+      setOtpModalError(null);
+    } catch (err: any) {
+      setOtpModalError(err?.message || 'Failed to resend verification code.');
+    } finally {
+      setIsRequestingOtp(false);
+    }
+  };
+
+  // Handle Final OTP Confirmation & Execution
+  const handleConfirmWithdrawal = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setOtpModalError(null);
+
+    const cleanOtp = withdrawalOtp.trim();
+    if (!cleanOtp || cleanOtp.length !== 6) {
+      setOtpModalError('Please enter the 6-digit verification code sent to your email.');
+      return;
+    }
+
+    const numAmount = parseFloat(amountInput);
+    const trimmedRef = destinationRef.trim();
+
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 15000);
 
     try {
-      setSubmitting(true);
+      setIsConfirmingWithdrawal(true);
       const res = await fetch('/api/withdrawals', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -186,6 +289,7 @@ export const WithdrawalsView: React.FC<WithdrawalsViewProps> = ({ user: _user, o
           amount: numAmount,
           destinationType,
           destinationReference: trimmedRef,
+          otp: cleanOtp,
           idempotencyKey: `wdr-ui-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`,
         }),
       });
@@ -194,25 +298,29 @@ export const WithdrawalsView: React.FC<WithdrawalsViewProps> = ({ user: _user, o
       const data = await res.json();
 
       if (!res.ok) {
-        setFormError(data.message || 'Failed to submit withdrawal request.');
+        setOtpModalError(data.message || 'Failed to authorize withdrawal.');
         return;
       }
 
+      setIsOtpModalOpen(false);
       setFormSuccess(`Withdrawal request ${data.publicWithdrawalId || ''} for $${numAmount.toFixed(2)} USD submitted successfully via ${formatDestinationLabel(destinationType)}.`);
       setAmountInput('');
       setDestinationRef('');
+      setWithdrawalOtp('');
       await fetchData();
+      window.dispatchEvent(new CustomEvent('phivonex:balance-or-tx-updated'));
     } catch (err: any) {
       clearTimeout(timeoutId);
       console.warn('[WithdrawalsView] Submit error:', err);
       if (err.name === 'AbortError') {
+        setIsOtpModalOpen(false);
         setFormError('Request timed out. Please check your withdrawal history to verify status.');
       } else {
-        setFormError(err?.message || 'Network error occurred. Please try again.');
+        setOtpModalError(err?.message || 'Network error occurred. Please try again.');
       }
     } finally {
       clearTimeout(timeoutId);
-      setSubmitting(false);
+      setIsConfirmingWithdrawal(false);
       await fetchData();
     }
   };
@@ -581,10 +689,15 @@ export const WithdrawalsView: React.FC<WithdrawalsViewProps> = ({ user: _user, o
             {/* Submit Button */}
             <button
               type="submit"
-              disabled={submitting || availableBalance < minWithdrawalAmount || !cryptoWithdrawalsEnabled}
+              disabled={isRequestingOtp || submitting || availableBalance < minWithdrawalAmount || !cryptoWithdrawalsEnabled}
               className="w-full py-3 px-4 rounded-xl bg-[#00CFFF] hover:bg-[#00CFFF]/90 disabled:opacity-40 disabled:cursor-not-allowed text-[#05070B] font-bold text-sm flex items-center justify-center gap-2 transition-all cursor-pointer min-h-[48px]"
             >
-              {submitting ? (
+              {isRequestingOtp ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <span>Dispatching Authorization Code...</span>
+                </>
+              ) : submitting ? (
                 <>
                   <Loader2 className="w-4 h-4 animate-spin" />
                   <span>Submitting Request...</span>
@@ -596,8 +709,8 @@ export const WithdrawalsView: React.FC<WithdrawalsViewProps> = ({ user: _user, o
                 </>
               ) : (
                 <>
-                  <Send className="w-4 h-4" />
-                  <span>Submit Withdrawal Request</span>
+                  <ShieldCheck className="w-4 h-4" />
+                  <span>Request Withdrawal Authorization</span>
                 </>
               )}
             </button>
@@ -897,6 +1010,139 @@ export const WithdrawalsView: React.FC<WithdrawalsViewProps> = ({ user: _user, o
                 Close Inspector
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================
+          5. WITHDRAWAL OTP AUTHORIZATION MODAL
+         ======================================================== */}
+      {isOtpModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-fadeIn">
+          <div
+            className="fixed inset-0"
+            onClick={() => { if (!isConfirmingWithdrawal) setIsOtpModalOpen(false); }}
+            aria-hidden="true"
+          />
+
+          <div className="relative w-full max-w-md bg-[#07101D] border border-[#00CFFF]/30 rounded-2xl p-6 shadow-2xl space-y-4 z-10 text-xs">
+            <div className="flex items-center justify-between border-b border-white/[0.08] pb-3">
+              <div className="flex items-center gap-2 text-white font-bold font-mono">
+                <KeyRound className="w-4 h-4 text-[#00CFFF]" />
+                <span>Authorize Fund Withdrawal</span>
+              </div>
+              <button
+                disabled={isConfirmingWithdrawal}
+                onClick={() => setIsOtpModalOpen(false)}
+                className="p-1 rounded-md text-[#98A2B3] hover:text-white hover:bg-white/[0.08] transition-colors cursor-pointer disabled:opacity-30"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Verification Notice */}
+            <div className="p-3.5 rounded-xl bg-[#00CFFF]/10 border border-[#00CFFF]/25 text-xs text-[#00CFFF] space-y-1">
+              <div className="flex items-center gap-2 font-bold">
+                <Mail className="w-4 h-4 shrink-0" />
+                <span>6-Digit Authorization Code Dispatched</span>
+              </div>
+              <p className="text-[11px] text-[#98A2B3] leading-relaxed">
+                A one-time cryptographic authorization code was dispatched to your registered account email.
+              </p>
+            </div>
+
+            {/* Withdrawal Summary Box */}
+            <div className="p-3.5 rounded-xl bg-[#05070B] border border-white/[0.06] space-y-2 text-[11px] font-mono">
+              <div className="flex justify-between items-center">
+                <span className="text-[#667085]">Withdrawal Amount:</span>
+                <span className="text-[#00CFFF] font-bold text-sm">
+                  ${parseFloat(amountInput || '0').toFixed(2)} USD
+                </span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-[#667085]">Channel / Network:</span>
+                <span className="text-white">{formatDestinationLabel(destinationType)}</span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-[#667085]">Destination Wallet:</span>
+                <span className="text-[#98A2B3] truncate max-w-[200px]" title={destinationRef}>
+                  {destinationRef}
+                </span>
+              </div>
+              <div className="flex justify-between items-center text-[10px] text-amber-400 pt-1 border-t border-white/[0.04]">
+                <span>Code Validity:</span>
+                <span>10 Minutes</span>
+              </div>
+            </div>
+
+            {otpModalError && (
+              <div className="p-3 rounded-lg bg-[#F04438]/10 border border-[#F04438]/30 text-xs text-[#F04438] flex items-center gap-2">
+                <AlertTriangle className="w-4 h-4 shrink-0" />
+                <span>{otpModalError}</span>
+              </div>
+            )}
+
+            <form onSubmit={handleConfirmWithdrawal} className="space-y-4">
+              <div>
+                <label className="block text-xs font-medium text-white mb-1.5">
+                  Enter 6-Digit Verification Code
+                </label>
+                <input
+                  type="text"
+                  required
+                  autoFocus
+                  maxLength={6}
+                  placeholder="123456"
+                  value={withdrawalOtp}
+                  onChange={(e) => setWithdrawalOtp(e.target.value.replace(/[^0-9]/g, ''))}
+                  className="w-full bg-[#05070B] border border-white/[0.1] focus:border-[#00CFFF] rounded-xl px-4 py-3 text-center text-xl font-mono tracking-[0.4em] text-[#00CFFF] placeholder:text-white/20 focus:outline-none min-h-[48px]"
+                />
+              </div>
+
+              <div className="flex items-center justify-between text-[11px] text-[#98A2B3] pt-1">
+                <span>Didn't receive the code?</span>
+                <button
+                  type="button"
+                  disabled={isRequestingOtp || otpResendCountdown > 0}
+                  onClick={handleResendOtp}
+                  className="text-[#00CFFF] hover:underline disabled:opacity-40 disabled:hover:no-underline font-medium cursor-pointer"
+                >
+                  {isRequestingOtp
+                    ? 'Resending...'
+                    : otpResendCountdown > 0
+                    ? `Resend in ${otpResendCountdown}s`
+                    : 'Resend Code'}
+                </button>
+              </div>
+
+              <div className="flex gap-2 pt-2">
+                <button
+                  type="button"
+                  disabled={isConfirmingWithdrawal}
+                  onClick={() => setIsOtpModalOpen(false)}
+                  className="flex-1 py-2.5 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] text-[#98A2B3] font-medium text-xs cursor-pointer min-h-[44px] disabled:opacity-40"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isConfirmingWithdrawal || withdrawalOtp.trim().length !== 6}
+                  className="flex-1 py-2.5 rounded-xl bg-gradient-to-r from-[#00CFFF] to-[#168BFF] text-[#05070B] font-bold text-xs hover:brightness-110 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer flex items-center justify-center gap-1.5 min-h-[44px]"
+                >
+                  {isConfirmingWithdrawal ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      <span>Authorizing...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Check className="w-3.5 h-3.5" />
+                      <span>Confirm Withdrawal</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

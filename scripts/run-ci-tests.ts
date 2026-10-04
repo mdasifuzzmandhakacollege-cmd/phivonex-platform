@@ -27,6 +27,7 @@ const testSuites = [
   { name: 'PF-09 Full Production E2E Verification', script: 'scripts/test-pf09-full-e2e-verification.ts' },
   { name: 'PF-10 Dynamic Daily Reward & Public Data Audit', script: 'scripts/test-pf10-dynamic-daily-reward.ts' },
   { name: 'PF-11 Withdrawal Engine Production Fix', script: 'scripts/test-withdrawal-engine-production-fix.ts' },
+  { name: 'PF-12 Withdrawal OTP & Forgot Password Verification', script: 'scripts/test-withdrawal-and-forgot-password-otp.ts' },
 ];
 
 async function main() {
