@@ -1778,9 +1778,9 @@ async function seedEconomicConfigs(client: DatabaseClient) {
       },
       {
         key: 'NODE_REWARD_RATE_PER_EPOCH',
-        value: JSON.stringify(10), // Dynamically configured starting at 10 PHIVO/Day
+        value: JSON.stringify(null), // Must remain null until explicitly configured by admin
         category: 'REWARDS',
-        description: 'Authoritative reward payout rate per Active Node per Epoch (PHIVO/Day). Dynamically configurable by Admin.',
+        description: 'Authoritative reward payout rate per Active Node per Epoch (USD). Unconfigured by default.',
       },
       {
         key: 'INTERNAL_COIN_PRICE_USDT',
@@ -1855,13 +1855,6 @@ async function seedEconomicConfigs(client: DatabaseClient) {
       UPDATE system_economic_configs
       SET config_value = REPLACE(config_value, '"PHX"', '"PHIVO"')
       WHERE config_key = 'INTERNAL_COIN_PRICE_USDT' AND config_value LIKE '%PHX%';
-    `);
-
-    // Ensure NODE_REWARD_RATE_PER_EPOCH defaults to dynamic starting value 10 if unconfigured/null
-    await client.query(`
-      UPDATE system_economic_configs
-      SET config_value = '10'
-      WHERE config_key = 'NODE_REWARD_RATE_PER_EPOCH' AND (config_value IS NULL OR config_value = 'null');
     `);
 
     console.log('[DB Migration] System Economic configuration parameters initialized.');
