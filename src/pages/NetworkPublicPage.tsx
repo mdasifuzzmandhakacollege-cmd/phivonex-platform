@@ -125,7 +125,7 @@ export const NetworkPublicPage: React.FC<NetworkPublicPageProps> = ({ onNavigate
               <Clock className="w-4 h-4 text-purple-400" />
             </div>
             <div className="text-2xl font-mono font-extrabold text-purple-400">
-              400 Days
+              200 Days
             </div>
             <p className="text-xs text-[#98A2B3]">
               Eligible daily reward allocation term
@@ -192,7 +192,7 @@ export const NetworkPublicPage: React.FC<NetworkPublicPageProps> = ({ onNavigate
             </div>
             <div className="p-4 rounded-2xl bg-[#05070B] border border-white/[0.06] space-y-1">
               <span className="text-[10px] text-[#98A2B3] uppercase">Eligible Duration</span>
-              <span className="text-sm font-bold text-purple-400 block">400 Daily Epochs</span>
+              <span className="text-sm font-bold text-purple-400 block">200 Daily Epochs</span>
             </div>
           </div>
         </div>

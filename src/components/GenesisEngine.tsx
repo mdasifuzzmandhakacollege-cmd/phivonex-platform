@@ -27,7 +27,7 @@ export const GenesisEngine: React.FC<GenesisEngineProps> = ({
   distributedPhivo,
   remainingPhivo,
   currentDay = 127,
-  totalDays = 400,
+  totalDays = 200,
   isEmitting = true,
   dailyEmission,
   className = '',
@@ -243,7 +243,7 @@ export const GenesisEngine: React.FC<GenesisEngineProps> = ({
             />
             <span>
               {isMatured
-                ? '400-DAY MATURED — 100% DISTRIBUTED'
+                ? '200-DAY MATURED — 100% DISTRIBUTED'
                 : status === 'EMITTING'
                 ? (dailyEmission ? `EMITTING — ${dailyEmission} PHIVO/DAY` : 'EMITTING')
                 : isEngineActive
@@ -609,7 +609,7 @@ export const GenesisEngine: React.FC<GenesisEngineProps> = ({
             <span>NODE MATURED — 100% DISTRIBUTED</span>
           </div>
           <p className="text-xs text-white/90 font-mono">
-            All 10,000 PHIVO lifetime node allocation has been fully emitted across 400 eligible reward days. Further reward emission for this Genesis Node is complete.
+            All 10,000 PHIVO lifetime node allocation has been fully emitted across 200 eligible reward days. Further reward emission for this Genesis Node is complete.
           </p>
         </div>
       )}

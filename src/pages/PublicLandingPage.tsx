@@ -648,7 +648,7 @@ export const PublicLandingPage: React.FC<PublicLandingPageProps> = ({ onNavigate
 
                 <div className="p-3 rounded-2xl bg-[#05070B] border border-white/[0.08]">
                   <span className="text-[10px] text-[#98A2B3] uppercase block">Eligible Term</span>
-                  <span className="font-bold text-white">400 Eligible Days</span>
+                  <span className="font-bold text-white">200 Eligible Days</span>
                 </div>
 
                 <div className="p-3 rounded-2xl bg-[#05070B] border border-white/[0.08]">
@@ -818,7 +818,7 @@ export const PublicLandingPage: React.FC<PublicLandingPageProps> = ({ onNavigate
 
                     <div className="p-2.5 rounded-xl bg-[#05070B]/90 border border-white/[0.06] space-y-0.5">
                       <span className="text-[9px] text-[#98A2B3] uppercase tracking-wider block">Eligible Term</span>
-                      <span className="text-xs font-bold text-emerald-400 block">400 Days</span>
+                      <span className="text-xs font-bold text-emerald-400 block">200 Days</span>
                     </div>
                   </div>
 
@@ -829,7 +829,7 @@ export const PublicLandingPage: React.FC<PublicLandingPageProps> = ({ onNavigate
                   <div className="flex items-center justify-between text-xs font-mono font-bold">
                     <span className="text-white flex items-center gap-1.5">
                       <Zap className="w-3.5 h-3.5 text-[#00CFFF]" />
-                      <span>400-DAY LIFECYCLE</span>
+                      <span>200-DAY LIFECYCLE</span>
                     </span>
                     <span className="text-[10px] text-[#98A2B3] font-normal">Genesis V1 Economic Model</span>
                   </div>

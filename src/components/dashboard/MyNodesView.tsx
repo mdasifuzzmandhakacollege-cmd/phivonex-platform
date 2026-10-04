@@ -496,7 +496,7 @@ export const MyNodesView: React.FC<MyNodesViewProps> = ({ user: _user, onNavigat
                 distributedPhivo={nodes[0].distributedPhivo ?? 0}
                 remainingPhivo={nodes[0].remainingPhivo ?? 10000}
                 currentDay={nodes[0].currentDay ?? 1}
-                totalDays={nodes[0].termDays ?? 400}
+                totalDays={nodes[0].termDays ?? 200}
                 status={nodes[0].status}
                 isEmitting={nodes[0].status === 'ACTIVE' || nodes[0].status === 'EMITTING'}
               />
@@ -511,12 +511,12 @@ export const MyNodesView: React.FC<MyNodesViewProps> = ({ user: _user, onNavigat
 
               const price = node.purchasePriceUsd || 1000;
               const allocation = node.lifetimePhivoAllocation || 10000;
-              const daily = node.dailyPhivoEmission || 25;
-              const term = node.termDays || 400;
+              const daily = node.dailyPhivoEmission || 50;
+              const term = node.termDays || 200;
               const dist = node.distributedPhivo ?? 0;
               const rem = node.remainingPhivo ?? Math.max(0, allocation - dist);
               const progress = node.progressPercent ?? Math.min(100, Number(((dist / allocation) * 100).toFixed(2)));
-              const day = node.currentDay ?? (isMatured ? 400 : Math.min(400, Math.floor(dist / daily) + 1));
+              const day = node.currentDay ?? (isMatured ? 200 : Math.min(200, Math.floor(dist / daily) + 1));
 
               return (
                 <div
@@ -610,10 +610,10 @@ export const MyNodesView: React.FC<MyNodesViewProps> = ({ user: _user, onNavigat
                       </div>
                       <div className="flex items-center justify-between text-[9px] text-[#667085] pt-0.5">
                         <span>Day 1</span>
+                        <span>Day 50</span>
                         <span>Day 100</span>
+                        <span>Day 150</span>
                         <span>Day 200</span>
-                        <span>Day 300</span>
-                        <span>Day 400</span>
                       </div>
                     </div>
 

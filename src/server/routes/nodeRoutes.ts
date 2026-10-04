@@ -139,8 +139,8 @@ router.get('/me', requireAuth, async (req: AuthRequest, res: Response): Promise<
       const distributedPhivo = Number(n.distributed_phivo || stat.totalRewards || 0);
       const remainingPhivo = Math.max(0, lifetimeAllocation - distributedPhivo);
       const progressPercent = Math.min(100, Number(((distributedPhivo / lifetimeAllocation) * 100).toFixed(2)));
-      const completedDays = Math.min(400, dailyEmission > 0 ? Math.floor(distributedPhivo / dailyEmission) : 0);
-      const currentDay = n.status === 'MATURED' ? 400 : Math.min(400, completedDays + 1);
+      const completedDays = Math.min(200, dailyEmission > 0 ? Math.floor(distributedPhivo / dailyEmission) : 0);
+      const currentDay = n.status === 'MATURED' ? 200 : Math.min(200, completedDays + 1);
 
       return {
         publicNodeId: n.public_node_id,
@@ -150,12 +150,12 @@ router.get('/me', requireAuth, async (req: AuthRequest, res: Response): Promise<
         purchasePriceUsd: Number(n.purchase_price_usd || 1000),
         phivoReferencePriceAtPurchase: Number(n.phivo_reference_price_at_purchase || 0.10),
         lifetimePhivoAllocation: lifetimeAllocation,
-        termDays: n.term_days || 400,
+        termDays: n.term_days || 200,
         dailyPhivoEmission: dailyEmission,
         protocolDailyEmission: activeProtocolDailyReward,
         purchaseTimestamp: n.purchase_timestamp ? n.purchase_timestamp.toISOString() : (n.activated_at ? n.activated_at.toISOString() : null),
         activatedAt: n.activated_at ? n.activated_at.toISOString() : null,
-        maturityTimestamp: n.maturity_timestamp ? n.maturity_timestamp.toISOString() : (n.activated_at ? new Date(new Date(n.activated_at).getTime() + 400 * 24 * 60 * 60 * 1000).toISOString() : null),
+        maturityTimestamp: n.maturity_timestamp ? n.maturity_timestamp.toISOString() : (n.activated_at ? new Date(new Date(n.activated_at).getTime() + 200 * 24 * 60 * 60 * 1000).toISOString() : null),
         distributedPhivo,
         remainingPhivo,
         progressPercent,

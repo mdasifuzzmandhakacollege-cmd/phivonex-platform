@@ -389,8 +389,8 @@ async function initSchema(client: DatabaseClient) {
         purchase_price_usd NUMERIC(12, 2) NOT NULL DEFAULT 1000.00,
         phivo_reference_price_at_purchase NUMERIC(10, 4) NOT NULL DEFAULT 0.10,
         lifetime_phivo_allocation NUMERIC(14, 2) NOT NULL DEFAULT 10000.00,
-        term_days INTEGER NOT NULL DEFAULT 400,
-        daily_phivo_emission NUMERIC(10, 2) NOT NULL DEFAULT 25.00,
+        term_days INTEGER NOT NULL DEFAULT 200,
+        daily_phivo_emission NUMERIC(10, 2) NOT NULL DEFAULT 50.00,
         purchase_timestamp TIMESTAMP WITH TIME ZONE NULL,
         reserved_at TIMESTAMP WITH TIME ZONE NULL,
         activated_at TIMESTAMP WITH TIME ZONE NULL,
@@ -473,8 +473,9 @@ async function initSchema(client: DatabaseClient) {
       ALTER TABLE nodes ADD COLUMN IF NOT EXISTS purchase_price_usd NUMERIC(12, 2) NOT NULL DEFAULT 1000.00;
       ALTER TABLE nodes ADD COLUMN IF NOT EXISTS phivo_reference_price_at_purchase NUMERIC(10, 4) NOT NULL DEFAULT 0.10;
       ALTER TABLE nodes ADD COLUMN IF NOT EXISTS lifetime_phivo_allocation NUMERIC(14, 2) NOT NULL DEFAULT 10000.00;
-      ALTER TABLE nodes ADD COLUMN IF NOT EXISTS term_days INTEGER NOT NULL DEFAULT 400;
-      ALTER TABLE nodes ADD COLUMN IF NOT EXISTS daily_phivo_emission NUMERIC(10, 2) NOT NULL DEFAULT 25.00;
+      ALTER TABLE nodes ADD COLUMN IF NOT EXISTS term_days INTEGER NOT NULL DEFAULT 200;
+      ALTER TABLE nodes ADD COLUMN IF NOT EXISTS daily_phivo_emission NUMERIC(10, 2) NOT NULL DEFAULT 50.00;
+      UPDATE nodes SET term_days = 200 WHERE term_days = 400;
       ALTER TABLE nodes ADD COLUMN IF NOT EXISTS purchase_timestamp TIMESTAMP WITH TIME ZONE NULL;
       ALTER TABLE nodes ADD COLUMN IF NOT EXISTS maturity_timestamp TIMESTAMP WITH TIME ZONE NULL;
       ALTER TABLE nodes ADD COLUMN IF NOT EXISTS distributed_phivo NUMERIC(14, 2) NOT NULL DEFAULT 0.00;
@@ -1777,9 +1778,9 @@ async function seedEconomicConfigs(client: DatabaseClient) {
       },
       {
         key: 'NODE_REWARD_RATE_PER_EPOCH',
-        value: JSON.stringify(null), // Must remain null until explicitly configured by admin
+        value: JSON.stringify(10), // Dynamically configured starting at 10 PHIVO/Day
         category: 'REWARDS',
-        description: 'Authoritative reward payout rate per Active Node per Epoch (USD). Unconfigured by default.',
+        description: 'Authoritative reward payout rate per Active Node per Epoch (PHIVO/Day). Dynamically configurable by Admin.',
       },
       {
         key: 'INTERNAL_COIN_PRICE_USDT',
@@ -1854,6 +1855,13 @@ async function seedEconomicConfigs(client: DatabaseClient) {
       UPDATE system_economic_configs
       SET config_value = REPLACE(config_value, '"PHX"', '"PHIVO"')
       WHERE config_key = 'INTERNAL_COIN_PRICE_USDT' AND config_value LIKE '%PHX%';
+    `);
+
+    // Ensure NODE_REWARD_RATE_PER_EPOCH defaults to dynamic starting value 10 if unconfigured/null
+    await client.query(`
+      UPDATE system_economic_configs
+      SET config_value = '10'
+      WHERE config_key = 'NODE_REWARD_RATE_PER_EPOCH' AND (config_value IS NULL OR config_value = 'null');
     `);
 
     console.log('[DB Migration] System Economic configuration parameters initialized.');
