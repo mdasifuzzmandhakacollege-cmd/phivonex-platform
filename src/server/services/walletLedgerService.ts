@@ -685,7 +685,7 @@ export async function getWalletSummary(userId: string): Promise<WalletSummaryRes
     transactionCount += cnt;
 
     const st = row.source_type;
-    const isEarningSource = st === 'REFERRAL_COMMISSION' || st === 'MATCHING_BONUS' || st === 'PROMOTION_BONUS' || st === 'NODE_REWARD' || st === 'ADMIN_ADJUSTMENT';
+    const isEarningSource = st === 'REFERRAL_COMMISSION' || st === 'MATCHING_BONUS' || st === 'PROMOTION_BONUS' || st === 'NODE_REWARD';
 
     if (row.entry_type === 'CREDIT') {
       if (isEarningSource) {

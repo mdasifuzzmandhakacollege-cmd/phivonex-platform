@@ -1,8 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   User,
-  Mail,
-  Globe,
   Tag,
   Copy,
   Check,
@@ -13,15 +11,15 @@ import {
   ArrowUpRight,
   ArrowDownLeft,
   ArrowRight,
-  RotateCcw,
+  Repeat,
   Coins,
   Users,
   GitFork,
   ChevronRight,
-  RefreshCw,
-  Zap,
   Activity,
   Trophy,
+  Zap,
+  ShieldCheck,
 } from 'lucide-react';
 import { UserProfile } from '../../context/AuthContext';
 import { buildPublicReferralUrl } from '../../utils/referralUrl';
@@ -128,7 +126,7 @@ interface OverviewViewProps {
 }
 
 export const OverviewView: React.FC<OverviewViewProps> = ({ user, onNavigateTab }) => {
-  const { coinPriceUsdt, nodeBasePriceUsd, genesisNodeCap, lastUpdated } = useSystemConfig();
+  const { coinPriceUsdt, nodeBasePriceUsd, directReferralCommissionRate, lastUpdated } = useSystemConfig();
 
   // 1. Data States
   const [referralData, setReferralData] = useState<ReferralMeResponse | null>(null);
@@ -138,7 +136,7 @@ export const OverviewView: React.FC<OverviewViewProps> = ({ user, onNavigateTab 
   const [matchingData, setMatchingData] = useState<MatchingSummaryData | null>(null);
   const [rankData, setRankData] = useState<UserRankStatusData | null>(null);
   const [directReferralsCount, setDirectReferralsCount] = useState<number>(0);
-  const [phivoRate, setPhivoRate] = useState<number>(0.1);
+  const [phivoRate, setPhivoRate] = useState<number>(coinPriceUsdt || 0.1);
 
   // 2. UI & Interaction States
   const [loading, setLoading] = useState(true);
@@ -169,7 +167,7 @@ export const OverviewView: React.FC<OverviewViewProps> = ({ user, onNavigateTab 
         fetch('/api/nodes/me', { credentials: 'include' }),
         fetch('/api/rewards/me', { credentials: 'include' }),
         fetch('/api/matching/summary', { credentials: 'include' }),
-        fetch('/api/promotions/my-status', { credentials: 'include' }),
+        fetch('/api/promotions/ranks/me', { credentials: 'include' }),
         fetch('/api/referrals/direct', { credentials: 'include' }),
         fetch('/api/economic/public'),
       ]);
@@ -226,7 +224,7 @@ export const OverviewView: React.FC<OverviewViewProps> = ({ user, onNavigateTab 
       // 6. Promotions / Rank
       if (rankRes.status === 'fulfilled' && rankRes.value.ok) {
         const data = await rankRes.value.json();
-        setRankData(data);
+        setRankData(data.state || data);
       }
 
       // 7. Direct Referrals Count
@@ -328,10 +326,25 @@ export const OverviewView: React.FC<OverviewViewProps> = ({ user, onNavigateTab 
   const availableUsdt = walletData?.availableBalance ?? walletData?.ledgerBalance ?? 0;
   const phivoBalance = walletData?.phivoBalance ?? 0;
   const phivoValueUsdt = phivoBalance * phivoRate;
-  const totalEarnedUsd = walletData?.totalEarned ?? 0;
+
+  // Strict Total Earnings Reconciled Calculation:
+  // ONLY genuinely earned income rewards (Referral + Matching + Promotion + Node Rewards).
+  // Excludes Account Credit, deposits, swaps, and funding adjustments.
+  const totalEarnedUsd = walletData?.breakdown
+    ? ((walletData.breakdown.referral || 0) +
+       (walletData.breakdown.matching || 0) +
+       (walletData.breakdown.promotion || 0) +
+       (walletData.breakdown.nodeReward || 0))
+    : (walletData?.totalEarned ?? 0);
+
   const activeNodesCount = nodeData?.activeNodes ?? 0;
   const currentRankName = rankData?.currentRankName || 'Standard Member';
   const nextRankName = rankData?.nextRankName;
+
+  // Dynamic direct referral reward per eligible node (based on node base price & commission rate)
+  const directRewardPerNode = (nodeBasePriceUsd && directReferralCommissionRate)
+    ? (nodeBasePriceUsd * (directReferralCommissionRate / 100))
+    : 50;
 
   const formatDate = (dateStr?: string) => {
     if (!dateStr) return 'Not Available';
@@ -363,7 +376,7 @@ export const OverviewView: React.FC<OverviewViewProps> = ({ user, onNavigateTab 
       <PromotionalBannerCarousel onNavigateTab={navigateTo} />
 
       {/* ========================================================
-          1. PREMIUM 3D FLIP OVERVIEW HERO CARD
+          1. PREMIUM 3D FLIP OVERVIEW HERO CARD (UNTOUCHED)
          ======================================================== */}
       <Premium3DFlipCard
         user={user}
@@ -378,16 +391,16 @@ export const OverviewView: React.FC<OverviewViewProps> = ({ user, onNavigateTab 
       />
 
       {/* ========================================================
-          2. PRIMARY KPI STRIP (6 Compact & High-Impact Cards)
+          2. PRIMARY METRICS GRID (6 Coherent Cards)
          ======================================================== */}
       <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-3 sm:gap-4">
-        {/* KPI 1: Available USDT */}
+        {/* Metric 1: Available USDT */}
         <div
           onClick={() => navigateTo('wallet')}
           className="p-4 sm:p-5 rounded-2xl bg-[#07101D] border border-white/[0.08] hover:border-[#00CFFF]/40 transition-all duration-200 shadow-lg cursor-pointer group flex flex-col justify-between"
         >
           <div className="flex items-center justify-between text-xs text-[#98A2B3] mb-2">
-            <span className="font-medium text-[11px] uppercase tracking-wider">USDT Balance</span>
+            <span className="font-medium text-xs">USDT Balance</span>
             <div className="w-7 h-7 rounded-lg bg-[#00CFFF]/10 border border-[#00CFFF]/20 flex items-center justify-center text-[#00CFFF] group-hover:scale-110 transition-transform">
               <UsdtIcon size={16} />
             </div>
@@ -403,13 +416,13 @@ export const OverviewView: React.FC<OverviewViewProps> = ({ user, onNavigateTab 
           </div>
         </div>
 
-        {/* KPI 2: PHIVO Balance */}
+        {/* Metric 2: PHIVO Balance */}
         <div
           onClick={() => navigateTo('swap')}
           className="p-4 sm:p-5 rounded-2xl bg-[#07101D] border border-white/[0.08] hover:border-[#00CFFF]/40 transition-all duration-200 shadow-lg cursor-pointer group flex flex-col justify-between"
         >
           <div className="flex items-center justify-between text-xs text-[#98A2B3] mb-2">
-            <span className="font-medium text-[11px] uppercase tracking-wider">PHIVO Balance</span>
+            <span className="font-medium text-xs">PHIVO Balance</span>
             <div className="w-7 h-7 rounded-lg bg-[#00CFFF]/10 border border-[#00CFFF]/20 flex items-center justify-center text-[#00CFFF] group-hover:scale-110 transition-transform">
               <PhivoCoinIcon size={16} />
             </div>
@@ -418,19 +431,19 @@ export const OverviewView: React.FC<OverviewViewProps> = ({ user, onNavigateTab 
             <div className="text-xl sm:text-2xl font-mono font-bold text-[#00CFFF] tabular-nums">
               {formatCurrency(phivoBalance)}
             </div>
-            <div className="text-[11px] text-[#98A2B3] mt-1">
+            <div className="text-[11px] text-[#98A2B3] mt-1 font-mono">
               ≈ ${formatCurrency(phivoValueUsdt)} USDT
             </div>
           </div>
         </div>
 
-        {/* KPI 3: Active Nodes */}
+        {/* Metric 3: Active Nodes */}
         <div
           onClick={() => navigateTo('nodes')}
           className="p-4 sm:p-5 rounded-2xl bg-[#07101D] border border-white/[0.08] hover:border-[#32D583]/40 transition-all duration-200 shadow-lg cursor-pointer group flex flex-col justify-between"
         >
           <div className="flex items-center justify-between text-xs text-[#98A2B3] mb-2">
-            <span className="font-medium text-[11px] uppercase tracking-wider">Active Nodes</span>
+            <span className="font-medium text-xs">Active Nodes</span>
             <div className="w-7 h-7 rounded-lg bg-[#32D583]/10 border border-[#32D583]/20 flex items-center justify-center text-[#32D583] group-hover:scale-110 transition-transform">
               <Server className="w-4 h-4" />
             </div>
@@ -441,19 +454,19 @@ export const OverviewView: React.FC<OverviewViewProps> = ({ user, onNavigateTab 
               <span className="text-xs font-normal text-[#98A2B3]">Nodes</span>
             </div>
             <div className="flex items-center gap-1.5 text-[11px] text-[#32D583] mt-1 font-medium">
-              <span className="w-1.5 h-1.5 rounded-full bg-[#32D583]" />
+              <span className={`w-1.5 h-1.5 rounded-full ${activeNodesCount > 0 ? 'bg-[#32D583] animate-pulse' : 'bg-[#98A2B3]'}`} />
               <span>{activeNodesCount > 0 ? 'Mining Active' : 'Ready to activate'}</span>
             </div>
           </div>
         </div>
 
-        {/* KPI 4: Current Rank */}
+        {/* Metric 4: Current Rank */}
         <div
           onClick={() => navigateTo('rewards')}
           className="p-4 sm:p-5 rounded-2xl bg-[#07101D] border border-white/[0.08] hover:border-[#F59E0B]/40 transition-all duration-200 shadow-lg cursor-pointer group flex flex-col justify-between"
         >
           <div className="flex items-center justify-between text-xs text-[#98A2B3] mb-2">
-            <span className="font-medium text-[11px] uppercase tracking-wider">Current Rank</span>
+            <span className="font-medium text-xs">Current Rank</span>
             <div className="w-7 h-7 rounded-lg bg-[#F59E0B]/10 border border-[#F59E0B]/20 flex items-center justify-center text-[#F59E0B] group-hover:scale-110 transition-transform">
               <Trophy className="w-4 h-4" />
             </div>
@@ -463,18 +476,18 @@ export const OverviewView: React.FC<OverviewViewProps> = ({ user, onNavigateTab 
               {currentRankName}
             </div>
             <div className="text-[11px] text-[#F59E0B] mt-1 font-medium truncate">
-              {nextRankName ? `Next: ${nextRankName}` : 'Top Tier'}
+              {nextRankName ? `Next: ${nextRankName}` : (currentRankName === 'Crown Ambassador' ? 'Highest Tier' : 'Tier In Progress')}
             </div>
           </div>
         </div>
 
-        {/* KPI 5: Total Earnings */}
+        {/* Metric 5: Total Earnings (Strictly Reconciled Rewards) */}
         <div
           onClick={() => navigateTo('wallet')}
           className="p-4 sm:p-5 rounded-2xl bg-[#07101D] border border-white/[0.08] hover:border-[#32D583]/40 transition-all duration-200 shadow-lg cursor-pointer group flex flex-col justify-between"
         >
           <div className="flex items-center justify-between text-xs text-[#98A2B3] mb-2">
-            <span className="font-medium text-[11px] uppercase tracking-wider">Total Earnings</span>
+            <span className="font-medium text-xs">Total Earnings</span>
             <div className="w-7 h-7 rounded-lg bg-[#32D583]/10 border border-[#32D583]/20 flex items-center justify-center text-[#32D583] group-hover:scale-110 transition-transform">
               <Activity className="w-4 h-4" />
             </div>
@@ -483,19 +496,19 @@ export const OverviewView: React.FC<OverviewViewProps> = ({ user, onNavigateTab 
             <div className="text-xl sm:text-2xl font-mono font-bold text-[#32D583] tabular-nums">
               ${formatCurrency(totalEarnedUsd)}
             </div>
-            <div className="text-[11px] text-[#98A2B3] mt-1">
-              All-time cumulative
+            <div className="text-[11px] text-[#98A2B3] mt-1 truncate">
+              Protocol rewards earned
             </div>
           </div>
         </div>
 
-        {/* KPI 6: Direct Referrals */}
+        {/* Metric 6: Direct Referrals */}
         <div
           onClick={() => navigateTo('referrals')}
           className="p-4 sm:p-5 rounded-2xl bg-[#07101D] border border-white/[0.08] hover:border-[#168BFF]/40 transition-all duration-200 shadow-lg cursor-pointer group flex flex-col justify-between"
         >
           <div className="flex items-center justify-between text-xs text-[#98A2B3] mb-2">
-            <span className="font-medium text-[11px] uppercase tracking-wider">Direct Referrals</span>
+            <span className="font-medium text-xs">Direct Referrals</span>
             <div className="w-7 h-7 rounded-lg bg-[#168BFF]/10 border border-[#168BFF]/20 flex items-center justify-center text-[#168BFF] group-hover:scale-110 transition-transform">
               <Users className="w-4 h-4" />
             </div>
@@ -505,71 +518,71 @@ export const OverviewView: React.FC<OverviewViewProps> = ({ user, onNavigateTab 
               <span>{directReferralsCount}</span>
               <span className="text-xs font-normal text-[#98A2B3]">Members</span>
             </div>
-            <div className="text-[11px] text-[#168BFF] mt-1 font-medium">
-              $50 direct reward per eligible node
+            <div className="text-[11px] text-[#168BFF] mt-1 font-medium truncate">
+              ${directRewardPerNode} per eligible node
             </div>
           </div>
         </div>
       </div>
 
       {/* ========================================================
-          3. QUICK ACTIONS STRIP (Clean & Instant)
+          3. QUICK ACTIONS (Consistent Button Hierarchy)
          ======================================================== */}
-      <div className="space-y-3">
-        <h2 className="text-xs font-bold uppercase tracking-wider text-[#98A2B3] font-mono flex items-center gap-1.5 px-1">
+      <div className="p-4 sm:p-5 rounded-2xl bg-[#07101D] border border-white/[0.08] shadow-lg space-y-3">
+        <h2 className="text-xs font-semibold uppercase tracking-wider text-[#98A2B3] flex items-center gap-1.5">
           <Zap className="w-3.5 h-3.5 text-[#00CFFF]" />
           <span>Quick Actions</span>
         </h2>
 
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
-          {/* Action 1: Deposit */}
+          {/* Action 1: Deposit USDT (Primary) */}
           <button
             onClick={() => navigateTo('deposit')}
-            className="p-3.5 rounded-xl bg-[#07101D] hover:bg-[#0B1728] border border-white/[0.08] hover:border-[#00CFFF]/40 transition-all duration-150 flex items-center gap-3 text-left cursor-pointer min-h-[52px] group"
+            className="p-3.5 rounded-xl bg-[#00CFFF]/10 hover:bg-[#00CFFF]/20 border border-[#00CFFF]/30 hover:border-[#00CFFF]/60 transition-all duration-150 flex items-center gap-3 text-left cursor-pointer min-h-[52px] group"
           >
-            <div className="w-9 h-9 rounded-lg bg-[#00CFFF]/10 border border-[#00CFFF]/20 flex items-center justify-center text-[#00CFFF] shrink-0 group-hover:scale-105 transition-transform">
+            <div className="w-8 h-8 rounded-lg bg-[#00CFFF]/20 flex items-center justify-center text-[#00CFFF] shrink-0 group-hover:scale-105 transition-transform">
               <ArrowDownLeft className="w-4 h-4" />
             </div>
             <div className="min-w-0">
               <span className="text-xs font-bold text-white block truncate">Deposit USDT</span>
-              <span className="text-[10px] text-[#98A2B3] block truncate">BEP-20 Network</span>
+              <span className="text-[10px] text-[#00CFFF] block truncate">BEP-20 Network</span>
             </div>
           </button>
 
-          {/* Action 2: Activate Node */}
+          {/* Action 2: Activate Node (Primary) */}
           <button
             onClick={() => navigateTo('nodes')}
-            className="p-3.5 rounded-xl bg-[#07101D] hover:bg-[#0B1728] border border-white/[0.08] hover:border-[#32D583]/40 transition-all duration-150 flex items-center gap-3 text-left cursor-pointer min-h-[52px] group"
+            className="p-3.5 rounded-xl bg-[#32D583]/10 hover:bg-[#32D583]/20 border border-[#32D583]/30 hover:border-[#32D583]/60 transition-all duration-150 flex items-center gap-3 text-left cursor-pointer min-h-[52px] group"
           >
-            <div className="w-9 h-9 rounded-lg bg-[#32D583]/10 border border-[#32D583]/20 flex items-center justify-center text-[#32D583] shrink-0 group-hover:scale-105 transition-transform">
+            <div className="w-8 h-8 rounded-lg bg-[#32D583]/20 flex items-center justify-center text-[#32D583] shrink-0 group-hover:scale-105 transition-transform">
               <Server className="w-4 h-4" />
             </div>
             <div className="min-w-0">
               <span className="text-xs font-bold text-white block truncate">Activate Node</span>
-              <span className="text-[10px] text-[#32D583] block truncate">$1,000 / Genesis</span>
+              <span className="text-[10px] text-[#32D583] block truncate">${nodeBasePriceUsd || 1000} Genesis</span>
             </div>
           </button>
 
-          {/* Action 3: Swap PHIVO */}
+          {/* Action 3: Swap PHIVO (Secondary) */}
           <button
             onClick={() => navigateTo('swap')}
-            className="p-3.5 rounded-xl bg-[#07101D] hover:bg-[#0B1728] border border-white/[0.08] hover:border-[#00CFFF]/40 transition-all duration-150 flex items-center gap-3 text-left cursor-pointer min-h-[52px] group"
+            className="p-3.5 rounded-xl bg-white/[0.03] hover:bg-white/[0.06] border border-white/[0.08] hover:border-[#00CFFF]/30 transition-all duration-150 flex items-center gap-3 text-left cursor-pointer min-h-[52px] group"
           >
-            <div className="w-9 h-9 rounded-lg bg-[#00CFFF]/10 border border-[#00CFFF]/20 flex items-center justify-center text-[#00CFFF] shrink-0 group-hover:scale-105 transition-transform">
-              <RotateCcw className="w-4 h-4" />
+            <div className="w-8 h-8 rounded-lg bg-white/[0.05] flex items-center justify-center text-[#98A2B3] group-hover:text-[#00CFFF] shrink-0 transition-colors">
+              <Repeat className="w-4 h-4" />
             </div>
             <div className="min-w-0">
               <span className="text-xs font-bold text-white block truncate">Swap PHIVO</span>
-              <span className="text-[10px] text-[#98A2B3] block truncate">Instant Conversion</span>
+              <span className="text-[10px] text-[#98A2B3] block truncate">Protocol Liquidity</span>
             </div>
           </button>
 
-          {/* Action 4: Withdraw */}
+          {/* Action 4: Withdraw (Secondary) */}
           <button
             onClick={() => navigateTo('withdrawals')}
-            className="p-3.5 rounded-xl bg-[#07101D] hover:bg-[#0B1728] border border-white/[0.08] hover:border-[#F04438]/40 transition-all duration-150 flex items-center gap-3 text-left cursor-pointer min-h-[52px] group"
+            className="p-3.5 rounded-xl bg-white/[0.03] hover:bg-white/[0.06] border border-white/[0.08] hover:border-white/[0.15] transition-all duration-150 flex items-center gap-3 text-left cursor-pointer min-h-[52px] group"
           >
-            <div className="w-9 h-9 rounded-lg bg-[#F04438]/10 border border-[#F04438]/20 flex items-center justify-center text-[#F04438] shrink-0 group-hover:scale-105 transition-transform">
+            <div className="w-8 h-8 rounded-lg bg-white/[0.05] flex items-center justify-center text-[#98A2B3] shrink-0">
               <ArrowUpRight className="w-4 h-4" />
             </div>
             <div className="min-w-0">
@@ -578,32 +591,32 @@ export const OverviewView: React.FC<OverviewViewProps> = ({ user, onNavigateTab 
             </div>
           </button>
 
-          {/* Action 5: Invite */}
+          {/* Action 5: Invite & Earn (Secondary) */}
           <button
             onClick={() => navigateTo('referrals')}
-            className="col-span-2 sm:col-span-1 p-3.5 rounded-xl bg-[#07101D] hover:bg-[#0B1728] border border-white/[0.08] hover:border-[#168BFF]/40 transition-all duration-150 flex items-center gap-3 text-left cursor-pointer min-h-[52px] group"
+            className="col-span-2 sm:col-span-1 p-3.5 rounded-xl bg-white/[0.03] hover:bg-white/[0.06] border border-white/[0.08] hover:border-[#168BFF]/30 transition-all duration-150 flex items-center gap-3 text-left cursor-pointer min-h-[52px] group"
           >
-            <div className="w-9 h-9 rounded-lg bg-[#168BFF]/10 border border-[#168BFF]/20 flex items-center justify-center text-[#168BFF] shrink-0 group-hover:scale-105 transition-transform">
+            <div className="w-8 h-8 rounded-lg bg-white/[0.05] flex items-center justify-center text-[#168BFF] shrink-0">
               <Share2 className="w-4 h-4" />
             </div>
             <div className="min-w-0">
               <span className="text-xs font-bold text-white block truncate">Invite &amp; Earn</span>
-              <span className="text-[10px] text-[#168BFF] block truncate">Referral Link</span>
+              <span className="text-[10px] text-[#98A2B3] block truncate">Referral Link</span>
             </div>
           </button>
         </div>
       </div>
 
       {/* ========================================================
-          4. PHIVO MARKET / ECOSYSTEM CARD (Polished & Compact)
+          4. PHIVO REFERENCE RATE (Institutional Utility Card)
          ======================================================== */}
       <TokenPriceTrendChart onNavigateTab={onNavigateTab} compact={false} />
 
       {/* ========================================================
-          5. CORE PERFORMANCE GRID (2 Column: Nodes & Binary)
+          5. CORE PERFORMANCE GRID (Nodes & Binary Network)
          ======================================================== */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Left Column: Genesis Node Summary */}
+        {/* Left: Genesis Node Summary */}
         <div className="p-5 sm:p-6 rounded-2xl bg-[#07101D] border border-white/[0.08] shadow-xl flex flex-col justify-between space-y-5">
           <div className="space-y-3">
             <div className="flex items-center justify-between border-b border-white/[0.06] pb-3">
@@ -613,34 +626,43 @@ export const OverviewView: React.FC<OverviewViewProps> = ({ user, onNavigateTab 
                 </div>
                 <h3 className="text-sm font-bold text-white">Genesis Node Summary</h3>
               </div>
-              <span className="text-[11px] font-mono text-[#32D583] bg-[#32D583]/10 border border-[#32D583]/25 px-2 py-0.5 rounded-md flex items-center gap-1">
-                <span className="w-1.5 h-1.5 rounded-full bg-[#32D583] animate-pulse" />
-                <span>Mining Active</span>
-              </span>
+
+              {/* Truthful Node Status Badge */}
+              {activeNodesCount > 0 ? (
+                <span className="text-[11px] font-medium text-[#32D583] bg-[#32D583]/10 border border-[#32D583]/25 px-2.5 py-0.5 rounded-full flex items-center gap-1.5">
+                  <span className="w-1.5 h-1.5 rounded-full bg-[#32D583] animate-pulse" />
+                  <span>Mining Active ({activeNodesCount})</span>
+                </span>
+              ) : (
+                <span className="text-[11px] font-medium text-[#98A2B3] bg-white/[0.04] border border-white/[0.08] px-2.5 py-0.5 rounded-full flex items-center gap-1.5">
+                  <span className="w-1.5 h-1.5 rounded-full bg-[#98A2B3]" />
+                  <span>Ready to Activate</span>
+                </span>
+              )}
             </div>
 
             <p className="text-xs text-[#98A2B3] leading-relaxed">
-              Your active Genesis Nodes validate protocol consensus and earn daily PHIVO mining rewards through the halving schedule.
+              Your active Genesis Nodes validate protocol consensus and generate daily PHIVO mining rewards through the halving schedule.
             </p>
 
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 pt-1">
-              <div className="p-3 rounded-xl bg-white/[0.02] border border-white/[0.04]">
-                <span className="text-[10px] text-[#98A2B3] uppercase tracking-wider font-mono block">Active Nodes</span>
+            <div className="grid grid-cols-3 gap-3 pt-1">
+              <div className="p-3 rounded-xl bg-[#050B14]/80 border border-white/[0.05]">
+                <span className="text-[10px] text-[#98A2B3] uppercase tracking-wider font-medium block">Active</span>
                 <span className="text-lg font-bold font-mono text-white mt-0.5 block tabular-nums">
                   {nodeData?.activeNodes ?? 0}
                 </span>
               </div>
 
-              <div className="p-3 rounded-xl bg-white/[0.02] border border-white/[0.04]">
-                <span className="text-[10px] text-[#98A2B3] uppercase tracking-wider font-mono block">Total Owned</span>
+              <div className="p-3 rounded-xl bg-[#050B14]/80 border border-white/[0.05]">
+                <span className="text-[10px] text-[#98A2B3] uppercase tracking-wider font-medium block">Total Owned</span>
                 <span className="text-lg font-bold font-mono text-white mt-0.5 block tabular-nums">
                   {nodeData?.totalNodes ?? 0}
                 </span>
               </div>
 
-              <div className="col-span-2 sm:col-span-1 p-3 rounded-xl bg-white/[0.02] border border-white/[0.04]">
-                <span className="text-[10px] text-[#98A2B3] uppercase tracking-wider font-mono block">Mined PHIVO</span>
-                <span className="text-lg font-bold font-mono text-[#00CFFF] mt-0.5 block tabular-nums">
+              <div className="p-3 rounded-xl bg-[#050B14]/80 border border-white/[0.05]">
+                <span className="text-[10px] text-[#98A2B3] uppercase tracking-wider font-medium block">Mined PHIVO</span>
+                <span className="text-lg font-bold font-mono text-[#00CFFF] mt-0.5 block tabular-nums truncate">
                   {formatCurrency(nodeData?.totalRewardsPhivo ?? 0)}
                 </span>
               </div>
@@ -650,22 +672,22 @@ export const OverviewView: React.FC<OverviewViewProps> = ({ user, onNavigateTab 
           <div className="flex items-center gap-3 pt-2">
             <button
               onClick={() => navigateTo('nodes')}
-              className="flex-1 py-2.5 px-4 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.08] text-white text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer min-h-[44px]"
-            >
-              <span>Manage Nodes</span>
-              <ArrowRight className="w-3.5 h-3.5 text-[#98A2B3]" />
-            </button>
-            <button
-              onClick={() => navigateTo('nodes')}
-              className="flex-1 py-2.5 px-4 rounded-xl bg-[#00CFFF] hover:bg-[#00CFFF]/90 text-[#05070B] text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer min-h-[44px] shadow-lg shadow-[#00CFFF]/15"
+              className="flex-1 py-2.5 px-4 rounded-xl bg-[#00CFFF] hover:bg-[#00CFFF]/90 text-[#05070B] text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer min-h-[42px] shadow-md shadow-[#00CFFF]/15"
             >
               <Zap className="w-3.5 h-3.5" />
               <span>Activate Node</span>
             </button>
+            <button
+              onClick={() => navigateTo('nodes')}
+              className="py-2.5 px-4 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.08] text-white text-xs font-medium flex items-center justify-center gap-1.5 transition-all cursor-pointer min-h-[42px]"
+            >
+              <span>Manage Nodes</span>
+              <ChevronRight className="w-3.5 h-3.5 text-[#98A2B3]" />
+            </button>
           </div>
         </div>
 
-        {/* Right Column: Binary Matching & Network Progress */}
+        {/* Right: Binary Network Progress */}
         <div className="p-5 sm:p-6 rounded-2xl bg-[#07101D] border border-white/[0.08] shadow-xl flex flex-col justify-between space-y-5">
           <div className="space-y-3">
             <div className="flex items-center justify-between border-b border-white/[0.06] pb-3">
@@ -685,14 +707,15 @@ export const OverviewView: React.FC<OverviewViewProps> = ({ user, onNavigateTab 
               Paired sales volume between Left and Right team legs settles daily. Remaining units carry forward to the next cycle.
             </p>
 
+            {/* Symmetrical Left / Right Modules */}
             <div className="grid grid-cols-2 gap-3 pt-1">
               {/* Left Leg */}
-              <div className="p-3.5 rounded-xl bg-[#05070B] border border-white/[0.06] space-y-1">
-                <div className="flex items-center justify-between text-[11px] text-[#98A2B3]">
+              <div className="p-3.5 rounded-xl bg-[#050B14]/80 border border-white/[0.05] space-y-1">
+                <div className="flex items-center justify-between text-xs text-[#98A2B3]">
                   <span className="font-semibold text-[#00CFFF]">LEFT LEG</span>
                   <span className="text-[10px] font-mono">Today / Carry</span>
                 </div>
-                <div className="flex items-baseline gap-2">
+                <div className="flex items-baseline gap-2 pt-1">
                   <span className="text-xl font-mono font-bold text-white tabular-nums">
                     {matchingData?.todayVolume?.left ?? 0}
                   </span>
@@ -703,12 +726,12 @@ export const OverviewView: React.FC<OverviewViewProps> = ({ user, onNavigateTab 
               </div>
 
               {/* Right Leg */}
-              <div className="p-3.5 rounded-xl bg-[#05070B] border border-white/[0.06] space-y-1">
-                <div className="flex items-center justify-between text-[11px] text-[#98A2B3]">
+              <div className="p-3.5 rounded-xl bg-[#050B14]/80 border border-white/[0.05] space-y-1">
+                <div className="flex items-center justify-between text-xs text-[#98A2B3]">
                   <span className="font-semibold text-[#32D583]">RIGHT LEG</span>
                   <span className="text-[10px] font-mono">Today / Carry</span>
                 </div>
-                <div className="flex items-baseline gap-2">
+                <div className="flex items-baseline gap-2 pt-1">
                   <span className="text-xl font-mono font-bold text-white tabular-nums">
                     {matchingData?.todayVolume?.right ?? 0}
                   </span>
@@ -722,14 +745,14 @@ export const OverviewView: React.FC<OverviewViewProps> = ({ user, onNavigateTab 
 
           <div className="flex items-center justify-between pt-2 border-t border-white/[0.06]">
             <div>
-              <span className="text-[10px] text-[#98A2B3] block uppercase tracking-wider font-mono">Total Matching Earned</span>
-              <span className="text-sm font-bold font-mono text-[#32D583] tabular-nums">
+              <span className="text-[10px] text-[#98A2B3] block uppercase tracking-wider font-medium">Matching Rewards</span>
+              <span className="text-base font-bold font-mono text-[#32D583] tabular-nums">
                 ${formatCurrency(matchingData?.totalMatchingEarnedUsd ?? walletData?.breakdown?.matching ?? 0)}
               </span>
             </div>
             <button
               onClick={() => navigateTo('network')}
-              className="py-2 px-3.5 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.08] text-white text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer min-h-[44px]"
+              className="py-2 px-3.5 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.08] text-white text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer min-h-[40px]"
             >
               <span>View Network Tree</span>
               <ArrowRight className="w-3.5 h-3.5 text-[#00CFFF]" />
@@ -739,7 +762,7 @@ export const OverviewView: React.FC<OverviewViewProps> = ({ user, onNavigateTab 
       </div>
 
       {/* ========================================================
-          6. PROMOTION & RANK PROGRESS (Visual Tier Journey)
+          6. LEADERSHIP & PROMOTION PROGRESS
          ======================================================== */}
       <div className="p-5 sm:p-6 rounded-2xl bg-[#07101D] border border-white/[0.08] shadow-xl space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-white/[0.06] pb-3">
@@ -749,22 +772,22 @@ export const OverviewView: React.FC<OverviewViewProps> = ({ user, onNavigateTab 
             </div>
             <div>
               <h3 className="text-sm font-bold text-white">Leadership &amp; Promotion Progress</h3>
-              <p className="text-[11px] text-[#98A2B3]">Track your progress through PHIVONEX promotion ranks.</p>
+              <p className="text-[11px] text-[#98A2B3]">Track your sequential rank advancement through the PHIVONEX career ladder.</p>
             </div>
           </div>
           <button
             onClick={() => navigateTo('rewards')}
             className="text-xs text-[#00CFFF] hover:text-white font-medium flex items-center gap-1 self-start sm:self-auto cursor-pointer transition-colors"
           >
-            <span>View Rank Details</span>
+            <span>View Rank Ladder</span>
             <ChevronRight className="w-3.5 h-3.5" />
           </button>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-center">
           {/* Current vs Next Badge */}
-          <div className="p-4 rounded-xl bg-[#05070B] border border-white/[0.06] space-y-2">
-            <span className="text-[10px] text-[#98A2B3] uppercase tracking-wider font-mono block">Career Rank</span>
+          <div className="p-4 rounded-xl bg-[#050B14]/80 border border-white/[0.05] space-y-2">
+            <span className="text-[10px] text-[#98A2B3] uppercase tracking-wider font-medium block">Career Rank</span>
             <div className="flex items-center gap-2">
               <span className="text-base font-bold text-white">{currentRankName}</span>
               {nextRankName && (
@@ -775,15 +798,15 @@ export const OverviewView: React.FC<OverviewViewProps> = ({ user, onNavigateTab 
               )}
             </div>
             <span className="text-[11px] text-[#98A2B3] block">
-              {rankData?.rewardUsd ? `Next Milestone Reward: $${formatCurrency(rankData.rewardUsd)}` : 'Active Network Participation'}
+              {rankData?.rewardUsd ? `Milestone Reward: $${formatCurrency(rankData.rewardUsd)}` : 'Active Network Participation'}
             </span>
           </div>
 
           {/* Matching Leg Progress Bars */}
-          <div className="md:col-span-2 p-4 rounded-xl bg-[#05070B] border border-white/[0.06] space-y-3">
+          <div className="md:col-span-2 p-4 rounded-xl bg-[#050B14]/80 border border-white/[0.05] space-y-3">
             <div className="space-y-1.5">
               <div className="flex items-center justify-between text-xs font-mono">
-                <span className="text-[#98A2B3]">Left Team Requirement:</span>
+                <span className="text-[#98A2B3] font-sans">Left Team Requirement:</span>
                 <span className="text-white font-bold tabular-nums">
                   {rankData?.stageProgress?.matching?.leftProgress ?? 0} / {rankData?.stageProgress?.matching?.requiredLeft ?? 20}
                 </span>
@@ -805,7 +828,7 @@ export const OverviewView: React.FC<OverviewViewProps> = ({ user, onNavigateTab 
 
             <div className="space-y-1.5">
               <div className="flex items-center justify-between text-xs font-mono">
-                <span className="text-[#98A2B3]">Right Team Requirement:</span>
+                <span className="text-[#98A2B3] font-sans">Right Team Requirement:</span>
                 <span className="text-white font-bold tabular-nums">
                   {rankData?.stageProgress?.matching?.rightProgress ?? 0} / {rankData?.stageProgress?.matching?.requiredRight ?? 20}
                 </span>
@@ -829,9 +852,9 @@ export const OverviewView: React.FC<OverviewViewProps> = ({ user, onNavigateTab 
       </div>
 
       {/* ========================================================
-          7. REFERRAL SNAPSHOT (Single, Clean, Zero-Duplicate)
+          7. REFERRAL SECTION (Clean Read-Only Copy Modules)
          ======================================================== */}
-      <div className="p-5 sm:p-6 rounded-2xl bg-gradient-to-br from-[#07101D] via-[#0A1628] to-[#07101D] border border-white/[0.08] shadow-xl space-y-4">
+      <div className="p-5 sm:p-6 rounded-2xl bg-[#07101D] border border-white/[0.08] shadow-xl space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-white/[0.06] pb-3">
           <div className="flex items-center gap-2">
             <div className="w-7 h-7 rounded-lg bg-[#00CFFF]/10 border border-[#00CFFF]/20 flex items-center justify-center text-[#00CFFF]">
@@ -839,7 +862,7 @@ export const OverviewView: React.FC<OverviewViewProps> = ({ user, onNavigateTab 
             </div>
             <div>
               <h3 className="text-sm font-bold text-white">Your Referral Link &amp; Code</h3>
-              <p className="text-[11px] text-[#98A2B3]">$50 direct referral reward per eligible activated node.</p>
+              <p className="text-[11px] text-[#98A2B3]">Current direct reward: ${directRewardPerNode} per eligible activated node.</p>
             </div>
           </div>
           <button
@@ -853,17 +876,17 @@ export const OverviewView: React.FC<OverviewViewProps> = ({ user, onNavigateTab 
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           {/* Referral Code Box */}
-          <div className="p-3.5 rounded-xl bg-[#05070B] border border-white/[0.06] space-y-2 flex flex-col justify-between">
+          <div className="p-3.5 rounded-xl bg-[#050B14]/80 border border-white/[0.05] space-y-2 flex flex-col justify-between">
             <div>
-              <span className="text-[10px] text-[#98A2B3] uppercase tracking-wider font-mono block">Your Referral Code</span>
-              <span className={`text-xl font-mono font-bold mt-0.5 block tracking-wider ${isReferralPending ? 'text-[#98A2B3] text-sm' : 'text-[#00CFFF]'}`}>
+              <span className="text-[10px] text-[#98A2B3] uppercase tracking-wider font-medium block">Referral Code</span>
+              <span className={`text-xl font-mono font-bold mt-1 block tracking-wider ${isReferralPending ? 'text-[#98A2B3] text-sm' : 'text-[#00CFFF]'}`}>
                 {displayReferralCode}
               </span>
             </div>
             <button
               onClick={handleCopyCode}
               disabled={isReferralPending}
-              className={`w-full py-2 px-3 rounded-lg border text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors min-h-[40px] ${
+              className={`w-full py-2 px-3 rounded-lg border text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors min-h-[38px] ${
                 isReferralPending
                   ? 'bg-white/[0.02] border-white/[0.04] text-[#667085] cursor-not-allowed'
                   : 'bg-white/[0.04] hover:bg-white/[0.08] border-white/[0.08] text-white cursor-pointer'
@@ -875,20 +898,20 @@ export const OverviewView: React.FC<OverviewViewProps> = ({ user, onNavigateTab 
           </div>
 
           {/* Referral Link & 1-Click Share */}
-          <div className="md:col-span-2 p-3.5 rounded-xl bg-[#05070B] border border-white/[0.06] space-y-2 flex flex-col justify-between">
+          <div className="md:col-span-2 p-3.5 rounded-xl bg-[#050B14]/80 border border-white/[0.05] space-y-2 flex flex-col justify-between">
             <div>
-              <span className="text-[10px] text-[#98A2B3] uppercase tracking-wider font-mono block">Registration Link</span>
+              <span className="text-[10px] text-[#98A2B3] uppercase tracking-wider font-medium block">Registration Link</span>
               <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 mt-1">
                 <input
                   type="text"
                   readOnly
                   value={isReferralPending ? 'Referral link generating...' : effectiveReferralUrl}
-                  className="flex-1 bg-white/[0.03] border border-white/[0.08] rounded-lg px-3 py-2 text-xs font-mono text-[#98A2B3] select-all focus:outline-none min-h-[40px]"
+                  className="flex-1 bg-white/[0.03] border border-white/[0.08] rounded-lg px-3 py-2 text-xs font-mono text-white select-all focus:outline-none min-h-[38px]"
                 />
                 <button
                   onClick={handleCopyLink}
                   disabled={isReferralPending}
-                  className={`px-4 py-2 rounded-lg font-bold text-xs flex items-center justify-center gap-1.5 transition-all shrink-0 min-h-[40px] ${
+                  className={`px-4 py-2 rounded-lg font-bold text-xs flex items-center justify-center gap-1.5 transition-all shrink-0 min-h-[38px] ${
                     isReferralPending
                       ? 'bg-white/[0.04] border border-white/[0.08] text-[#667085] cursor-not-allowed'
                       : 'bg-[#00CFFF] hover:bg-[#00CFFF]/90 text-[#05070B] cursor-pointer'
@@ -916,7 +939,7 @@ export const OverviewView: React.FC<OverviewViewProps> = ({ user, onNavigateTab 
       </div>
 
       {/* ========================================================
-          8. WALLET & EARNINGS BREAKDOWN (Clean Financial Summary)
+          8. WALLET & EARNINGS BREAKDOWN (Reconciled Financial Summary)
          ======================================================== */}
       <div className="p-5 sm:p-6 rounded-2xl bg-[#07101D] border border-white/[0.08] shadow-xl space-y-4">
         <div className="flex items-center justify-between border-b border-white/[0.06] pb-3">
@@ -926,7 +949,7 @@ export const OverviewView: React.FC<OverviewViewProps> = ({ user, onNavigateTab 
             </div>
             <div>
               <h3 className="text-sm font-bold text-white">Wallet &amp; Earnings Breakdown</h3>
-              <p className="text-[11px] text-[#98A2B3]">Consolidated summary of your multi-stream earnings.</p>
+              <p className="text-[11px] text-[#98A2B3]">Reconciled summary of your multi-stream earnings.</p>
             </div>
           </div>
           <button
@@ -940,17 +963,17 @@ export const OverviewView: React.FC<OverviewViewProps> = ({ user, onNavigateTab 
 
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           {/* Direct Referral Bonus */}
-          <div className="p-3.5 rounded-xl bg-[#05070B] border border-white/[0.06] space-y-1">
-            <span className="text-[10px] text-[#98A2B3] uppercase tracking-wider font-mono block">Direct Referrals</span>
+          <div className="p-3.5 rounded-xl bg-[#050B14]/80 border border-white/[0.05] space-y-1">
+            <span className="text-[10px] text-[#98A2B3] uppercase tracking-wider font-medium block">Direct Referrals</span>
             <span className="text-base sm:text-lg font-mono font-bold text-white tabular-nums block">
               ${formatCurrency(walletData?.breakdown?.referral ?? 0)}
             </span>
-            <span className="text-[10px] text-[#98A2B3] block">$50/node commission</span>
+            <span className="text-[10px] text-[#98A2B3] block">Direct sponsorship</span>
           </div>
 
           {/* Daily Matching Bonus */}
-          <div className="p-3.5 rounded-xl bg-[#05070B] border border-white/[0.06] space-y-1">
-            <span className="text-[10px] text-[#98A2B3] uppercase tracking-wider font-mono block">Binary Matching</span>
+          <div className="p-3.5 rounded-xl bg-[#050B14]/80 border border-white/[0.05] space-y-1">
+            <span className="text-[10px] text-[#98A2B3] uppercase tracking-wider font-medium block">Binary Matching</span>
             <span className="text-base sm:text-lg font-mono font-bold text-[#32D583] tabular-nums block">
               ${formatCurrency(walletData?.breakdown?.matching ?? 0)}
             </span>
@@ -958,17 +981,17 @@ export const OverviewView: React.FC<OverviewViewProps> = ({ user, onNavigateTab 
           </div>
 
           {/* Promotion Milestones */}
-          <div className="p-3.5 rounded-xl bg-[#05070B] border border-white/[0.06] space-y-1">
-            <span className="text-[10px] text-[#98A2B3] uppercase tracking-wider font-mono block">Promotion Rewards</span>
+          <div className="p-3.5 rounded-xl bg-[#050B14]/80 border border-white/[0.05] space-y-1">
+            <span className="text-[10px] text-[#98A2B3] uppercase tracking-wider font-medium block">Promotion Rewards</span>
             <span className="text-base sm:text-lg font-mono font-bold text-[#F59E0B] tabular-nums block">
               ${formatCurrency(walletData?.breakdown?.promotion ?? 0)}
             </span>
-            <span className="text-[10px] text-[#98A2B3] block">Rank advancement bonuses</span>
+            <span className="text-[10px] text-[#98A2B3] block">Rank milestones</span>
           </div>
 
           {/* Node Rewards */}
-          <div className="p-3.5 rounded-xl bg-[#05070B] border border-white/[0.06] space-y-1">
-            <span className="text-[10px] text-[#98A2B3] uppercase tracking-wider font-mono block">Node Mining</span>
+          <div className="p-3.5 rounded-xl bg-[#050B14]/80 border border-white/[0.05] space-y-1">
+            <span className="text-[10px] text-[#98A2B3] uppercase tracking-wider font-medium block">Node Mining</span>
             <span className="text-base sm:text-lg font-mono font-bold text-[#00CFFF] tabular-nums block">
               {formatCurrency(nodeData?.totalRewardsPhivo ?? 0)} <span className="text-xs">PHIVO</span>
             </span>
@@ -978,7 +1001,7 @@ export const OverviewView: React.FC<OverviewViewProps> = ({ user, onNavigateTab 
       </div>
 
       {/* ========================================================
-          9. RECENT ACTIVITY FEED (5 Latest Events)
+          9. RECENT ACCOUNT ACTIVITY (4-5 Latest Events)
          ======================================================== */}
       <div className="p-5 sm:p-6 rounded-2xl bg-[#07101D] border border-white/[0.08] shadow-xl space-y-4">
         <div className="flex items-center justify-between border-b border-white/[0.06] pb-3">
@@ -1010,7 +1033,7 @@ export const OverviewView: React.FC<OverviewViewProps> = ({ user, onNavigateTab 
           </div>
         ) : (
           <div className="divide-y divide-white/[0.04] overflow-hidden">
-            {recentTransactions.map((tx) => {
+            {recentTransactions.slice(0, 5).map((tx) => {
               const isCredit = tx.entryType === 'CREDIT';
               return (
                 <div key={tx.id} className="py-3 flex items-center justify-between gap-3 text-xs">
@@ -1055,7 +1078,7 @@ export const OverviewView: React.FC<OverviewViewProps> = ({ user, onNavigateTab 
       </div>
 
       {/* ========================================================
-          10. ACCOUNT PROFILE SNAPSHOT (Compact 1-Card Footer)
+          10. ACCOUNT PROFILE SNAPSHOT (Compact Clean Footer)
          ======================================================== */}
       <div className="p-5 sm:p-6 rounded-2xl bg-[#07101D] border border-white/[0.08] shadow-xl space-y-4">
         <div className="flex items-center justify-between border-b border-white/[0.06] pb-3">
@@ -1079,8 +1102,8 @@ export const OverviewView: React.FC<OverviewViewProps> = ({ user, onNavigateTab 
 
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
           {/* Public PHIVONEX ID */}
-          <div className="p-3.5 rounded-xl bg-[#05070B] border border-white/[0.06] space-y-1">
-            <span className="text-[10px] font-mono text-[#98A2B3] uppercase tracking-wider block">PHIVONEX ID</span>
+          <div className="p-3.5 rounded-xl bg-[#050B14]/80 border border-white/[0.05] space-y-1">
+            <span className="text-[10px] text-[#98A2B3] uppercase tracking-wider font-medium block">PHIVONEX ID</span>
             <div className="flex items-center justify-between">
               <span className="text-xs sm:text-sm font-mono font-bold text-[#00CFFF] truncate">
                 {referralData?.publicId || user?.publicId || 'PHX-PENDING'}
@@ -1097,26 +1120,26 @@ export const OverviewView: React.FC<OverviewViewProps> = ({ user, onNavigateTab 
           </div>
 
           {/* Account Status */}
-          <div className="p-3.5 rounded-xl bg-[#05070B] border border-white/[0.06] space-y-1">
-            <span className="text-[10px] font-mono text-[#98A2B3] uppercase tracking-wider block">Status</span>
-            <span className="text-xs sm:text-sm font-bold text-[#32D583] flex items-center gap-1.5">
+          <div className="p-3.5 rounded-xl bg-[#050B14]/80 border border-white/[0.05] space-y-1">
+            <span className="text-[10px] text-[#98A2B3] uppercase tracking-wider font-medium block">Status</span>
+            <span className="text-xs sm:text-sm font-bold text-[#32D583] flex items-center gap-1.5 pt-0.5">
               <span className="w-1.5 h-1.5 rounded-full bg-[#32D583]" />
               <span>{user?.status ? user.status.toUpperCase() : 'ACTIVE'}</span>
             </span>
           </div>
 
           {/* Country */}
-          <div className="p-3.5 rounded-xl bg-[#05070B] border border-white/[0.06] space-y-1">
-            <span className="text-[10px] font-mono text-[#98A2B3] uppercase tracking-wider block">Country</span>
-            <span className="text-xs sm:text-sm font-semibold text-white truncate block">
+          <div className="p-3.5 rounded-xl bg-[#050B14]/80 border border-white/[0.05] space-y-1">
+            <span className="text-[10px] text-[#98A2B3] uppercase tracking-wider font-medium block">Country</span>
+            <span className="text-xs sm:text-sm font-semibold text-white truncate block pt-0.5">
               {user?.country && user.country.trim() !== '' ? user.country : 'Not Set'}
             </span>
           </div>
 
           {/* Member Since */}
-          <div className="p-3.5 rounded-xl bg-[#05070B] border border-white/[0.06] space-y-1">
-            <span className="text-[10px] font-mono text-[#98A2B3] uppercase tracking-wider block">Member Since</span>
-            <span className="text-xs sm:text-sm font-semibold text-white truncate block">
+          <div className="p-3.5 rounded-xl bg-[#050B14]/80 border border-white/[0.05] space-y-1">
+            <span className="text-[10px] text-[#98A2B3] uppercase tracking-wider font-medium block">Member Since</span>
+            <span className="text-xs sm:text-sm font-semibold text-white truncate block pt-0.5">
               {formatDate(user?.createdAt)}
             </span>
           </div>

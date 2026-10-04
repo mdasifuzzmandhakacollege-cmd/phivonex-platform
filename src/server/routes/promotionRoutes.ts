@@ -30,16 +30,16 @@ import { broadcastSystemConfigChange } from '../services/systemConfigBroadcaster
 export const promotionRouter = Router();
 
 /**
- * GET /api/promotions/ranks/me
+ * GET /api/promotions/ranks/me and GET /api/promotions/my-status
  * Returns authenticated user's current rank, stage progress, completed events, and ladder.
  */
-promotionRouter.get('/ranks/me', requireAuth, async (req: AuthRequest, res: Response) => {
+promotionRouter.get(['/ranks/me', '/my-status'], requireAuth, async (req: AuthRequest, res: Response) => {
   try {
     const userId = req.user!.id;
     const state = await getUserPromotionState(userId);
-    return res.status(200).json({ success: true, state });
+    return res.status(200).json({ success: true, state, ...state });
   } catch (err: any) {
-    console.error('[Promotion API] Error in GET /api/promotions/ranks/me:', err);
+    console.error('[Promotion API] Error in GET promotion state:', err);
     return res.status(500).json({ error: 'SERVER_ERROR', message: 'Failed to retrieve user rank state' });
   }
 });
