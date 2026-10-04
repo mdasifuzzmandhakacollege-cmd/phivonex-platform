@@ -76,22 +76,49 @@ withdrawalRouter.post('/', requireAuth, withdrawalLimiter, async (req: AuthReque
         const targetPublicId = withdrawal.publicWithdrawalId || (withdrawal as any).publicId;
         console.log(`[Auto-Withdrawal Engine] Mode is FULL AUTOMATIC. Broadcasting withdrawal ${targetPublicId} instantly to BSC...`);
         try {
-          const broadcastResult = await broadcastBnbWithdrawal({
+          const broadcastPromise = broadcastBnbWithdrawal({
             withdrawalPublicId: targetPublicId,
             forceBypassDisabled: true,
+            timeoutMs: 6000,
           });
-          console.log(`[Auto-Withdrawal Engine] Broadcast successful! TxHash: ${broadcastResult.txHash}`);
+          const timeoutPromise = new Promise<{ timedOut: true }>((resolve) =>
+            setTimeout(() => resolve({ timedOut: true }), 8000)
+          );
+
+          const result = await Promise.race([broadcastPromise, timeoutPromise]);
+          if ('timedOut' in result) {
+            const currentRecord = await getWithdrawalByPublicId(targetPublicId);
+            return res.status(201).json({
+              ...(currentRecord || withdrawal),
+              publicId: targetPublicId,
+              publicWithdrawalId: targetPublicId,
+              autoDisbursed: false,
+              message: 'Withdrawal submitted. Payout broadcast in progress; confirmation will update automatically.',
+            });
+          }
+
+          const broadcastResult = result;
+          console.log(`[Auto-Withdrawal Engine] Broadcast completed. Status: ${broadcastResult.withdrawal.status}, TxHash: ${broadcastResult.txHash}`);
           return res.status(201).json({
-            ...withdrawal,
+            ...broadcastResult.withdrawal,
             publicId: targetPublicId,
             publicWithdrawalId: targetPublicId,
-            status: 'COMPLETED',
             txHash: broadcastResult.txHash,
             autoDisbursed: true,
-            message: 'Withdrawal automatically processed and sent on-chain to your wallet on BNB Smart Chain.',
+            message: broadcastResult.withdrawal.status === 'COMPLETED'
+              ? 'Withdrawal automatically processed and confirmed on-chain on BNB Smart Chain.'
+              : 'Withdrawal submitted to blockchain; confirmation pending.',
           });
         } catch (autoSendErr: any) {
-          console.error('[Auto-Withdrawal Engine] Auto-broadcast error, safely retained in PENDING for manual admin review:', autoSendErr);
+          console.error('[Auto-Withdrawal Engine] Auto-broadcast error, safely retained for retry:', autoSendErr);
+          const currentRecord = await getWithdrawalByPublicId(targetPublicId);
+          return res.status(201).json({
+            ...(currentRecord || withdrawal),
+            publicId: targetPublicId,
+            publicWithdrawalId: targetPublicId,
+            autoDisbursed: false,
+            message: `Withdrawal request created and funds reserved. Broadcast deferred for retry: ${autoSendErr?.message || 'RPC unavailable'}`,
+          });
         }
       }
     } catch (checkErr) {
@@ -243,7 +270,7 @@ withdrawalRouter.post('/:publicId/cancel', requireAuth, async (req: AuthRequest,
  */
 withdrawalRouter.post('/admin/settle', requireAdmin, adminFinancialLimiter, async (req: AuthRequest, res: Response) => {
   try {
-    const { publicId, action, rejectionReason } = req.body;
+    const { publicId, action, rejectionReason, txHash } = req.body;
 
     if (!publicId || !action) {
       return res.status(400).json({
@@ -256,6 +283,7 @@ withdrawalRouter.post('/admin/settle', requireAdmin, adminFinancialLimiter, asyn
       withdrawalIdOrPublicId: String(publicId),
       action: action.toUpperCase() as any,
       rejectionReason: rejectionReason ? String(rejectionReason) : undefined,
+      txHash: txHash ? String(txHash).trim() : undefined,
     });
 
     return res.status(200).json(updated);

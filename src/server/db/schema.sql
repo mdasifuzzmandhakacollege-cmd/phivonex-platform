@@ -591,4 +591,12 @@ CREATE INDEX IF NOT EXISTS idx_bcw_withdrawal_id ON blockchain_withdrawals (with
 CREATE INDEX IF NOT EXISTS idx_bcw_tx_hash ON blockchain_withdrawals (tx_hash);
 CREATE INDEX IF NOT EXISTS idx_bcw_status ON blockchain_withdrawals (status);
 
+CREATE TABLE IF NOT EXISTS payout_wallet_nonces (
+  wallet_address VARCHAR(100) NOT NULL,
+  chain_id INTEGER NOT NULL,
+  last_nonce INTEGER NOT NULL DEFAULT -1,
+  updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (wallet_address, chain_id)
+);
+
 

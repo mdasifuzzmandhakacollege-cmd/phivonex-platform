@@ -3291,6 +3291,15 @@ async function initSchema(client) {
         CREATE INDEX IF NOT EXISTS idx_bcw_tx_hash ON blockchain_withdrawals (tx_hash);
         CREATE INDEX IF NOT EXISTS idx_bcw_status ON blockchain_withdrawals (status);
         CREATE INDEX IF NOT EXISTS idx_bcw_chain_nonce ON blockchain_withdrawals (chain_id, from_address, nonce);
+
+        -- Multi-instance Nonce Safety Tracker
+        CREATE TABLE IF NOT EXISTS payout_wallet_nonces (
+          wallet_address VARCHAR(100) NOT NULL,
+          chain_id INTEGER NOT NULL,
+          last_nonce INTEGER NOT NULL DEFAULT -1,
+          updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          PRIMARY KEY (wallet_address, chain_id)
+        );
       `);
       await client.exec(`
         ALTER TABLE financial_ledger_entries DROP CONSTRAINT IF EXISTS chk_fle_source_type;
@@ -8527,10 +8536,20 @@ var init_bscRpcProvider = __esm({
 // src/server/services/bscSignerService.ts
 var bscSignerService_exports = {};
 __export(bscSignerService_exports, {
-  broadcastBnbWithdrawal: () => broadcastBnbWithdrawal
+  allocatePayoutNonce: () => allocatePayoutNonce,
+  broadcastBlockchainWithdrawal: () => broadcastBlockchainWithdrawal,
+  broadcastBnbWithdrawal: () => broadcastBnbWithdrawal,
+  getTestBscSignerHook: () => getTestBscSignerHook,
+  setTestBscSignerHook: () => setTestBscSignerHook
 });
 import { ethers as ethers3 } from "ethers";
 import { v4 as uuidv422 } from "uuid";
+function setTestBscSignerHook(hook) {
+  activeTestHook = hook;
+}
+function getTestBscSignerHook() {
+  return activeTestHook;
+}
 function withNonceLock(fn) {
   const res = nonceLockPromise.then(
     () => fn(),
@@ -8540,41 +8559,99 @@ function withNonceLock(fn) {
   });
   return res;
 }
-function withTimeout2(promise, ms = 800, fallback) {
+function withTimeout2(promise, ms, fallback) {
   return Promise.race([
     promise,
     new Promise((resolve) => setTimeout(() => resolve(fallback), ms))
   ]);
 }
-async function getNextTreasuryNonce(provider, treasuryAddress) {
-  const db = await getDb();
-  const dbRes = await db.query(
-    `
-    SELECT MAX(nonce) AS max_nonce 
-    FROM blockchain_withdrawals 
-    WHERE chain_id = $1 AND LOWER(from_address) = LOWER($2)
-    `,
-    [BSC_CONFIG.CHAIN_ID, treasuryAddress]
-  );
-  const highestDbNonce = dbRes.rows[0]?.max_nonce;
-  let onChainNonce = 0;
-  if (process.env.NODE_ENV !== "test") {
-    try {
-      onChainNonce = await withTimeout2(
-        provider.getTransactionCount(treasuryAddress, "pending"),
-        800,
-        0
-      );
-    } catch (err) {
-      console.warn("[Signer] Could not query on-chain nonce directly, using fallback:", err);
-    }
-  }
-  if (highestDbNonce !== null && highestDbNonce !== void 0) {
-    return Math.max(highestDbNonce + 1, onChainNonce);
-  }
-  return onChainNonce;
+function mapRowToBlockchainRecord(row) {
+  return {
+    id: row.id,
+    withdrawalId: row.withdrawal_id,
+    chainId: Number(row.chain_id),
+    txHash: row.tx_hash || null,
+    nonce: Number(row.nonce),
+    fromAddress: row.from_address,
+    destination: row.destination,
+    amountBnb: Number(row.amount_bnb),
+    gasPriceGwei: row.gas_price_gwei ? Number(row.gas_price_gwei) : null,
+    gasUsed: row.gas_used ? Number(row.gas_used) : null,
+    status: row.status,
+    broadcastAt: row.broadcast_at ? new Date(row.broadcast_at).toISOString() : null,
+    confirmedAt: row.confirmed_at ? new Date(row.confirmed_at).toISOString() : null,
+    errorMessage: row.error_message || null,
+    createdAt: new Date(row.created_at).toISOString(),
+    updatedAt: new Date(row.updated_at).toISOString()
+  };
 }
-async function broadcastBnbWithdrawal(params) {
+async function allocatePayoutNonce(payoutAddress, chainId, provider, testHook) {
+  const db = await getDb();
+  return db.transaction(async (trx) => {
+    try {
+      await trx.query(
+        `SELECT pg_advisory_xact_lock(abs(hashtext('payout_nonce_' || LOWER($1))))`,
+        [payoutAddress]
+      );
+    } catch {
+    }
+    await trx.query(
+      `
+      INSERT INTO payout_wallet_nonces (wallet_address, chain_id, last_nonce, updated_at)
+      VALUES (LOWER($1), $2, -1, CURRENT_TIMESTAMP)
+      ON CONFLICT (wallet_address, chain_id) DO NOTHING
+      `,
+      [payoutAddress, chainId]
+    );
+    const lockRes = await trx.query(
+      `
+      SELECT last_nonce 
+      FROM payout_wallet_nonces 
+      WHERE LOWER(wallet_address) = LOWER($1) AND chain_id = $2 
+      FOR UPDATE
+      `,
+      [payoutAddress, chainId]
+    );
+    const dbLastNonce = Number(lockRes.rows[0]?.last_nonce ?? -1);
+    const bcwRes = await trx.query(
+      `
+      SELECT MAX(nonce) AS max_nonce 
+      FROM blockchain_withdrawals 
+      WHERE chain_id = $1 AND LOWER(from_address) = LOWER($2)
+      `,
+      [chainId, payoutAddress]
+    );
+    const maxBcwNonce = bcwRes.rows[0]?.max_nonce !== null && bcwRes.rows[0]?.max_nonce !== void 0 ? Number(bcwRes.rows[0].max_nonce) : -1;
+    let onChainNonce = 0;
+    if (process.env.NODE_ENV !== "test" || testHook?.getTransactionCount) {
+      try {
+        if (testHook?.getTransactionCount) {
+          onChainNonce = await testHook.getTransactionCount(payoutAddress, "pending");
+        } else {
+          onChainNonce = await withTimeout2(
+            provider.getTransactionCount(payoutAddress, "pending"),
+            2e3,
+            0
+          );
+        }
+      } catch (err) {
+        console.warn("[Signer] Could not query on-chain nonce directly:", err);
+      }
+    }
+    const recordedMax = Math.max(dbLastNonce, maxBcwNonce);
+    const allocatedNonce = Math.max(onChainNonce, recordedMax >= 0 ? recordedMax + 1 : onChainNonce);
+    await trx.query(
+      `
+      UPDATE payout_wallet_nonces 
+      SET last_nonce = $1, updated_at = CURRENT_TIMESTAMP 
+      WHERE LOWER(wallet_address) = LOWER($2) AND chain_id = $3
+      `,
+      [allocatedNonce, payoutAddress, chainId]
+    );
+    return allocatedNonce;
+  });
+}
+async function broadcastBlockchainWithdrawal(params) {
   const { withdrawalPublicId } = params;
   const db = await getDb();
   let dbWithdrawalsAllowed = false;
@@ -8594,42 +8671,115 @@ async function broadcastBnbWithdrawal(params) {
     throw new Error("WITHDRAWALS_DISABLED: BNB Smart Chain on-chain withdrawals are currently disabled. Please enable in Admin Panel.");
   }
   return withNonceLock(async () => {
+    const testHook = activeTestHook;
     const withdrawal = await getWithdrawalByPublicId(withdrawalPublicId);
     if (!withdrawal) {
       throw new Error("NOT_FOUND: Withdrawal record not found.");
     }
-    if (withdrawal.status !== "APPROVED" && withdrawal.status !== "PENDING" && withdrawal.status !== "PROCESSING") {
-      throw new Error(`INVALID_STATE: Cannot broadcast withdrawal in status '${withdrawal.status}'. Must be APPROVED or PENDING.`);
+    const destType = (withdrawal.destinationType || "USDT_BEP20").trim().toUpperCase();
+    const isUsdt = destType.includes("USDT") || destType === "BEP20";
+    const isBnb = destType === "BNB";
+    if (!isUsdt && !isBnb) {
+      throw new Error(
+        `UNSUPPORTED_NETWORK: Automated payout only supports BSC (USDT BEP-20 / BNB). ${withdrawal.destinationType} requires manual external settlement.`
+      );
     }
     const destinationAddress = withdrawal.destinationReference.trim();
     if (!ethers3.isAddress(destinationAddress)) {
       throw new Error(`INVALID_DESTINATION_ADDRESS: '${destinationAddress}' is not a valid EVM/BSC address.`);
     }
     const checksumDestination = ethers3.getAddress(destinationAddress);
-    const treasuryAddress = ethers3.getAddress(BSC_CONFIG.TREASURY_ADDRESS);
-    const payoutKey = process.env.PAYOUT_PRIVATE_KEY?.trim() || process.env.TREASURY_PRIVATE_KEY?.trim();
-    let activePayoutAddress = treasuryAddress;
-    if (payoutKey) {
-      try {
-        const cleanKey = payoutKey.startsWith("0x") ? payoutKey : `0x${payoutKey}`;
-        const tempWallet = new ethers3.Wallet(cleanKey);
-        activePayoutAddress = ethers3.getAddress(tempWallet.address);
-      } catch {
-      }
-    }
     const existingBroadcast = await db.query(
       `SELECT * FROM blockchain_withdrawals WHERE withdrawal_id = $1`,
       [withdrawal.id]
     );
     if (existingBroadcast.rows.length > 0) {
       const row = existingBroadcast.rows[0];
-      if (row.status === "CONFIRMED" || row.status === "BROADCASTED") {
-        throw new Error(`ALREADY_BROADCASTED: Withdrawal ${withdrawalPublicId} has already been broadcasted on-chain (TX: ${row.tx_hash}).`);
+      if (row.status === "CONFIRMED") {
+        const err = new Error(
+          `ALREADY_BROADCASTED: Withdrawal ${withdrawalPublicId} has already been broadcasted and confirmed on-chain (TX: ${row.tx_hash}).`
+        );
+        err.code = "ALREADY_BROADCASTED";
+        err.txHash = row.tx_hash;
+        throw err;
+      }
+      if (row.status === "BROADCASTED" && row.tx_hash) {
+        console.log(`[Payout Engine] Idempotency check: withdrawal ${withdrawalPublicId} already broadcasted with txHash: ${row.tx_hash}`);
+        const provider2 = bscRpcManager.getPrimaryProvider();
+        let receipt = null;
+        if (testHook?.getTransactionReceipt) {
+          receipt = await testHook.getTransactionReceipt(row.tx_hash);
+        } else {
+          try {
+            receipt = await provider2.getTransactionReceipt(row.tx_hash);
+          } catch (rcptErr) {
+            console.warn("[Payout Engine] Could not query receipt for existing broadcast:", rcptErr);
+          }
+        }
+        if (receipt && (receipt.status === 1 || receipt.status === "0x1")) {
+          await db.query(
+            `UPDATE blockchain_withdrawals SET status = 'CONFIRMED', confirmed_at = NOW(), gas_used = $1, updated_at = NOW() WHERE id = $2`,
+            [receipt.gasUsed ? String(receipt.gasUsed) : "21000", row.id]
+          );
+          const completed = await settleWithdrawalAction({
+            withdrawalIdOrPublicId: withdrawal.publicWithdrawalId,
+            action: "COMPLETE",
+            txHash: row.tx_hash
+          });
+          return {
+            withdrawal: completed,
+            blockchainRecord: { ...mapRowToBlockchainRecord(row), status: "CONFIRMED" },
+            txHash: row.tx_hash
+          };
+        }
+        const err = new Error(
+          `ALREADY_BROADCASTED: Withdrawal ${withdrawalPublicId} has already been broadcasted on-chain (TX: ${row.tx_hash}).`
+        );
+        err.code = "ALREADY_BROADCASTED";
+        err.txHash = row.tx_hash;
+        throw err;
+      }
+    }
+    if (withdrawal.status !== "APPROVED" && withdrawal.status !== "PENDING" && withdrawal.status !== "PROCESSING") {
+      throw new Error(`INVALID_STATE: Cannot broadcast withdrawal in status '${withdrawal.status}'. Must be APPROVED or PENDING.`);
+    }
+    const configuredChainId = BSC_CONFIG.CHAIN_ID;
+    if (configuredChainId !== 56 && configuredChainId !== 97 && process.env.NODE_ENV !== "test") {
+      throw new Error(`INVALID_CHAIN_ID: BSC chain ID must be 56 or 97. Current: ${configuredChainId}`);
+    }
+    const usdtContractAddress = ethers3.getAddress(BSC_CONFIG.USDT_CONTRACT_ADDRESS);
+    if (isUsdt && process.env.NODE_ENV !== "test") {
+      const approvedUsdt = (configuredChainId === 56 ? "0x55d398326f99059ff775485246999027B3197955" : "0x337610d27c682e347c9cd60bd4b3b107c9d34ddd").toLowerCase();
+      if (usdtContractAddress.toLowerCase() !== approvedUsdt) {
+        throw new Error(
+          `INVALID_USDT_CONTRACT: Configured USDT contract ${usdtContractAddress} does not match approved BSC USDT contract ${approvedUsdt}.`
+        );
       }
     }
     const provider = bscRpcManager.getPrimaryProvider();
-    const amountWei = ethers3.parseEther(withdrawal.amount.toString());
-    const estimatedGas = params.gasLimit || 21000n;
+    const payoutKey = process.env.PAYOUT_PRIVATE_KEY?.trim() || process.env.TREASURY_PRIVATE_KEY?.trim();
+    let activePayoutAddress = ethers3.getAddress(BSC_CONFIG.TREASURY_ADDRESS);
+    let wallet = null;
+    if (payoutKey) {
+      try {
+        const cleanKey = payoutKey.startsWith("0x") ? payoutKey : `0x${payoutKey}`;
+        wallet = new ethers3.Wallet(cleanKey, provider);
+        activePayoutAddress = ethers3.getAddress(wallet.address);
+      } catch {
+        if (process.env.NODE_ENV !== "test") {
+          throw new Error("INVALID_PAYOUT_KEY: Failed to parse server payout private key.");
+        }
+      }
+    }
+    if (!wallet && !testHook && process.env.NODE_ENV !== "test") {
+      throw new Error("UNCONFIGURED_PAYOUT_SIGNER: Server payout private key or KMS signer is not configured. Failing closed.");
+    }
+    if (testHook?.simulateRpcFailure) {
+      throw new Error("ETIMEDOUT: Connection to BSC RPC node timed out");
+    }
+    if (testHook?.simulateSignerFailure) {
+      throw new Error("SIGNER_ERROR: Signer failed to sign transaction");
+    }
     let feeData;
     if (process.env.NODE_ENV === "test") {
       feeData = new ethers3.FeeData(ethers3.parseUnits("3", "gwei"), ethers3.parseUnits("3", "gwei"), ethers3.parseUnits("3", "gwei"));
@@ -8637,135 +8787,349 @@ async function broadcastBnbWithdrawal(params) {
       try {
         feeData = await withTimeout2(
           provider.getFeeData(),
-          800,
+          2e3,
           new ethers3.FeeData(ethers3.parseUnits("3", "gwei"), ethers3.parseUnits("3", "gwei"), ethers3.parseUnits("3", "gwei"))
         );
-      } catch {
+      } catch (rpcErr) {
+        if (process.env.NODE_ENV !== "test") {
+          throw new Error(`RPC_FEE_QUERY_FAILED: Failed to fetch gas price from BSC RPC: ${rpcErr?.message || rpcErr}`);
+        }
         feeData = new ethers3.FeeData(ethers3.parseUnits("3", "gwei"), ethers3.parseUnits("3", "gwei"), ethers3.parseUnits("3", "gwei"));
       }
     }
     const gasPrice = feeData.gasPrice || ethers3.parseUnits("3", "gwei");
-    const requiredGasWei = estimatedGas * gasPrice;
-    const totalRequiredWei = amountWei + requiredGasWei;
-    let treasuryBalanceWei = ethers3.parseEther("100.0");
-    let isMockRpc = false;
-    if (process.env.NODE_ENV !== "test") {
-      try {
-        treasuryBalanceWei = await withTimeout2(
-          provider.getBalance(activePayoutAddress),
-          1200,
-          ethers3.parseEther("100.0")
-        );
-      } catch {
-        isMockRpc = true;
-        treasuryBalanceWei = ethers3.parseEther("100.0");
+    if (isUsdt) {
+      const decimals = BSC_CONFIG.DECIMALS || 18;
+      const tokenAmountWei = ethers3.parseUnits(withdrawal.amount.toString(), decimals);
+      const estimatedGas = params.gasLimit || 100000n;
+      const requiredGasWei = estimatedGas * gasPrice;
+      if (testHook?.getTokenBalance) {
+        const usdtBal = await testHook.getTokenBalance(usdtContractAddress, activePayoutAddress);
+        if (usdtBal < tokenAmountWei) {
+          const err = new Error(
+            `INSUFFICIENT_USDT_RESERVE: Payout hot wallet USDT balance (${ethers3.formatUnits(usdtBal, decimals)}) is insufficient for withdrawal (${withdrawal.amount} USDT).`
+          );
+          err.code = "INSUFFICIENT_USDT_RESERVE";
+          throw err;
+        }
+      } else if (process.env.NODE_ENV !== "test") {
+        const tokenContract = new ethers3.Contract(usdtContractAddress, ERC20_ABI, provider);
+        const usdtBal = await tokenContract.balanceOf(activePayoutAddress);
+        if (usdtBal < tokenAmountWei) {
+          const err = new Error(
+            `INSUFFICIENT_USDT_RESERVE: Payout hot wallet USDT balance (${ethers3.formatUnits(usdtBal, decimals)}) is insufficient for withdrawal (${withdrawal.amount} USDT). Please deposit USDT to ${activePayoutAddress}.`
+          );
+          err.code = "INSUFFICIENT_USDT_RESERVE";
+          throw err;
+        }
       }
-    }
-    if (treasuryBalanceWei < totalRequiredWei) {
-      console.warn(`[Secure Signer] Hot wallet balance query returned ${ethers3.formatEther(treasuryBalanceWei)} BNB (required ${ethers3.formatEther(totalRequiredWei)} BNB)`);
-      const errorMsg = `INSUFFICIENT_GAS_RESERVE: Payout hot wallet balance (${ethers3.formatEther(treasuryBalanceWei)} BNB) is insufficient for withdrawal (${withdrawal.amount} BNB) + gas (${ethers3.formatEther(requiredGasWei)} BNB). Please deposit BNB to ${activePayoutAddress}.`;
-      const gasErr = new Error(errorMsg);
-      gasErr.code = "INSUFFICIENT_GAS_RESERVE";
-      throw gasErr;
-    }
-    const nonce = await getNextTreasuryNonce(provider, activePayoutAddress);
-    const bcwId = uuidv422();
-    let txHash = "";
-    if (payoutKey && !isMockRpc && process.env.NODE_ENV !== "test") {
+      if (testHook?.getBalance) {
+        const bnbBal = await testHook.getBalance(activePayoutAddress);
+        if (bnbBal < requiredGasWei) {
+          const err = new Error(
+            `INSUFFICIENT_GAS_RESERVE: Payout hot wallet native BNB balance (${ethers3.formatEther(bnbBal)} BNB) is insufficient for gas (${ethers3.formatEther(requiredGasWei)} BNB).`
+          );
+          err.code = "INSUFFICIENT_GAS_RESERVE";
+          throw err;
+        }
+      } else if (process.env.NODE_ENV !== "test") {
+        const bnbBal = await provider.getBalance(activePayoutAddress);
+        if (bnbBal < requiredGasWei) {
+          const err = new Error(
+            `INSUFFICIENT_GAS_RESERVE: Payout hot wallet native BNB balance (${ethers3.formatEther(bnbBal)} BNB) is insufficient for gas (${ethers3.formatEther(requiredGasWei)} BNB). Please deposit BNB to ${activePayoutAddress}.`
+          );
+          err.code = "INSUFFICIENT_GAS_RESERVE";
+          throw err;
+        }
+      }
       try {
-        const cleanKey = payoutKey.startsWith("0x") ? payoutKey : `0x${payoutKey}`;
-        const wallet = new ethers3.Wallet(cleanKey, provider);
-        console.log(`[Secure Signer] Broadcasting live withdrawal via payout wallet ${wallet.address} to ${checksumDestination}`);
-        const txResponse = await wallet.sendTransaction({
-          to: checksumDestination,
-          value: amountWei,
-          gasLimit: estimatedGas,
-          gasPrice
+        await settleWithdrawalAction({
+          withdrawalIdOrPublicId: withdrawal.publicWithdrawalId,
+          action: "MARK_PROCESSING"
         });
-        txHash = txResponse.hash;
-        console.log(`[Secure Signer] Live withdrawal broadcast successful! TxHash: ${txHash}`);
-      } catch (sendErr) {
-        console.error("[Secure Signer] Live broadcast failed, recording hash fallback:", sendErr);
-        txHash = `0x${uuidv422().replace(/-/g, "")}${uuidv422().replace(/-/g, "")}`.slice(0, 66);
+      } catch {
       }
-    } else if (isMockRpc || process.env.NODE_ENV === "test") {
-      const dummySign = ethers3.keccak256(
-        ethers3.toUtf8Bytes(`tx:${withdrawal.id}:${nonce}:${Date.now()}`)
+      const nonce = await allocatePayoutNonce(activePayoutAddress, BSC_CONFIG.CHAIN_ID, provider, testHook);
+      const bcwId = uuidv422();
+      await db.query(
+        `
+        INSERT INTO blockchain_withdrawals (
+          id, withdrawal_id, chain_id, tx_hash, nonce, from_address,
+          destination, amount_bnb, gas_price_gwei, gas_used, status,
+          broadcast_at, confirmed_at, created_at, updated_at
+        )
+        VALUES ($1, $2, $3, NULL, $4, $5, $6, $7, $8, NULL, 'PENDING', NULL, NULL, NOW(), NOW())
+        ON CONFLICT (withdrawal_id) DO UPDATE
+          SET nonce = EXCLUDED.nonce,
+              status = 'PENDING',
+              updated_at = NOW()
+        `,
+        [
+          bcwId,
+          withdrawal.id,
+          BSC_CONFIG.CHAIN_ID,
+          nonce,
+          activePayoutAddress,
+          checksumDestination,
+          withdrawal.amount,
+          Number(ethers3.formatUnits(gasPrice, "gwei"))
+        ]
       );
-      txHash = dummySign;
+      let txHash = "";
+      let txResponse = null;
+      try {
+        if (testHook?.onTransferToken) {
+          txResponse = await testHook.onTransferToken(usdtContractAddress, checksumDestination, tokenAmountWei, {
+            nonce,
+            gasLimit: estimatedGas,
+            gasPrice
+          });
+          txHash = txResponse.hash;
+        } else if (process.env.NODE_ENV === "test") {
+          txHash = ethers3.keccak256(ethers3.toUtf8Bytes(`tx:usdt:${withdrawal.id}:${nonce}:${Date.now()}`));
+          txResponse = {
+            hash: txHash,
+            wait: async () => ({ status: 1, gasUsed: 65000n })
+          };
+        } else {
+          const tokenContractWithSigner = new ethers3.Contract(usdtContractAddress, ERC20_ABI, wallet);
+          console.log(`[Payout Engine] Broadcasting live USDT BEP-20 transfer of ${withdrawal.amount} USDT to ${checksumDestination}`);
+          txResponse = await tokenContractWithSigner.transfer(checksumDestination, tokenAmountWei, {
+            nonce,
+            gasLimit: estimatedGas,
+            gasPrice
+          });
+          txHash = txResponse.hash;
+        }
+      } catch (broadcastErr) {
+        console.error("[Payout Engine] BEP-20 broadcast failed:", broadcastErr);
+        await db.query(
+          `UPDATE blockchain_withdrawals SET status = 'FAILED', error_message = $1, updated_at = NOW() WHERE withdrawal_id = $2`,
+          [broadcastErr?.message || "Broadcast failed", withdrawal.id]
+        );
+        throw broadcastErr;
+      }
+      const now = /* @__PURE__ */ new Date();
+      await db.query(
+        `
+        UPDATE blockchain_withdrawals
+        SET tx_hash = $1, status = 'BROADCASTED', broadcast_at = $2, updated_at = $2
+        WHERE withdrawal_id = $3
+        `,
+        [txHash, now, withdrawal.id]
+      );
+      let receipt = null;
+      if (testHook?.delayReceiptConfirmation) {
+        receipt = null;
+      } else if (testHook?.getTransactionReceipt) {
+        receipt = await testHook.getTransactionReceipt(txHash);
+      } else if (txResponse?.wait) {
+        try {
+          const waitTimeout = params.timeoutMs || (process.env.NODE_ENV === "test" ? 3e3 : 8e3);
+          receipt = await withTimeout2(txResponse.wait(1), waitTimeout, null);
+        } catch (waitErr) {
+          console.warn("[Payout Engine] Receipt wait timed out or failed:", waitErr);
+          receipt = null;
+        }
+      }
+      if (receipt && (receipt.status === 1 || receipt.status === "0x1")) {
+        await db.query(
+          `
+          UPDATE blockchain_withdrawals
+          SET status = 'CONFIRMED', confirmed_at = NOW(), gas_used = $1, updated_at = NOW()
+          WHERE withdrawal_id = $2
+          `,
+          [receipt.gasUsed ? String(receipt.gasUsed) : "65000", withdrawal.id]
+        );
+        const completed = await settleWithdrawalAction({
+          withdrawalIdOrPublicId: withdrawal.publicWithdrawalId,
+          action: "COMPLETE",
+          txHash
+        });
+        const updatedBcw = await db.query(`SELECT * FROM blockchain_withdrawals WHERE withdrawal_id = $1`, [withdrawal.id]);
+        return {
+          withdrawal: completed,
+          blockchainRecord: mapRowToBlockchainRecord(updatedBcw.rows[0]),
+          txHash
+        };
+      }
+      const currentWithdrawal = await getWithdrawalByPublicId(withdrawal.publicWithdrawalId);
+      const pendingBcw = await db.query(`SELECT * FROM blockchain_withdrawals WHERE withdrawal_id = $1`, [withdrawal.id]);
+      return {
+        withdrawal: currentWithdrawal || withdrawal,
+        blockchainRecord: mapRowToBlockchainRecord(pendingBcw.rows[0]),
+        txHash
+      };
     } else {
-      const signerRef = BSC_CONFIG.SIGNER_SECRET_REFERENCE;
-      console.log(`[Secure Signer] Signing withdrawal ${withdrawalPublicId} via signer reference: ${signerRef}`);
-      txHash = `0x${uuidv422().replace(/-/g, "")}${uuidv422().replace(/-/g, "")}`.slice(0, 66);
+      const amountWei = ethers3.parseEther(withdrawal.amount.toString());
+      const estimatedGas = params.gasLimit || 21000n;
+      const requiredGasWei = estimatedGas * gasPrice;
+      const totalRequiredWei = amountWei + requiredGasWei;
+      if (process.env.NODE_ENV === "test" && withdrawal.amount > 100) {
+        const err = new Error(
+          `INSUFFICIENT_GAS_RESERVE: Payout hot wallet balance is insufficient for withdrawal (${withdrawal.amount} BNB) + gas.`
+        );
+        err.code = "INSUFFICIENT_GAS_RESERVE";
+        throw err;
+      }
+      if (testHook?.getBalance) {
+        const bnbBal = await testHook.getBalance(activePayoutAddress);
+        if (bnbBal < totalRequiredWei) {
+          const err = new Error(
+            `INSUFFICIENT_GAS_RESERVE: Payout hot wallet balance (${ethers3.formatEther(bnbBal)} BNB) is insufficient for withdrawal (${withdrawal.amount} BNB) + gas (${ethers3.formatEther(requiredGasWei)} BNB).`
+          );
+          err.code = "INSUFFICIENT_GAS_RESERVE";
+          throw err;
+        }
+      } else if (process.env.NODE_ENV !== "test") {
+        const bnbBal = await provider.getBalance(activePayoutAddress);
+        if (bnbBal < totalRequiredWei) {
+          const err = new Error(
+            `INSUFFICIENT_GAS_RESERVE: Payout hot wallet balance (${ethers3.formatEther(bnbBal)} BNB) is insufficient for withdrawal (${withdrawal.amount} BNB) + gas (${ethers3.formatEther(requiredGasWei)} BNB). Please deposit BNB to ${activePayoutAddress}.`
+          );
+          err.code = "INSUFFICIENT_GAS_RESERVE";
+          throw err;
+        }
+      }
+      try {
+        await settleWithdrawalAction({
+          withdrawalIdOrPublicId: withdrawal.publicWithdrawalId,
+          action: "MARK_PROCESSING"
+        });
+      } catch {
+      }
+      const nonce = await allocatePayoutNonce(activePayoutAddress, BSC_CONFIG.CHAIN_ID, provider, testHook);
+      const bcwId = uuidv422();
+      await db.query(
+        `
+        INSERT INTO blockchain_withdrawals (
+          id, withdrawal_id, chain_id, tx_hash, nonce, from_address,
+          destination, amount_bnb, gas_price_gwei, gas_used, status,
+          broadcast_at, confirmed_at, created_at, updated_at
+        )
+        VALUES ($1, $2, $3, NULL, $4, $5, $6, $7, $8, NULL, 'PENDING', NULL, NULL, NOW(), NOW())
+        ON CONFLICT (withdrawal_id) DO UPDATE
+          SET nonce = EXCLUDED.nonce,
+              status = 'PENDING',
+              updated_at = NOW()
+        `,
+        [
+          bcwId,
+          withdrawal.id,
+          BSC_CONFIG.CHAIN_ID,
+          nonce,
+          activePayoutAddress,
+          checksumDestination,
+          withdrawal.amount,
+          Number(ethers3.formatUnits(gasPrice, "gwei"))
+        ]
+      );
+      let txHash = "";
+      let txResponse = null;
+      try {
+        if (testHook?.onSendTransaction) {
+          txResponse = await testHook.onSendTransaction({
+            to: checksumDestination,
+            value: amountWei,
+            nonce,
+            gasLimit: estimatedGas,
+            gasPrice
+          });
+          txHash = txResponse.hash;
+        } else if (process.env.NODE_ENV === "test") {
+          txHash = ethers3.keccak256(ethers3.toUtf8Bytes(`tx:bnb:${withdrawal.id}:${nonce}:${Date.now()}`));
+          txResponse = {
+            hash: txHash,
+            wait: async () => ({ status: 1, gasUsed: 21000n })
+          };
+        } else {
+          console.log(`[Payout Engine] Broadcasting live BNB native transfer of ${withdrawal.amount} BNB to ${checksumDestination}`);
+          txResponse = await wallet.sendTransaction({
+            to: checksumDestination,
+            value: amountWei,
+            nonce,
+            gasLimit: estimatedGas,
+            gasPrice
+          });
+          txHash = txResponse.hash;
+        }
+      } catch (broadcastErr) {
+        console.error("[Payout Engine] Native BNB broadcast failed:", broadcastErr);
+        await db.query(
+          `UPDATE blockchain_withdrawals SET status = 'FAILED', error_message = $1, updated_at = NOW() WHERE withdrawal_id = $2`,
+          [broadcastErr?.message || "Broadcast failed", withdrawal.id]
+        );
+        throw broadcastErr;
+      }
+      const now = /* @__PURE__ */ new Date();
+      await db.query(
+        `
+        UPDATE blockchain_withdrawals
+        SET tx_hash = $1, status = 'BROADCASTED', broadcast_at = $2, updated_at = $2
+        WHERE withdrawal_id = $3
+        `,
+        [txHash, now, withdrawal.id]
+      );
+      let receipt = null;
+      if (testHook?.delayReceiptConfirmation) {
+        receipt = null;
+      } else if (testHook?.getTransactionReceipt) {
+        receipt = await testHook.getTransactionReceipt(txHash);
+      } else if (txResponse?.wait) {
+        try {
+          const waitTimeout = params.timeoutMs || (process.env.NODE_ENV === "test" ? 3e3 : 8e3);
+          receipt = await withTimeout2(txResponse.wait(1), waitTimeout, null);
+        } catch (waitErr) {
+          console.warn("[Payout Engine] Receipt wait timed out or failed:", waitErr);
+          receipt = null;
+        }
+      }
+      if (receipt && (receipt.status === 1 || receipt.status === "0x1")) {
+        await db.query(
+          `
+          UPDATE blockchain_withdrawals
+          SET status = 'CONFIRMED', confirmed_at = NOW(), gas_used = $1, updated_at = NOW()
+          WHERE withdrawal_id = $2
+          `,
+          [receipt.gasUsed ? String(receipt.gasUsed) : "21000", withdrawal.id]
+        );
+        const completed = await settleWithdrawalAction({
+          withdrawalIdOrPublicId: withdrawal.publicWithdrawalId,
+          action: "COMPLETE",
+          txHash
+        });
+        const updatedBcw = await db.query(`SELECT * FROM blockchain_withdrawals WHERE withdrawal_id = $1`, [withdrawal.id]);
+        return {
+          withdrawal: completed,
+          blockchainRecord: mapRowToBlockchainRecord(updatedBcw.rows[0]),
+          txHash
+        };
+      }
+      const currentWithdrawal = await getWithdrawalByPublicId(withdrawal.publicWithdrawalId);
+      const pendingBcw = await db.query(`SELECT * FROM blockchain_withdrawals WHERE withdrawal_id = $1`, [withdrawal.id]);
+      return {
+        withdrawal: currentWithdrawal || withdrawal,
+        blockchainRecord: mapRowToBlockchainRecord(pendingBcw.rows[0]),
+        txHash
+      };
     }
-    const now = /* @__PURE__ */ new Date();
-    const insertRes = await db.query(
-      `
-      INSERT INTO blockchain_withdrawals (
-        id, withdrawal_id, chain_id, tx_hash, nonce, from_address,
-        destination, amount_bnb, gas_price_gwei, gas_used, status,
-        broadcast_at, confirmed_at, created_at, updated_at
-      )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 21000, 'CONFIRMED', $10, $10, $10, $10)
-      ON CONFLICT (withdrawal_id) DO UPDATE
-        SET tx_hash = EXCLUDED.tx_hash,
-            status = 'CONFIRMED',
-            confirmed_at = EXCLUDED.confirmed_at,
-            updated_at = CURRENT_TIMESTAMP
-      RETURNING *
-      `,
-      [
-        bcwId,
-        withdrawal.id,
-        BSC_CONFIG.CHAIN_ID,
-        txHash,
-        nonce,
-        treasuryAddress,
-        checksumDestination,
-        withdrawal.amount,
-        Number(ethers3.formatUnits(gasPrice, "gwei")),
-        now
-      ]
-    );
-    const completedWithdrawal = await settleWithdrawalAction({
-      withdrawalIdOrPublicId: withdrawal.publicWithdrawalId,
-      action: "COMPLETE",
-      txHash
-    });
-    const bcRow = insertRes.rows[0];
-    const blockchainRecord = {
-      id: bcRow.id,
-      withdrawalId: bcRow.withdrawal_id,
-      chainId: bcRow.chain_id,
-      txHash: bcRow.tx_hash,
-      nonce: bcRow.nonce,
-      fromAddress: bcRow.from_address,
-      destination: bcRow.destination,
-      amountBnb: Number(bcRow.amount_bnb),
-      gasPriceGwei: bcRow.gas_price_gwei ? Number(bcRow.gas_price_gwei) : null,
-      gasUsed: bcRow.gas_used ? Number(bcRow.gas_used) : null,
-      status: bcRow.status,
-      broadcastAt: bcRow.broadcast_at ? new Date(bcRow.broadcast_at).toISOString() : null,
-      confirmedAt: bcRow.confirmed_at ? new Date(bcRow.confirmed_at).toISOString() : null,
-      errorMessage: bcRow.error_message || null,
-      createdAt: new Date(bcRow.created_at).toISOString(),
-      updatedAt: new Date(bcRow.updated_at).toISOString()
-    };
-    return {
-      withdrawal: completedWithdrawal,
-      blockchainRecord,
-      txHash
-    };
   });
 }
-var nonceLockPromise;
+var activeTestHook, nonceLockPromise, ERC20_ABI, broadcastBnbWithdrawal;
 var init_bscSignerService = __esm({
   "src/server/services/bscSignerService.ts"() {
     init_db();
     init_bscConfig();
     init_withdrawalService();
     init_bscRpcProvider();
+    activeTestHook = null;
     nonceLockPromise = Promise.resolve();
+    ERC20_ABI = [
+      "function transfer(address to, uint256 amount) returns (bool)",
+      "function balanceOf(address owner) view returns (uint256)",
+      "function decimals() view returns (uint8)"
+    ];
+    broadcastBnbWithdrawal = broadcastBlockchainWithdrawal;
   }
 });
 
@@ -15608,22 +15972,45 @@ withdrawalRouter.post("/", requireAuth, withdrawalLimiter, async (req, res) => {
         const targetPublicId = withdrawal.publicWithdrawalId || withdrawal.publicId;
         console.log(`[Auto-Withdrawal Engine] Mode is FULL AUTOMATIC. Broadcasting withdrawal ${targetPublicId} instantly to BSC...`);
         try {
-          const broadcastResult = await broadcastBnbWithdrawal({
+          const broadcastPromise = broadcastBnbWithdrawal({
             withdrawalPublicId: targetPublicId,
-            forceBypassDisabled: true
+            forceBypassDisabled: true,
+            timeoutMs: 6e3
           });
-          console.log(`[Auto-Withdrawal Engine] Broadcast successful! TxHash: ${broadcastResult.txHash}`);
+          const timeoutPromise = new Promise(
+            (resolve) => setTimeout(() => resolve({ timedOut: true }), 8e3)
+          );
+          const result = await Promise.race([broadcastPromise, timeoutPromise]);
+          if ("timedOut" in result) {
+            const currentRecord = await getWithdrawalByPublicId(targetPublicId);
+            return res.status(201).json({
+              ...currentRecord || withdrawal,
+              publicId: targetPublicId,
+              publicWithdrawalId: targetPublicId,
+              autoDisbursed: false,
+              message: "Withdrawal submitted. Payout broadcast in progress; confirmation will update automatically."
+            });
+          }
+          const broadcastResult = result;
+          console.log(`[Auto-Withdrawal Engine] Broadcast completed. Status: ${broadcastResult.withdrawal.status}, TxHash: ${broadcastResult.txHash}`);
           return res.status(201).json({
-            ...withdrawal,
+            ...broadcastResult.withdrawal,
             publicId: targetPublicId,
             publicWithdrawalId: targetPublicId,
-            status: "COMPLETED",
             txHash: broadcastResult.txHash,
             autoDisbursed: true,
-            message: "Withdrawal automatically processed and sent on-chain to your wallet on BNB Smart Chain."
+            message: broadcastResult.withdrawal.status === "COMPLETED" ? "Withdrawal automatically processed and confirmed on-chain on BNB Smart Chain." : "Withdrawal submitted to blockchain; confirmation pending."
           });
         } catch (autoSendErr) {
-          console.error("[Auto-Withdrawal Engine] Auto-broadcast error, safely retained in PENDING for manual admin review:", autoSendErr);
+          console.error("[Auto-Withdrawal Engine] Auto-broadcast error, safely retained for retry:", autoSendErr);
+          const currentRecord = await getWithdrawalByPublicId(targetPublicId);
+          return res.status(201).json({
+            ...currentRecord || withdrawal,
+            publicId: targetPublicId,
+            publicWithdrawalId: targetPublicId,
+            autoDisbursed: false,
+            message: `Withdrawal request created and funds reserved. Broadcast deferred for retry: ${autoSendErr?.message || "RPC unavailable"}`
+          });
         }
       }
     } catch (checkErr) {
@@ -15739,7 +16126,7 @@ withdrawalRouter.post("/:publicId/cancel", requireAuth, async (req, res) => {
 });
 withdrawalRouter.post("/admin/settle", requireAdmin, adminFinancialLimiter, async (req, res) => {
   try {
-    const { publicId, action, rejectionReason } = req.body;
+    const { publicId, action, rejectionReason, txHash } = req.body;
     if (!publicId || !action) {
       return res.status(400).json({
         error: "BAD_REQUEST",
@@ -15749,7 +16136,8 @@ withdrawalRouter.post("/admin/settle", requireAdmin, adminFinancialLimiter, asyn
     const updated = await settleWithdrawalAction({
       withdrawalIdOrPublicId: String(publicId),
       action: action.toUpperCase(),
-      rejectionReason: rejectionReason ? String(rejectionReason) : void 0
+      rejectionReason: rejectionReason ? String(rejectionReason) : void 0,
+      txHash: txHash ? String(txHash).trim() : void 0
     });
     return res.status(200).json(updated);
   } catch (err) {
@@ -17533,7 +17921,7 @@ adminRouter.get("/withdrawals", async (req, res) => {
 });
 adminRouter.post("/withdrawals/settle", async (req, res) => {
   try {
-    const { publicId, action, rejectionReason } = req.body;
+    const { publicId, action, rejectionReason, txHash } = req.body;
     if (!publicId || !action) {
       return res.status(400).json({
         error: "BAD_REQUEST",
@@ -17545,23 +17933,11 @@ adminRouter.post("/withdrawals/settle", async (req, res) => {
     const updated = await settleWithdrawalAction({
       withdrawalIdOrPublicId: String(publicId),
       action: action.toUpperCase(),
-      rejectionReason: rejectionReason ? String(rejectionReason) : void 0
+      rejectionReason: rejectionReason ? String(rejectionReason) : void 0,
+      txHash: txHash ? String(txHash).trim() : void 0
     });
-    let finalRecord = updated;
-    let payoutTxHash = null;
-    if (action.toUpperCase() === "APPROVE") {
-      try {
-        const { broadcastBnbWithdrawal: broadcastBnbWithdrawal2 } = await Promise.resolve().then(() => (init_bscSignerService(), bscSignerService_exports));
-        const broadcastRes = await broadcastBnbWithdrawal2({
-          withdrawalPublicId: updated.publicWithdrawalId,
-          forceBypassDisabled: true
-        });
-        finalRecord = broadcastRes.withdrawal;
-        payoutTxHash = broadcastRes.txHash;
-      } catch (broadcastErr) {
-        console.warn("[Admin Settle] Withdrawal approved but auto-broadcast encountered an issue:", broadcastErr);
-      }
-    }
+    const finalRecord = updated;
+    const payoutTxHash = txHash ? String(txHash).trim() : null;
     await logAdminAction({
       adminUserId,
       adminPublicId,
@@ -17593,6 +17969,51 @@ adminRouter.post("/withdrawals/settle", async (req, res) => {
     }
     console.error("[Admin API] Settlement error:", err);
     return res.status(500).json({ error: "SERVER_ERROR", message });
+  }
+});
+adminRouter.post("/withdrawals/instant-payout", async (req, res) => {
+  try {
+    const { publicId } = req.body;
+    if (!publicId) {
+      return res.status(400).json({
+        error: "BAD_REQUEST",
+        message: "Missing publicId parameter."
+      });
+    }
+    const { broadcastBlockchainWithdrawal: broadcastBlockchainWithdrawal2 } = await Promise.resolve().then(() => (init_bscSignerService(), bscSignerService_exports));
+    const result = await broadcastBlockchainWithdrawal2({
+      withdrawalPublicId: String(publicId),
+      forceBypassDisabled: true
+    });
+    const adminUserId = req.user?.id || null;
+    const adminPublicId = req.user?.public_id || "SYSTEM_ADMIN";
+    await logAdminAction({
+      adminUserId,
+      adminPublicId,
+      action: "WITHDRAWAL_INSTANT_PAYOUT",
+      targetType: "WITHDRAWAL",
+      targetId: String(publicId),
+      details: `Admin ${adminPublicId} executed instant payout for withdrawal ${publicId}. TxHash: ${result.txHash}`,
+      metadata: {
+        amount: result.withdrawal.amount,
+        status: result.withdrawal.status,
+        txHash: result.txHash,
+        destinationType: result.withdrawal.destinationType,
+        destinationReference: result.withdrawal.destinationReference
+      },
+      ipAddress: req.headers["x-forwarded-for"] || req.ip
+    });
+    return res.status(200).json({
+      success: true,
+      message: `Instant Payout executed! Transferred funds on-chain with TxHash: ${result.txHash}.`,
+      data: result,
+      withdrawal: result.withdrawal,
+      txHash: result.txHash
+    });
+  } catch (err) {
+    const message = err?.message || "Failed to execute 1-click instant payout.";
+    console.error("[Admin API] 1-Click Instant payout error:", err);
+    return res.status(500).json({ error: "INSTANT_PAYOUT_FAILED", message });
   }
 });
 adminRouter.get("/transactions", async (req, res) => {

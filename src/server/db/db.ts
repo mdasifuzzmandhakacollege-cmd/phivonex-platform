@@ -1011,6 +1011,15 @@ async function initSchema(client: DatabaseClient) {
         CREATE INDEX IF NOT EXISTS idx_bcw_tx_hash ON blockchain_withdrawals (tx_hash);
         CREATE INDEX IF NOT EXISTS idx_bcw_status ON blockchain_withdrawals (status);
         CREATE INDEX IF NOT EXISTS idx_bcw_chain_nonce ON blockchain_withdrawals (chain_id, from_address, nonce);
+
+        -- Multi-instance Nonce Safety Tracker
+        CREATE TABLE IF NOT EXISTS payout_wallet_nonces (
+          wallet_address VARCHAR(100) NOT NULL,
+          chain_id INTEGER NOT NULL,
+          last_nonce INTEGER NOT NULL DEFAULT -1,
+          updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          PRIMARY KEY (wallet_address, chain_id)
+        );
       `);
 
       // Update financial_ledger_entries constraint to support BLOCKCHAIN_DEPOSIT & COIN_SWAP & NODE_PURCHASE

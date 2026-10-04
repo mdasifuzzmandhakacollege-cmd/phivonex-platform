@@ -172,12 +172,16 @@ export const WithdrawalsView: React.FC<WithdrawalsViewProps> = ({ user: _user, o
       }
     }
 
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 15000);
+
     try {
       setSubmitting(true);
       const res = await fetch('/api/withdrawals', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
+        signal: controller.signal,
         body: JSON.stringify({
           amount: numAmount,
           destinationType,
@@ -186,6 +190,7 @@ export const WithdrawalsView: React.FC<WithdrawalsViewProps> = ({ user: _user, o
         }),
       });
 
+      clearTimeout(timeoutId);
       const data = await res.json();
 
       if (!res.ok) {
@@ -198,10 +203,17 @@ export const WithdrawalsView: React.FC<WithdrawalsViewProps> = ({ user: _user, o
       setDestinationRef('');
       await fetchData();
     } catch (err: any) {
+      clearTimeout(timeoutId);
       console.warn('[WithdrawalsView] Submit error:', err);
-      setFormError(err?.message || 'Network error occurred. Please try again.');
+      if (err.name === 'AbortError') {
+        setFormError('Request timed out. Please check your withdrawal history to verify status.');
+      } else {
+        setFormError(err?.message || 'Network error occurred. Please try again.');
+      }
     } finally {
+      clearTimeout(timeoutId);
       setSubmitting(false);
+      await fetchData();
     }
   };
 
@@ -278,11 +290,17 @@ export const WithdrawalsView: React.FC<WithdrawalsViewProps> = ({ user: _user, o
           </span>
         );
       case 'APPROVED':
-      case 'PROCESSING':
         return (
           <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-mono font-medium bg-[#00CFFF]/10 text-[#00CFFF] border border-[#00CFFF]/20">
+            <CheckCircle2 className="w-3 h-3" />
+            Approved — Awaiting Payout
+          </span>
+        );
+      case 'PROCESSING':
+        return (
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-mono font-medium bg-[#A855F7]/10 text-[#A855F7] border border-[#A855F7]/20">
             <Loader2 className="w-3 h-3 animate-spin" />
-            Processing
+            Blockchain Confirmation Pending
           </span>
         );
       case 'COMPLETED':
@@ -662,11 +680,13 @@ export const WithdrawalsView: React.FC<WithdrawalsViewProps> = ({ user: _user, o
               className="px-2.5 py-1.5 bg-[#05070B] border border-white/[0.1] rounded-lg text-xs text-white outline-none focus:border-[#00CFFF] cursor-pointer min-h-[36px]"
             >
               <option value="ALL">All Statuses</option>
-              <option value="PENDING">Pending</option>
-              <option value="APPROVED">Processing</option>
+              <option value="PENDING">Pending Review</option>
+              <option value="APPROVED">Approved — Awaiting Payout</option>
+              <option value="PROCESSING">Blockchain Confirmation Pending</option>
               <option value="COMPLETED">Completed</option>
               <option value="REJECTED">Rejected</option>
               <option value="CANCELLED">Cancelled</option>
+              <option value="FAILED">Failed</option>
             </select>
           </div>
         </div>

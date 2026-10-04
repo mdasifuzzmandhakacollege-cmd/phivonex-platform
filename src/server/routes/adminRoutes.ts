@@ -492,7 +492,7 @@ adminRouter.get('/withdrawals', async (req: AuthRequest, res: Response) => {
  */
 adminRouter.post('/withdrawals/settle', async (req: AuthRequest, res: Response) => {
   try {
-    const { publicId, action, rejectionReason } = req.body;
+    const { publicId, action, rejectionReason, txHash } = req.body;
 
     if (!publicId || !action) {
       return res.status(400).json({
@@ -508,25 +508,11 @@ adminRouter.post('/withdrawals/settle', async (req: AuthRequest, res: Response) 
       withdrawalIdOrPublicId: String(publicId),
       action: action.toUpperCase() as any,
       rejectionReason: rejectionReason ? String(rejectionReason) : undefined,
+      txHash: txHash ? String(txHash).trim() : undefined,
     });
 
-    let finalRecord = updated;
-    let payoutTxHash: string | null = null;
-
-    // As requested: When admin gives 1-click Approve, automatically disburse and broadcast on-chain
-    if (action.toUpperCase() === 'APPROVE') {
-      try {
-        const { broadcastBnbWithdrawal } = await import('../services/bscSignerService');
-        const broadcastRes = await broadcastBnbWithdrawal({
-          withdrawalPublicId: updated.publicWithdrawalId,
-          forceBypassDisabled: true,
-        });
-        finalRecord = broadcastRes.withdrawal;
-        payoutTxHash = broadcastRes.txHash;
-      } catch (broadcastErr: any) {
-        console.warn('[Admin Settle] Withdrawal approved but auto-broadcast encountered an issue:', broadcastErr);
-      }
-    }
+    const finalRecord = updated;
+    const payoutTxHash: string | null = txHash ? String(txHash).trim() : null;
 
     // Log admin financial audit trail
     await logAdminAction({
@@ -561,6 +547,60 @@ adminRouter.post('/withdrawals/settle', async (req: AuthRequest, res: Response) 
     }
     console.error('[Admin API] Settlement error:', err);
     return res.status(500).json({ error: 'SERVER_ERROR', message });
+  }
+});
+
+/**
+ * POST /api/admin/withdrawals/instant-payout
+ * Admin 1-Click Instant Blockchain Payout trigger using production payout engine.
+ */
+adminRouter.post('/withdrawals/instant-payout', async (req: AuthRequest, res: Response) => {
+  try {
+    const { publicId } = req.body;
+
+    if (!publicId) {
+      return res.status(400).json({
+        error: 'BAD_REQUEST',
+        message: 'Missing publicId parameter.',
+      });
+    }
+
+    const { broadcastBlockchainWithdrawal } = await import('../services/bscSignerService');
+    const result = await broadcastBlockchainWithdrawal({
+      withdrawalPublicId: String(publicId),
+      forceBypassDisabled: true,
+    });
+
+    const adminUserId = req.user?.id || null;
+    const adminPublicId = req.user?.public_id || 'SYSTEM_ADMIN';
+    await logAdminAction({
+      adminUserId,
+      adminPublicId,
+      action: 'WITHDRAWAL_INSTANT_PAYOUT',
+      targetType: 'WITHDRAWAL',
+      targetId: String(publicId),
+      details: `Admin ${adminPublicId} executed instant payout for withdrawal ${publicId}. TxHash: ${result.txHash}`,
+      metadata: {
+        amount: result.withdrawal.amount,
+        status: result.withdrawal.status,
+        txHash: result.txHash,
+        destinationType: result.withdrawal.destinationType,
+        destinationReference: result.withdrawal.destinationReference,
+      },
+      ipAddress: (req.headers['x-forwarded-for'] as string) || req.ip,
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: `Instant Payout executed! Transferred funds on-chain with TxHash: ${result.txHash}.`,
+      data: result,
+      withdrawal: result.withdrawal,
+      txHash: result.txHash,
+    });
+  } catch (err: any) {
+    const message = err?.message || 'Failed to execute 1-click instant payout.';
+    console.error('[Admin API] 1-Click Instant payout error:', err);
+    return res.status(500).json({ error: 'INSTANT_PAYOUT_FAILED', message });
   }
 });
 
