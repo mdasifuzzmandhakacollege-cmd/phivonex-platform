@@ -57,11 +57,6 @@ export async function getOrCreateUserDepositAddress(
     const derived = deriveAddressFromXpub(xpub, derivationIndex);
     address = derived.address;
     derivationReference = derived.derivationReference;
-  } else if (process.env.NODE_ENV === 'test') {
-    const derived = deriveUserBnbAddress(userId);
-    address = derived.address;
-    derivationReference = derived.derivationReference;
-    derivationIndex = 1;
   } else {
     // Official Centralized Treasury Deposit Address (PF-03 architecture)
     address = ethers.getAddress(BSC_CONFIG.TREASURY_WALLET_ADDRESS);
