@@ -276,7 +276,7 @@ export const WithdrawalsView: React.FC<WithdrawalsViewProps> = ({ user: _user, o
     const trimmedRef = destinationRef.trim();
 
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 15000);
+    const timeoutId = setTimeout(() => controller.abort(), 45000);
 
     try {
       setIsConfirmingWithdrawal(true);
