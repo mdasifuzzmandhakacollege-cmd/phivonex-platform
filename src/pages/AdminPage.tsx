@@ -42,6 +42,7 @@ import {
   Trophy,
   Mail,
   User,
+  HelpCircle,
 } from 'lucide-react';
 import { PhivonexLogo } from '../components/brand/PhivonexLogo';
 import { WithdrawalManagement } from '../components/admin/WithdrawalManagement';
@@ -77,7 +78,8 @@ export type AdminTab =
   | 'transactions'
   | 'network'
   | 'audit'
-  | 'communications';
+  | 'communications'
+  | 'support';
 
 export const AdminPage: React.FC<AdminPageProps> = ({ onNavigate, currentPath = '/admin' }) => {
   const { user, loading } = useAuth();
@@ -99,6 +101,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onNavigate, currentPath = 
   const getTabFromPath = (path: string): AdminTab => {
     const clean = path.toLowerCase().split('?')[0];
     if (clean.includes('/communications') || clean.includes('/email')) return 'communications';
+    if (clean.includes('/support') || clean.includes('/tickets')) return 'support';
     if (clean.includes('/treasury')) return 'treasury';
     if (clean.includes('/reconciliation')) return 'reconciliation';
     if (clean.includes('/economics')) return 'economics';
@@ -668,6 +671,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onNavigate, currentPath = 
     { id: 'transactions' as AdminTab, label: 'Ledger Explorer', icon: ArrowLeftRight },
     { id: 'network' as AdminTab, label: 'Network Telemetry', icon: GitFork },
     { id: 'communications' as AdminTab, label: 'Communications & Email', icon: Mail },
+    { id: 'support' as AdminTab, label: 'Support Center', icon: HelpCircle },
     { id: 'audit' as AdminTab, label: 'Admin Audit Logs', icon: FileText },
   ];
 
@@ -1550,6 +1554,15 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onNavigate, currentPath = 
 
           {/* TAB 6: COMMUNICATIONS & EMAIL AUTOMATION */}
           {activeTab === 'communications' && <AdminCommunicationsHub />}
+
+          {/* TAB 7: SUPPORT CENTER & TICKET INBOX */}
+          {activeTab === 'support' && (
+            <div className="p-8 rounded-2xl bg-[#07101D] border border-white/[0.08] text-center text-slate-400">
+              <HelpCircle className="w-12 h-12 mx-auto mb-3 text-slate-500" />
+              <h3 className="text-lg font-bold text-white mb-1">Support Management</h3>
+              <p className="text-xs">Support Center is currently operating under standard platform channel guidelines.</p>
+            </div>
+          )}
         </main>
       </div>
 

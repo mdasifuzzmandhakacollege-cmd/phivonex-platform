@@ -242,6 +242,14 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onNavigate, curren
             onLogout={handleLogout}
           />
         );
+      case 'support':
+        return (
+          <PlaceholderView
+            tab={activeTab}
+            user={user}
+            onNavigateTab={handleSelectTab}
+          />
+        );
       default:
         return (
           <PlaceholderView

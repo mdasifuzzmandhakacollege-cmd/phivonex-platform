@@ -28,6 +28,7 @@ const testSuites = [
   { name: 'PF-10 Dynamic Daily Reward & Public Data Audit', script: 'scripts/test-pf10-dynamic-daily-reward.ts' },
   { name: 'PF-11 Withdrawal Engine Production Fix', script: 'scripts/test-withdrawal-engine-production-fix.ts' },
   { name: 'PF-12 Withdrawal OTP & Forgot Password Verification', script: 'scripts/test-withdrawal-and-forgot-password-otp.ts' },
+  { name: 'PF-13 Node Purchase & Withdrawal Atomic Fix', script: 'scripts/test-node-purchase-withdrawal-atomic-fix.ts' },
 ];
 
 async function main() {

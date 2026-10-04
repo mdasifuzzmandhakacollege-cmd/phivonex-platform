@@ -11,7 +11,7 @@ import {
 import { processNodeActivationCommission, SafeReferralCommission } from './referralCommissionService';
 import { propagateNodeSalesVolume } from './binaryVolumeService';
 import { broadcastPublicEvent } from './publicNetworkService';
-import { getNodeBasePrice, isNodeSalesEnabled } from './economicService';
+import { getNodeBasePrice, isNodeSalesEnabled, getNodeRewardRatePerEpoch, getInternalCoinPrice } from './economicService';
 import { notifyNodeActivated } from './notificationService';
 
 export interface SafeNodeOrder {
@@ -37,10 +37,7 @@ export interface SafeNodeOrder {
  * Releases reserved nodes back to AVAILABLE state.
  */
 export async function cleanupExpiredReservations(dbClient?: DatabaseClient): Promise<number> {
-  if (dbClient) {
-    return 0;
-  }
-  const db = await getDb();
+  const db = dbClient || (await getDb());
   try {
     // Find all expired pending orders
     const expiredOrdersRes = await db.query<{
@@ -429,6 +426,7 @@ export async function settleNodeOrder(
   };
   referralCommission?: SafeReferralCommission | null;
   isDuplicate?: boolean;
+  runPostCommit?: () => Promise<void>;
 }> {
   const db = dbClient || (await getDb());
 
@@ -555,13 +553,21 @@ export async function settleNodeOrder(
 
   const effectiveRef = paymentReference || `SETTLE_VERIFIED_${Date.now()}_${order.public_order_id}`;
 
-  // 3. Atomically transition Node: RESERVED -> ACTIVE
+  const currentRewardRate = await getNodeRewardRatePerEpoch(db);
+  const internalCoin = await getInternalCoinPrice().catch(() => ({ priceUsdt: 0.10 }));
+  const refCoinPrice = internalCoin.priceUsdt || 0.10;
+  const basePrice = await getNodeBasePrice(db).catch(() => 1000.00);
+
+  // 3. Atomically transition Node: RESERVED -> ACTIVE (Using dynamic economic parameters)
   const activatedNodeRes = await db.query<{
     id: string;
     public_node_id: string;
     node_number: number;
     status: string;
     activated_at: Date;
+    maturity_timestamp: Date | null;
+    distributed_phivo: string | number;
+    remaining_phivo: string | number;
   }>(
     `
     UPDATE nodes
@@ -571,20 +577,20 @@ export async function settleNodeOrder(
       reserved_by_user_id = NULL,
       purchase_timestamp = COALESCE(purchase_timestamp, CURRENT_TIMESTAMP),
       activated_at = CURRENT_TIMESTAMP,
-      maturity_timestamp = CURRENT_TIMESTAMP + INTERVAL '200 days',
+      maturity_timestamp = NULL,
       product_version = COALESCE(product_version, 'GENESIS_V1'),
-      purchase_price_usd = COALESCE(purchase_price_usd, 1000.00),
-      phivo_reference_price_at_purchase = COALESCE(phivo_reference_price_at_purchase, 0.10),
+      purchase_price_usd = COALESCE(purchase_price_usd, $3),
+      phivo_reference_price_at_purchase = COALESCE(phivo_reference_price_at_purchase, $4),
       lifetime_phivo_allocation = COALESCE(lifetime_phivo_allocation, 10000.00),
-      term_days = COALESCE(term_days, 200),
-      daily_phivo_emission = COALESCE(daily_phivo_emission, 50.00),
+      term_days = term_days,
+      daily_phivo_emission = COALESCE($5, daily_phivo_emission),
       distributed_phivo = COALESCE(distributed_phivo, 0.00),
       remaining_phivo = COALESCE(remaining_phivo, 10000.00),
       updated_at = CURRENT_TIMESTAMP
     WHERE id = $2 AND status = 'RESERVED'
     RETURNING id, public_node_id, node_number, status, activated_at, maturity_timestamp, distributed_phivo, remaining_phivo
     `,
-    [order.user_id, order.node_id]
+    [order.user_id, order.node_id, basePrice, refCoinPrice, currentRewardRate]
   );
 
   if (activatedNodeRes.rows.length === 0) {
@@ -710,60 +716,72 @@ export async function settleNodeOrder(
     console.warn('[SecurityEvent] Could not log purchase event:', secErr);
   }
 
-  // Task #20: Trigger in-app notification for node activation
-  try {
-    await notifyNodeActivated({
-      userId: order.user_id,
-      nodeNumber: finalNode.node_number,
-      orderPublicId: finalOrder.public_order_id,
-      sourceId: finalOrder.id,
-    });
-  } catch (notifErr) {
-    console.warn('[Notification] Could not trigger node activated notification:', notifErr);
-  }
-
-  // Broadcast live public event to SSE stream
-  try {
-    broadcastPublicEvent({
-      id: `evt-node-${finalNode.public_node_id}`,
-      type: 'node.activated',
-      title: `${finalNode.public_node_id} Activated`,
-      description: `Genesis validator node ${finalNode.public_node_id} successfully activated on-chain.`,
-      timestamp: new Date().toISOString(),
-      publicId: finalNode.public_node_id,
-    });
-  } catch (pubErr) {
-    console.warn('[PublicEvent] Could not broadcast public node activation event:', pubErr);
-  }
-
-  // Task #23.4: Send NODE_ACTIVATION email and trigger potential automation rules
-  try {
-    const userRes = await db.query<{ email: string; full_name: string; public_id: string }>(
-      `SELECT email, full_name, public_id FROM users WHERE id = $1`,
-      [order.user_id]
-    );
-    if (userRes.rowCount > 0) {
-      const user = userRes.rows[0];
-      const { queueEventEmail, triggerAutomationRule } = await import('./emailService');
-      
-      // Queue email
-      await queueEventEmail(user.email, 'NODE_ACTIVATION', {
-        displayName: user.full_name,
-        publicId: user.public_id,
-        nodeNumber: String(finalNode.node_number),
-        publicNodeId: finalNode.public_node_id,
-        amount: String(finalOrder.amount_usd)
+  // Define post-commit side effects (notification, SSE, email, automation)
+  // These MUST NOT hold up or deadlock the financial transaction!
+  const executePostCommit = async () => {
+    // Task #20: Trigger in-app notification for node activation
+    try {
+      await notifyNodeActivated({
+        userId: order.user_id,
+        nodeNumber: finalNode.node_number,
+        orderPublicId: finalOrder.public_order_id,
+        sourceId: finalOrder.id,
       });
-
-      // Trigger automation rule check for NODE_SALES
-      await triggerAutomationRule(order.user_id, 'NODE_SALES', {
-        nodeNumber: String(finalNode.node_number),
-        publicNodeId: finalNode.public_node_id,
-        amount: String(finalOrder.amount_usd)
-      });
+    } catch (notifErr) {
+      console.warn('[Notification] Could not trigger node activated notification:', notifErr);
     }
-  } catch (emailErr) {
-    console.warn('[EmailEngine] Failed to send Node Activation email/automation trigger:', emailErr);
+
+    // Broadcast live public event to SSE stream
+    try {
+      broadcastPublicEvent({
+        id: `evt-node-${finalNode.public_node_id}`,
+        type: 'node.activated',
+        title: `${finalNode.public_node_id} Activated`,
+        description: `Genesis validator node ${finalNode.public_node_id} successfully activated on-chain.`,
+        timestamp: new Date().toISOString(),
+        publicId: finalNode.public_node_id,
+      });
+    } catch (pubErr) {
+      console.warn('[PublicEvent] Could not broadcast public node activation event:', pubErr);
+    }
+
+    // Task #23.4: Send NODE_ACTIVATION email and trigger potential automation rules
+    try {
+      const topDb = await getDb();
+      const userRes = await topDb.query<{ email: string; full_name: string; public_id: string }>(
+        `SELECT email, full_name, public_id FROM users WHERE id = $1`,
+        [order.user_id]
+      );
+      if (userRes.rowCount > 0) {
+        const user = userRes.rows[0];
+        const { queueEventEmail, triggerAutomationRule } = await import('./emailService');
+        
+        // Queue email
+        await queueEventEmail(user.email, 'NODE_ACTIVATION', {
+          displayName: user.full_name,
+          publicId: user.public_id,
+          nodeNumber: String(finalNode.node_number),
+          publicNodeId: finalNode.public_node_id,
+          amount: String(finalOrder.amount_usd)
+        });
+
+        // Trigger automation rule check for NODE_SALES
+        await triggerAutomationRule(order.user_id, 'NODE_SALES', {
+          nodeNumber: String(finalNode.node_number),
+          publicNodeId: finalNode.public_node_id,
+          amount: String(finalOrder.amount_usd)
+        });
+      }
+    } catch (emailErr) {
+      console.warn('[EmailEngine] Failed to send Node Activation email/automation trigger:', emailErr);
+    }
+  };
+
+  if (!dbClient) {
+    // If running outside an external transaction, trigger asynchronously (non-blocking)
+    executePostCommit().catch((err) => {
+      console.warn('[NodeOrderService] Post-commit execution warning:', err);
+    });
   }
 
   return {
@@ -792,6 +810,7 @@ export async function settleNodeOrder(
     },
     referralCommission,
     isDuplicate: false,
+    runPostCommit: executePostCommit,
   };
 }
 

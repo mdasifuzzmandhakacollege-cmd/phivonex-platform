@@ -136,50 +136,15 @@ withdrawalRouter.post('/', requireAuth, withdrawalLimiter, async (req: AuthReque
       }
     }
 
-    // Verify OTP if in production or if OTP is provided (support test bypass when NODE_ENV === 'test' and otp not provided)
+    // Verify OTP if in production or if OTP is provided
     const isTest = process.env.NODE_ENV === 'test';
-    if (!isTest || otp) {
-      const trimmedOtp = String(otp || '').trim();
-      if (!trimmedOtp || trimmedOtp.length !== 6) {
-        return res.status(400).json({
-          error: 'OTP_REQUIRED',
-          message: 'A valid 6-digit email verification code is required to authorize withdrawal.',
-        });
-      }
+    const trimmedOtp = otp ? String(otp).trim() : '';
 
-      const db = await getDb();
-      const otpHash = hashToken(trimmedOtp);
-      const tokenRes = await db.query<{ id: string; expires_at: Date; used_at: Date | null }>(
-        `SELECT id, expires_at, used_at FROM auth_tokens 
-         WHERE user_id = $1 AND token_hash = $2 AND type = 'WITHDRAWAL_OTP'
-         ORDER BY created_at DESC LIMIT 1`,
-        [userId, otpHash]
-      );
-
-      if (tokenRes.rowCount === 0) {
-        return res.status(400).json({
-          error: 'INVALID_OTP',
-          message: 'Invalid withdrawal verification code. Please check your email or request a new code.',
-        });
-      }
-
-      const tokenRecord = tokenRes.rows[0];
-      if (tokenRecord.used_at) {
-        return res.status(400).json({
-          error: 'OTP_ALREADY_USED',
-          message: 'This withdrawal verification code has already been used.',
-        });
-      }
-
-      if (new Date(tokenRecord.expires_at) < new Date()) {
-        return res.status(400).json({
-          error: 'OTP_EXPIRED',
-          message: 'Withdrawal verification code has expired. Please request a new one.',
-        });
-      }
-
-      // Mark token as used
-      await db.query(`UPDATE auth_tokens SET used_at = CURRENT_TIMESTAMP WHERE id = $1`, [tokenRecord.id]);
+    if (!isTest && !trimmedOtp) {
+      return res.status(400).json({
+        error: 'OTP_REQUIRED',
+        message: 'A valid 6-digit email verification code is required to authorize withdrawal.',
+      });
     }
 
     const withdrawal = await createWithdrawalRequest({
@@ -188,6 +153,7 @@ withdrawalRouter.post('/', requireAuth, withdrawalLimiter, async (req: AuthReque
       destinationType: destType,
       destinationReference: String(destinationReference || '').trim(),
       idempotencyKey: idempotencyKey ? String(idempotencyKey) : undefined,
+      otp: trimmedOtp || undefined,
     });
 
     // Check if Full Automatic Mode is enabled
@@ -268,7 +234,14 @@ withdrawalRouter.post('/', requireAuth, withdrawalLimiter, async (req: AuthReque
   } catch (err: any) {
     const message = err?.message || 'An error occurred while requesting withdrawal.';
 
-    if (message.startsWith('INSUFFICIENT_BALANCE')) {
+    if (err?.code === 'INVALID_OTP' || err?.code === 'OTP_ALREADY_USED' || err?.code === 'OTP_EXPIRED' || message.startsWith('INVALID_OTP') || message.startsWith('OTP_')) {
+      return res.status(400).json({
+        error: err.code || 'INVALID_OTP',
+        message: err.message || message,
+      });
+    }
+
+    if (message.startsWith('INSUFFICIENT_BALANCE') || err?.code === 'INSUFFICIENT_BALANCE') {
       return res.status(422).json({
         error: 'INSUFFICIENT_BALANCE',
         message,

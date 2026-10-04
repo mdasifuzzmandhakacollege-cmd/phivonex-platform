@@ -270,8 +270,9 @@ router.post('/activate-with-asset', requireAuth, async (req: AuthRequest, res: R
   try {
     const user = req.user!;
     const asset = ((req.body?.asset as string) || 'USDT').toUpperCase() === 'BNB' ? 'BNB' : 'USDT';
+    const idempotencyKey = req.body?.idempotencyKey ? String(req.body.idempotencyKey).trim() : undefined;
 
-    const result = await processNodePurchaseWithAssetBalance(user.id, asset);
+    const result = await processNodePurchaseWithAssetBalance(user.id, asset, idempotencyKey);
 
     res.status(200).json({
       success: true,

@@ -40,6 +40,7 @@ export const BuyNodeView: React.FC<BuyNodeViewProps> = ({ user, onNavigateTab })
   const [nodeQty, setNodeQty] = useState<number>(1);
   const [loading, setLoading] = useState<boolean>(true);
   const [purchasing, setPurchasing] = useState<boolean>(false);
+  const [purchaseKeys, setPurchaseKeys] = useState<string[]>([]);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [activatedNodes, setActivatedNodes] = useState<Array<{ publicNodeId: string; nodeNumber: number }>>([]);
@@ -106,38 +107,83 @@ export const BuyNodeView: React.FC<BuyNodeViewProps> = ({ user, onNavigateTab })
       return;
     }
 
+    // Generate stable idempotency keys if not already present or if quantity changed
+    let currentKeys = purchaseKeys;
+    if (currentKeys.length !== nodeQty) {
+      currentKeys = Array.from({ length: nodeQty }, (_, i) => 
+        `node-purchase-${user.id || 'usr'}-${Date.now()}-${i}-${Math.random().toString(36).substring(2, 9)}`
+      );
+      setPurchaseKeys(currentKeys);
+    }
+
     setPurchasing(true);
     try {
-      // Loop for quantity if qty > 1
       const results: Array<{ publicNodeId: string; nodeNumber: number }> = [];
+
       for (let i = 0; i < nodeQty; i++) {
-        const res = await fetch('/api/node-orders/activate-with-asset', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'include',
-          body: JSON.stringify({ asset: 'USDT' }),
-        });
+        const idempotencyKey = currentKeys[i];
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 20000);
 
-        const data = await res.json();
-        if (!res.ok) {
-          throw new Error(data.message || data.error || 'Failed to purchase node.');
-        }
+        try {
+          const res = await fetch('/api/node-orders/activate-with-asset', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            signal: controller.signal,
+            body: JSON.stringify({ asset: 'USDT', idempotencyKey }),
+          });
 
-        if (data.result?.node) {
-          results.push({
-            publicNodeId: data.result.node.publicNodeId,
-            nodeNumber: data.result.node.nodeNumber,
-          });
-        } else if (data.node) {
-          results.push({
-            publicNodeId: data.node.publicNodeId,
-            nodeNumber: data.node.nodeNumber,
-          });
+          clearTimeout(timeoutId);
+          const data = await res.json();
+          if (!res.ok) {
+            throw new Error(data.message || data.error || 'Failed to purchase node.');
+          }
+
+          if (data.result?.node) {
+            results.push({
+              publicNodeId: data.result.node.publicNodeId,
+              nodeNumber: data.result.node.nodeNumber,
+            });
+          } else if (data.node) {
+            results.push({
+              publicNodeId: data.node.publicNodeId,
+              nodeNumber: data.node.nodeNumber,
+            });
+          }
+        } catch (fetchErr: any) {
+          clearTimeout(timeoutId);
+
+          if (fetchErr.name === 'AbortError') {
+            // Client timed out: reconcile with authoritative orders to verify if it committed
+            try {
+              const ordersRes = await fetch('/api/node-orders/me', { credentials: 'include' });
+              if (ordersRes.ok) {
+                const ordersData = await ordersRes.json();
+                const matchedOrder = (ordersData.orders || []).find(
+                  (o: any) => o.idempotencyKey === idempotencyKey && o.status === 'COMPLETED'
+                );
+                if (matchedOrder) {
+                  results.push({
+                    publicNodeId: matchedOrder.publicNodeId,
+                    nodeNumber: matchedOrder.nodeNumber,
+                  });
+                  continue;
+                }
+              }
+            } catch (reconErr) {
+              console.warn('[BuyNodeView Reconciliation Warning]', reconErr);
+            }
+            throw new Error('Node purchase timed out. If the order was processed, your node will appear in My Nodes. You can safely retry.');
+          } else {
+            throw fetchErr;
+          }
         }
       }
 
       setActivatedNodes(results);
       setSuccessMsg(`Successfully purchased and activated ${results.length} Genesis Node(s)!`);
+      setPurchaseKeys([]); // Clear keys upon complete success
       window.dispatchEvent(new CustomEvent('phivonex:balance-or-tx-updated'));
       await loadData(true);
     } catch (err: any) {

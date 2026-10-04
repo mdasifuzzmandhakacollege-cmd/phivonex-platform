@@ -1,5 +1,5 @@
 import { EventEmitter } from 'events';
-import { getDb } from '../db/db';
+import { getDb, DatabaseClient } from '../db/db';
 import { v4 as uuidv4 } from 'uuid';
 import { generateNotificationPublicId } from '../utils/idGenerator';
 
@@ -24,6 +24,7 @@ export interface CreateNotificationParams {
   message: string;
   sourceType?: string;
   sourceId?: string;
+  dbClient?: DatabaseClient;
 }
 
 export interface PublicNotification {
@@ -40,12 +41,12 @@ export interface PublicNotification {
  * Strictly idempotent: prevents duplicate notifications for the same user + sourceType + sourceId + type.
  */
 export async function createNotification(params: CreateNotificationParams): Promise<PublicNotification | null> {
-  const { userId, type, title, message, sourceType, sourceId } = params;
+  const { userId, type, title, message, sourceType, sourceId, dbClient } = params;
   if (!userId || !type || !title || !message) {
     return null;
   }
 
-  const db = await getDb();
+  const db = dbClient || (await getDb());
   const id = uuidv4();
   const publicId = generateNotificationPublicId();
 
@@ -306,6 +307,7 @@ export async function notifyNodeActivated(params: {
   nodeNumber: number;
   orderPublicId?: string;
   sourceId: string;
+  dbClient?: DatabaseClient;
 }): Promise<PublicNotification | null> {
   return createNotification({
     userId: params.userId,
@@ -314,6 +316,7 @@ export async function notifyNodeActivated(params: {
     message: `Your Genesis Node #${params.nodeNumber} is now ACTIVE and operational in the PHIVONEX ecosystem.`,
     sourceType: 'NODE_ORDER',
     sourceId: params.sourceId,
+    dbClient: params.dbClient,
   });
 }
 
@@ -420,6 +423,7 @@ export async function notifyWithdrawalStatus(params: {
   status: string;
   withdrawalId: string;
   reason?: string;
+  dbClient?: DatabaseClient;
 }): Promise<PublicNotification | null> {
   let title = 'Withdrawal Status Updated';
   let message = `Your withdrawal request of $${params.amountUsdt.toFixed(2)} USDT status is now ${params.status}.`;
@@ -445,6 +449,7 @@ export async function notifyWithdrawalStatus(params: {
     message,
     sourceType: 'WITHDRAWAL',
     sourceId: `${params.withdrawalId}_${params.status}`,
+    dbClient: params.dbClient,
   });
 }
 

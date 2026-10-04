@@ -103,6 +103,7 @@ async function startServer() {
   app.use('/api/economic', publicEconomicRouter);
   app.use('/api/webhooks/email', emailWebhookRouter);
   app.use('/api/diagnostics', diagnosticRouter);
+  app.use('/api/support', supportRouter);
   app.use('/api/admin', adminRouter);
 
   // Health checks

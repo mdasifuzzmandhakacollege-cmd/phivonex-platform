@@ -18,7 +18,8 @@ import {
   ArrowDownLeft,
   Bell,
   X,
-  BarChart3
+  BarChart3,
+  HelpCircle
 } from 'lucide-react';
 import { PhivonexLogo } from '../brand/PhivonexLogo';
 import { PhivonexSymbol } from '../brand/PhivonexSymbol';
@@ -38,7 +39,8 @@ export type DashboardTab =
   | 'rewards'
   | 'transactions'
   | 'profile'
-  | 'security';
+  | 'security'
+  | 'support';
 
 interface SidebarProps {
   activeTab: DashboardTab;
@@ -73,6 +75,7 @@ const NAV_ITEMS: NavItem[] = [
   { id: 'transactions', label: 'Transactions', icon: ArrowLeftRight },
   { id: 'profile', label: 'Profile', icon: User },
   { id: 'security', label: 'Security', icon: ShieldCheck },
+  { id: 'support', label: 'Support Center', icon: HelpCircle },
 ];
 
 export const Sidebar: React.FC<SidebarProps> = ({

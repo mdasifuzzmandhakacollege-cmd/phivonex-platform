@@ -80,6 +80,7 @@ export const WithdrawalsView: React.FC<WithdrawalsViewProps> = ({ user: _user, o
   // OTP Verification Modal State
   const [isOtpModalOpen, setIsOtpModalOpen] = useState<boolean>(false);
   const [withdrawalOtp, setWithdrawalOtp] = useState<string>('');
+  const [withdrawalIdempotencyKey, setWithdrawalIdempotencyKey] = useState<string>('');
   const [isRequestingOtp, setIsRequestingOtp] = useState<boolean>(false);
   const [isConfirmingWithdrawal, setIsConfirmingWithdrawal] = useState<boolean>(false);
   const [otpModalError, setOtpModalError] = useState<string | null>(null);
@@ -212,6 +213,8 @@ export const WithdrawalsView: React.FC<WithdrawalsViewProps> = ({ user: _user, o
         return;
       }
 
+      const intentKey = `wdr-ui-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+      setWithdrawalIdempotencyKey(intentKey);
       setWithdrawalOtp('');
       setOtpModalError(null);
       setIsOtpModalOpen(true);
@@ -278,6 +281,11 @@ export const WithdrawalsView: React.FC<WithdrawalsViewProps> = ({ user: _user, o
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 45000);
 
+    const keyToUse = withdrawalIdempotencyKey || `wdr-ui-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+    if (!withdrawalIdempotencyKey) {
+      setWithdrawalIdempotencyKey(keyToUse);
+    }
+
     try {
       setIsConfirmingWithdrawal(true);
       const res = await fetch('/api/withdrawals', {
@@ -290,7 +298,7 @@ export const WithdrawalsView: React.FC<WithdrawalsViewProps> = ({ user: _user, o
           destinationType,
           destinationReference: trimmedRef,
           otp: cleanOtp,
-          idempotencyKey: `wdr-ui-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`,
+          idempotencyKey: keyToUse,
         }),
       });
 
@@ -303,6 +311,7 @@ export const WithdrawalsView: React.FC<WithdrawalsViewProps> = ({ user: _user, o
       }
 
       setIsOtpModalOpen(false);
+      setWithdrawalIdempotencyKey('');
       setFormSuccess(`Withdrawal request ${data.publicWithdrawalId || ''} for $${numAmount.toFixed(2)} USD submitted successfully via ${formatDestinationLabel(destinationType)}.`);
       setAmountInput('');
       setDestinationRef('');

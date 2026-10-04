@@ -1,8 +1,9 @@
-import { getDb } from '../db/db';
+import { getDb, DatabaseClient } from '../db/db';
 import { v4 as uuidv4 } from 'uuid';
 import { generateWithdrawalPublicId } from '../utils/idGenerator';
 import { getWalletSummary, postLedgerDebit, postLedgerReversal, syncUserLedger } from './walletLedgerService';
 import { notifyWithdrawalStatus } from './notificationService';
+import { hashToken } from '../utils/crypto';
 
 export type WithdrawalStatus =
   | 'PENDING'
@@ -81,19 +82,25 @@ export async function logWithdrawalStateTransition(params: {
   destinationType: string;
   destinationReference: string;
   txHash?: string;
+  dbClient?: DatabaseClient;
 }): Promise<void> {
   try {
-    const db = await getDb();
+    const db = params.dbClient || (await getDb());
     const id = uuidv4();
     const now = new Date();
 
-    const userRes = await db.query(
-      `SELECT email, full_name FROM users WHERE id = $1 LIMIT 1`,
-      [params.userId]
-    ).catch(() => ({ rows: [] }));
+    let userEmail = params.actorEmail || null;
+    let userName: string | null = null;
 
-    const userEmail = userRes.rows[0]?.email || null;
-    const userName = userRes.rows[0]?.full_name || null;
+    if (!userEmail && params.userId) {
+      const userRes = await db.query(
+        `SELECT email, full_name FROM users WHERE id = $1 LIMIT 1`,
+        [params.userId]
+      ).catch(() => ({ rows: [] }));
+
+      userEmail = userRes.rows[0]?.email || null;
+      userName = userRes.rows[0]?.full_name || null;
+    }
 
     await db.query(
       `
@@ -139,7 +146,7 @@ function withUserLock<T>(userId: string, fn: () => Promise<T>): Promise<T> {
     releaseLock = resolve;
   });
 
-  userLocks.set(userId, currentLock.then(() => newLock));
+  userLocks.set(userId, currentLock.then(() => newLock, () => newLock));
 
   return currentLock.then(
     async () => {
@@ -195,9 +202,10 @@ export async function createWithdrawalRequest(params: {
   destinationType: string;
   destinationReference: string;
   idempotencyKey?: string;
+  otp?: string;
 }): Promise<WithdrawalRecord> {
   return withUserLock(params.userId, async () => {
-    const { userId, amount, destinationType, destinationReference, idempotencyKey } = params;
+    const { userId, amount, destinationType, destinationReference, idempotencyKey, otp } = params;
 
     if (typeof amount !== 'number' || isNaN(amount) || amount <= 0) {
       throw new Error('INVALID_AMOUNT: Withdrawal amount must be a positive number greater than 0.');
@@ -233,9 +241,19 @@ export async function createWithdrawalRequest(params: {
 
     const db = await getDb();
 
-    return db.transaction(async (trx) => {
+    const { withdrawal, isDuplicate, userDetails } = await db.transaction(async (trx) => {
+      // 0. Sane statement / lock timeout safety
+      try {
+        await trx.query(`SET LOCAL statement_timeout = '15000'`);
+        await trx.query(`SET LOCAL lock_timeout = '8000'`);
+      } catch {}
+
       // Lock user row for concurrency serialization
-      await trx.query(`SELECT id FROM users WHERE id = $1 FOR UPDATE`, [userId]);
+      const userRes = await trx.query<{ id: string; email: string; full_name: string; public_id: string }>(
+        `SELECT id, email, full_name, public_id FROM users WHERE id = $1 FOR UPDATE`,
+        [userId]
+      );
+      const user = userRes.rows[0];
 
       // 1. Check idempotency key if provided
       const cleanIdempotencyKey = idempotencyKey ? idempotencyKey.trim() : null;
@@ -245,7 +263,11 @@ export async function createWithdrawalRequest(params: {
           [userId, cleanIdempotencyKey]
         );
         if (existing.rows.length > 0) {
-          return mapRowToWithdrawalRecord(existing.rows[0]);
+          return {
+            withdrawal: mapRowToWithdrawalRecord(existing.rows[0]),
+            isDuplicate: true,
+            userDetails: user,
+          };
         }
       }
 
@@ -259,14 +281,62 @@ export async function createWithdrawalRequest(params: {
           AND status = 'PENDING'
           AND created_at > NOW() - INTERVAL '5 seconds'
         `,
-        [userId, cleanAmount, destinationReference.trim()]
+        [userId, cleanAmount, destRef]
       );
 
       if (recentDuplicate.rows.length > 0) {
-        return mapRowToWithdrawalRecord(recentDuplicate.rows[0]);
+        return {
+          withdrawal: mapRowToWithdrawalRecord(recentDuplicate.rows[0]),
+          isDuplicate: true,
+          userDetails: user,
+        };
       }
 
-      // 3. Balance Validation & Reservation (Authoritative Server Check inside transaction)
+      // 3. Atomically verify OTP if provided
+      let tokenRecordId: string | null = null;
+      if (otp) {
+        const trimmedOtp = String(otp).trim();
+        if (!trimmedOtp || trimmedOtp.length !== 6) {
+          const err: any = new Error('INVALID_OTP: A valid 6-digit email verification code is required.');
+          err.code = 'INVALID_OTP';
+          err.statusCode = 400;
+          throw err;
+        }
+        const otpHash = hashToken(trimmedOtp);
+        const tokenRes = await trx.query<{ id: string; expires_at: Date; used_at: Date | null }>(
+          `SELECT id, expires_at, used_at FROM auth_tokens 
+           WHERE user_id = $1 AND token_hash = $2 AND type = 'WITHDRAWAL_OTP'
+           ORDER BY created_at DESC LIMIT 1
+           FOR UPDATE`,
+          [userId, otpHash]
+        );
+
+        if (tokenRes.rowCount === 0) {
+          const err: any = new Error('INVALID_OTP: Invalid withdrawal verification code. Please check your email or request a new code.');
+          err.code = 'INVALID_OTP';
+          err.statusCode = 400;
+          throw err;
+        }
+
+        const tokenRecord = tokenRes.rows[0];
+        if (tokenRecord.used_at) {
+          const err: any = new Error('OTP_ALREADY_USED: This withdrawal verification code has already been used.');
+          err.code = 'OTP_ALREADY_USED';
+          err.statusCode = 400;
+          throw err;
+        }
+
+        if (new Date(tokenRecord.expires_at) < new Date()) {
+          const err: any = new Error('OTP_EXPIRED: Withdrawal verification code has expired. Please request a new one.');
+          err.code = 'OTP_EXPIRED';
+          err.statusCode = 400;
+          throw err;
+        }
+
+        tokenRecordId = tokenRecord.id;
+      }
+
+      // 4. Balance Validation & Reservation inside transaction
       await syncUserLedger(userId, trx);
       const balRes = await trx.query<{ available_balance: string | number }>(
         `
@@ -286,14 +356,14 @@ export async function createWithdrawalRequest(params: {
         [userId]
       );
       const availableBalance = Math.max(0, Number(balRes.rows[0]?.available_balance || 0));
-      console.log(`[WithdrawalService] User ${userId} available balance: ${availableBalance}, requested: ${cleanAmount}`);
 
       if (cleanAmount > availableBalance) {
-        const err = new Error(
+        const err: any = new Error(
           `INSUFFICIENT_BALANCE: Requested withdrawal amount ($${cleanAmount.toFixed(2)}) exceeds available eligible ledger balance ($${availableBalance.toFixed(2)}).`
         );
-        (err as any).code = 'INSUFFICIENT_BALANCE';
-        (err as any).availableBalance = availableBalance;
+        err.code = 'INSUFFICIENT_BALANCE';
+        err.statusCode = 400;
+        err.availableBalance = availableBalance;
         throw err;
       }
 
@@ -301,7 +371,7 @@ export async function createWithdrawalRequest(params: {
       const publicWithdrawalId = generateWithdrawalPublicId();
       const now = new Date();
 
-      // 4. Create Withdrawal Record
+      // 5. Create Withdrawal Record
       const insertRes = await trx.query(
         `
         INSERT INTO withdrawals (
@@ -317,77 +387,89 @@ export async function createWithdrawalRequest(params: {
           publicWithdrawalId,
           userId,
           cleanAmount,
-          destinationType.trim(),
-          destinationReference.trim(),
+          destTypeUpper,
+          destRef,
           now,
           cleanIdempotencyKey,
         ]
       );
 
-      const withdrawal = mapRowToWithdrawalRecord(insertRes.rows[0]);
+      const createdWdr = mapRowToWithdrawalRecord(insertRes.rows[0]);
 
-      // Log State Transition: NULL -> PENDING
-      await logWithdrawalStateTransition({
-        withdrawalId: withdrawal.id,
-        publicWithdrawalId: withdrawal.publicWithdrawalId,
-        userId: withdrawal.userId,
-        previousStatus: null,
-        newStatus: 'PENDING',
-        actorType: 'USER',
-        amount: withdrawal.amount,
-        destinationType: withdrawal.destinationType,
-        destinationReference: withdrawal.destinationReference,
-        reason: 'Withdrawal request created by user',
-      });
-
-      // 5. Reserve balance immediately by posting a DEBIT entry in the financial ledger
+      // 6. Reserve balance immediately by posting a DEBIT entry in the financial ledger using the SAME trx
       await postLedgerDebit({
         userId,
         sourceType: 'WITHDRAWAL',
-        sourceId: withdrawal.id,
-        sourceRef: withdrawal.publicWithdrawalId,
+        sourceId: createdWdr.id,
+        sourceRef: createdWdr.publicWithdrawalId,
         amount: cleanAmount,
-        description: `Withdrawal Request - ${withdrawal.destinationType} (${withdrawal.destinationReference.slice(0, 12)}...)`,
+        description: `Withdrawal Request - ${createdWdr.destinationType} (${createdWdr.destinationReference.slice(0, 12)}...)`,
         createdAt: now,
         dbClient: trx,
       });
 
-      // Task #20: Trigger in-app notification for withdrawal submission
-      try {
-        await notifyWithdrawalStatus({
-          userId,
-          amountUsdt: cleanAmount,
-          status: 'PENDING',
-          withdrawalId: withdrawal.id,
-        });
-      } catch (notifErr) {
-        console.warn('[Notification] Error triggering withdrawal pending notification:', notifErr);
+      // 7. Consume OTP token using the SAME trx (rolls back if anything fails!)
+      if (tokenRecordId) {
+        await trx.query(
+          `UPDATE auth_tokens SET used_at = CURRENT_TIMESTAMP WHERE id = $1`,
+          [tokenRecordId]
+        );
       }
 
-      // Task #23.4: Send WITHDRAWAL_STATUS email with PENDING status
-      try {
-        const userRes = await trx.query<{ email: string; full_name: string; public_id: string }>(
-          `SELECT email, full_name, public_id FROM users WHERE id = $1`,
-          [userId]
-        );
-        if (userRes.rowCount > 0) {
-          const user = userRes.rows[0];
-          const { queueEventEmail } = await import('./emailService');
-          
-          await queueEventEmail(user.email, 'WITHDRAWAL_STATUS', {
-            displayName: user.full_name,
-            publicId: user.public_id,
+      // 8. Log State Transition: NULL -> PENDING using the SAME trx
+      await logWithdrawalStateTransition({
+        withdrawalId: createdWdr.id,
+        publicWithdrawalId: createdWdr.publicWithdrawalId,
+        userId: createdWdr.userId,
+        previousStatus: null,
+        newStatus: 'PENDING',
+        actorType: 'USER',
+        amount: createdWdr.amount,
+        destinationType: createdWdr.destinationType,
+        destinationReference: createdWdr.destinationReference,
+        reason: 'Withdrawal request created by user',
+        dbClient: trx,
+      });
+
+      return {
+        withdrawal: createdWdr,
+        isDuplicate: false,
+        userDetails: user,
+      };
+    });
+
+    // =========================================================================
+    // POST-COMMIT SIDE EFFECTS (RUN ONLY AFTER TRANSACTION COMMITS!)
+    // These post-commit side effects MUST NOT hold up the financial transaction.
+    // =========================================================================
+    if (!isDuplicate) {
+      // Best-effort in-app notification
+      notifyWithdrawalStatus({
+        userId,
+        amountUsdt: cleanAmount,
+        status: 'PENDING',
+        withdrawalId: withdrawal.id,
+      }).catch((notifErr) => {
+        console.warn('[Notification] Error triggering withdrawal pending notification:', notifErr);
+      });
+
+      // Best-effort email notification
+      if (userDetails?.email) {
+        import('./emailService').then(({ queueEventEmail }) => {
+          queueEventEmail(userDetails.email, 'WITHDRAWAL_STATUS', {
+            displayName: userDetails.full_name || 'Valued User',
+            publicId: userDetails.public_id || '',
             amount: String(cleanAmount),
             status: 'PENDING',
-            withdrawalId: withdrawal.id
+            withdrawalId: withdrawal.id,
+          }).catch((emailErr) => {
+            console.warn('[EmailEngine] Failed to send Withdrawal Pending email:', emailErr);
           });
-        }
-      } catch (emailErr) {
-        console.warn('[EmailEngine] Failed to send Withdrawal Pending email:', emailErr);
+        }).catch(() => {});
       }
+    }
 
-      return withdrawal;
-    });
+    return withdrawal;
   });
 }
 
