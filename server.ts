@@ -22,6 +22,7 @@ import { swapRouter } from './src/server/routes/swapRoutes';
 import { notificationRouter } from './src/server/routes/notificationRoutes';
 import { emailWebhookRouter } from './src/server/routes/emailWebhookRoutes';
 import { diagnosticRouter } from './src/server/routes/diagnosticRoutes';
+import { supportRouter } from './src/server/routes/supportRoutes';
 import { getDb } from './src/server/db/db';
 import { startMatchingScheduler } from './src/server/services/binaryMatchingScheduler';
 import {

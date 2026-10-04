@@ -93,7 +93,7 @@ CREATE TABLE IF NOT EXISTS nodes (
   phivo_reference_price_at_purchase NUMERIC(10, 4) NOT NULL DEFAULT 0.10,
   lifetime_phivo_allocation NUMERIC(14, 2) NOT NULL DEFAULT 10000.00,
   term_days INTEGER NOT NULL DEFAULT 200,
-  daily_phivo_emission NUMERIC(10, 2) NOT NULL DEFAULT 10.00,
+  daily_phivo_emission NUMERIC(10, 2) NOT NULL DEFAULT 50.00,
   purchase_timestamp TIMESTAMP WITH TIME ZONE NULL,
   reserved_at TIMESTAMP WITH TIME ZONE NULL,
   activated_at TIMESTAMP WITH TIME ZONE NULL,
@@ -457,7 +457,9 @@ CREATE TABLE IF NOT EXISTS notifications (
     'PHIVO_SWAP_COMPLETED',
     'USDT_DEPOSIT_CONFIRMED',
     'WITHDRAWAL_STATUS',
-    'SECURITY_ALERT'
+    'SECURITY_ALERT',
+    'SUPPORT_TICKET_CREATED',
+    'SUPPORT_TICKET_UPDATE'
   ))
 );
 
@@ -599,40 +601,32 @@ CREATE TABLE IF NOT EXISTS payout_wallet_nonces (
   PRIMARY KEY (wallet_address, chain_id)
 );
 
--- PHIVONEX Smart Support Center Tables
+-- Support Tickets and Messages
 CREATE TABLE IF NOT EXISTS support_tickets (
   id UUID PRIMARY KEY,
   public_ticket_id VARCHAR(50) UNIQUE NOT NULL,
   user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  category VARCHAR(50) NOT NULL DEFAULT 'Other',
   subject VARCHAR(255) NOT NULL,
-  user_message TEXT NOT NULL,
-  support_summary TEXT NULL,
-  status VARCHAR(50) NOT NULL DEFAULT 'OPEN',
+  category VARCHAR(50) NOT NULL DEFAULT 'GENERAL',
   priority VARCHAR(20) NOT NULL DEFAULT 'MEDIUM',
-  related_entity_type VARCHAR(50) NULL,
-  related_public_reference VARCHAR(100) NULL,
-  automated_diagnosis_summary TEXT NULL,
+  status VARCHAR(20) NOT NULL DEFAULT 'OPEN',
+  assigned_admin_id UUID NULL,
   created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  resolved_at TIMESTAMP WITH TIME ZONE NULL
+  updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
-
-CREATE INDEX IF NOT EXISTS idx_support_tickets_user_id ON support_tickets (user_id);
-CREATE INDEX IF NOT EXISTS idx_support_tickets_status ON support_tickets (status);
-CREATE INDEX IF NOT EXISTS idx_support_tickets_public_id ON support_tickets (public_ticket_id);
 
 CREATE TABLE IF NOT EXISTS support_ticket_messages (
   id UUID PRIMARY KEY,
   ticket_id UUID NOT NULL REFERENCES support_tickets(id) ON DELETE CASCADE,
-  sender_type VARCHAR(20) NOT NULL,
-  sender_user_id UUID NULL REFERENCES users(id) ON DELETE SET NULL,
-  sender_public_name VARCHAR(100) NOT NULL DEFAULT 'PHIVONEX Support',
+  sender_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  sender_role VARCHAR(20) NOT NULL DEFAULT 'USER',
   message TEXT NOT NULL,
-  is_internal_note BOOLEAN NOT NULL DEFAULT FALSE,
   created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE INDEX IF NOT EXISTS idx_support_tickets_user_id ON support_tickets (user_id);
+CREATE INDEX IF NOT EXISTS idx_support_tickets_status ON support_tickets (status);
 CREATE INDEX IF NOT EXISTS idx_support_ticket_messages_ticket_id ON support_ticket_messages (ticket_id);
+
 
 

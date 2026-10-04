@@ -15,7 +15,9 @@ export type NotificationType =
   | 'PHIVO_SWAP_COMPLETED'
   | 'USDT_DEPOSIT_CONFIRMED'
   | 'WITHDRAWAL_STATUS'
-  | 'SECURITY_ALERT';
+  | 'SECURITY_ALERT'
+  | 'SUPPORT_TICKET_CREATED'
+  | 'SUPPORT_TICKET_UPDATE';
 
 export interface CreateNotificationParams {
   userId: string;
@@ -468,3 +470,42 @@ export async function notifySecurityAlert(params: {
     sourceId: params.sourceId,
   });
 }
+
+export async function notifySupportTicketCreated(params: {
+  userId: string;
+  ticketId: string;
+  ticketPublicId?: string;
+  subject: string;
+  dbClient?: DatabaseClient;
+}): Promise<PublicNotification | null> {
+  return createNotification({
+    userId: params.userId,
+    type: 'SUPPORT_TICKET_CREATED',
+    title: 'Support Ticket Received',
+    message: `Your support ticket "${params.subject}" (${params.ticketPublicId || params.ticketId}) has been created. Our team will review it shortly.`,
+    sourceType: 'SUPPORT_TICKET',
+    sourceId: params.ticketId,
+    dbClient: params.dbClient,
+  });
+}
+
+export async function notifySupportTicketUpdate(params: {
+  userId: string;
+  ticketId: string;
+  ticketPublicId?: string;
+  subject?: string;
+  status: string;
+  message?: string;
+  dbClient?: DatabaseClient;
+}): Promise<PublicNotification | null> {
+  return createNotification({
+    userId: params.userId,
+    type: 'SUPPORT_TICKET_UPDATE',
+    title: 'Support Ticket Updated',
+    message: params.message || `Your support ticket (${params.ticketPublicId || params.ticketId}) status has been updated to ${params.status}.`,
+    sourceType: 'SUPPORT_TICKET',
+    sourceId: `${params.ticketId}_${params.status}_${Date.now()}`,
+    dbClient: params.dbClient,
+  });
+}
+

@@ -390,7 +390,7 @@ async function initSchema(client: DatabaseClient) {
         phivo_reference_price_at_purchase NUMERIC(10, 4) NOT NULL DEFAULT 0.10,
         lifetime_phivo_allocation NUMERIC(14, 2) NOT NULL DEFAULT 10000.00,
         term_days INTEGER NOT NULL DEFAULT 200,
-        daily_phivo_emission NUMERIC(10, 2) NOT NULL DEFAULT 10.00,
+        daily_phivo_emission NUMERIC(10, 2) NOT NULL DEFAULT 50.00,
         purchase_timestamp TIMESTAMP WITH TIME ZONE NULL,
         reserved_at TIMESTAMP WITH TIME ZONE NULL,
         activated_at TIMESTAMP WITH TIME ZONE NULL,
@@ -474,7 +474,7 @@ async function initSchema(client: DatabaseClient) {
       ALTER TABLE nodes ADD COLUMN IF NOT EXISTS phivo_reference_price_at_purchase NUMERIC(10, 4) NOT NULL DEFAULT 0.10;
       ALTER TABLE nodes ADD COLUMN IF NOT EXISTS lifetime_phivo_allocation NUMERIC(14, 2) NOT NULL DEFAULT 10000.00;
       ALTER TABLE nodes ADD COLUMN IF NOT EXISTS term_days INTEGER NOT NULL DEFAULT 200;
-      ALTER TABLE nodes ADD COLUMN IF NOT EXISTS daily_phivo_emission NUMERIC(10, 2) NOT NULL DEFAULT 10.00;
+      ALTER TABLE nodes ADD COLUMN IF NOT EXISTS daily_phivo_emission NUMERIC(10, 2) NOT NULL DEFAULT 50.00;
       UPDATE nodes SET term_days = 200 WHERE term_days = 400;
       ALTER TABLE nodes ADD COLUMN IF NOT EXISTS purchase_timestamp TIMESTAMP WITH TIME ZONE NULL;
       ALTER TABLE nodes ADD COLUMN IF NOT EXISTS maturity_timestamp TIMESTAMP WITH TIME ZONE NULL;
@@ -706,33 +706,26 @@ async function initSchema(client: DatabaseClient) {
         created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
       );
 
-      -- PHIVONEX Smart Support Center Tables
+      -- Support System Tables
       CREATE TABLE IF NOT EXISTS support_tickets (
         id UUID PRIMARY KEY,
         public_ticket_id VARCHAR(50) UNIQUE NOT NULL,
         user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        category VARCHAR(50) NOT NULL DEFAULT 'Other',
         subject VARCHAR(255) NOT NULL,
-        user_message TEXT NOT NULL,
-        support_summary TEXT NULL,
-        status VARCHAR(50) NOT NULL DEFAULT 'OPEN',
+        category VARCHAR(50) NOT NULL DEFAULT 'GENERAL',
         priority VARCHAR(20) NOT NULL DEFAULT 'MEDIUM',
-        related_entity_type VARCHAR(50) NULL,
-        related_public_reference VARCHAR(100) NULL,
-        automated_diagnosis_summary TEXT NULL,
+        status VARCHAR(20) NOT NULL DEFAULT 'OPEN',
+        assigned_admin_id UUID NULL,
         created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        resolved_at TIMESTAMP WITH TIME ZONE NULL
+        updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
       );
 
       CREATE TABLE IF NOT EXISTS support_ticket_messages (
         id UUID PRIMARY KEY,
         ticket_id UUID NOT NULL REFERENCES support_tickets(id) ON DELETE CASCADE,
-        sender_type VARCHAR(20) NOT NULL,
-        sender_user_id UUID NULL REFERENCES users(id) ON DELETE SET NULL,
-        sender_public_name VARCHAR(100) NOT NULL DEFAULT 'PHIVONEX Support',
+        sender_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        sender_role VARCHAR(20) NOT NULL DEFAULT 'USER',
         message TEXT NOT NULL,
-        is_internal_note BOOLEAN NOT NULL DEFAULT FALSE,
         created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
       );
     `);
@@ -1176,7 +1169,9 @@ async function initSchema(client: DatabaseClient) {
             'PHIVO_SWAP_COMPLETED',
             'USDT_DEPOSIT_CONFIRMED',
             'WITHDRAWAL_STATUS',
-            'SECURITY_ALERT'
+            'SECURITY_ALERT',
+            'SUPPORT_TICKET_CREATED',
+            'SUPPORT_TICKET_UPDATE'
           ))
         );
 
@@ -1185,6 +1180,25 @@ async function initSchema(client: DatabaseClient) {
         CREATE INDEX IF NOT EXISTS idx_notifications_user_unread ON notifications (user_id, read_at, created_at DESC);
         CREATE INDEX IF NOT EXISTS idx_notifications_user_created ON notifications (user_id, created_at DESC);
       `);
+
+      try {
+        await client.exec(`
+          ALTER TABLE notifications DROP CONSTRAINT IF EXISTS chk_notification_type;
+          ALTER TABLE notifications ADD CONSTRAINT chk_notification_type CHECK (type IN (
+            'NODE_ACTIVATED',
+            'REFERRAL_EARNED',
+            'MATCHING_EARNED',
+            'PROMOTION_EARNED',
+            'PHIVO_REWARD',
+            'PHIVO_SWAP_COMPLETED',
+            'USDT_DEPOSIT_CONFIRMED',
+            'WITHDRAWAL_STATUS',
+            'SECURITY_ALERT',
+            'SUPPORT_TICKET_CREATED',
+            'SUPPORT_TICKET_UPDATE'
+          ));
+        `);
+      } catch {}
     } catch (task20Err) {
       console.warn('[DB Migration] Task #20 Notifications schema migration warning:', task20Err);
     }
@@ -1808,9 +1822,9 @@ async function seedEconomicConfigs(client: DatabaseClient) {
       },
       {
         key: 'NODE_REWARD_RATE_PER_EPOCH',
-        value: JSON.stringify(10), // Dynamically configured starting at 10 PHIVO/Day
+        value: JSON.stringify(null), // Must remain null until explicitly configured by admin
         category: 'REWARDS',
-        description: 'Authoritative reward payout rate per Active Node per Epoch (PHIVO/Day). Dynamically configurable by Admin.',
+        description: 'Authoritative reward payout rate per Active Node per Epoch (USD). Unconfigured by default.',
       },
       {
         key: 'INTERNAL_COIN_PRICE_USDT',
@@ -1885,13 +1899,6 @@ async function seedEconomicConfigs(client: DatabaseClient) {
       UPDATE system_economic_configs
       SET config_value = REPLACE(config_value, '"PHX"', '"PHIVO"')
       WHERE config_key = 'INTERNAL_COIN_PRICE_USDT' AND config_value LIKE '%PHX%';
-    `);
-
-    // Ensure NODE_REWARD_RATE_PER_EPOCH defaults to dynamic starting value 10 if unconfigured/null
-    await client.query(`
-      UPDATE system_economic_configs
-      SET config_value = '10'
-      WHERE config_key = 'NODE_REWARD_RATE_PER_EPOCH' AND (config_value IS NULL OR config_value = 'null');
     `);
 
     console.log('[DB Migration] System Economic configuration parameters initialized.');
