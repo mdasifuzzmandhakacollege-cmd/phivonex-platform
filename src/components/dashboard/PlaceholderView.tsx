@@ -9,7 +9,8 @@ import {
   ArrowRight,
   Layers,
   Lock,
-  Radio
+  Radio,
+  HelpCircle
 } from 'lucide-react';
 import { DashboardTab } from './Sidebar';
 import { UserProfile } from '../../context/AuthContext';
@@ -53,6 +54,20 @@ export const PlaceholderView: React.FC<PlaceholderViewProps> = ({
             'Direct & Indirect Referral Tree Traversal',
             'Global Geographic Node Density',
             'Consensus Cluster Health Checks',
+          ],
+        };
+      case 'support':
+        return {
+          title: 'PHIVONEX Protocol Support Center',
+          icon: HelpCircle,
+          phase: 'Live Support & Knowledge Desk',
+          status: '24/7 Operations Desk',
+          desc: 'Get direct technical assistance with node validator deployment, wallet withdrawals, binary structure positioning, and smart account security.',
+          highlights: [
+            'Direct Operator Support Desk: support@phivonex.com',
+            'Official Community Channel: @phivonex_official',
+            'Security & Incident Response Desk',
+            'Automated Protocol Diagnostics & Status',
           ],
         };
       case 'rewards':

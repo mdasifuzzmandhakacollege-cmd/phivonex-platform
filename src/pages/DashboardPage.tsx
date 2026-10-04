@@ -55,6 +55,23 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onNavigate, curren
   const [activeTab, setActiveTab] = useState<DashboardTab>(() => getTabFromPath(currentPath));
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
+  // Lock body scroll and listen for Escape key when mobile menu is open
+  useEffect(() => {
+    if (isMobileMenuOpen) {
+      document.body.style.overflow = 'hidden';
+      const handleKeyDown = (e: KeyboardEvent) => {
+        if (e.key === 'Escape') {
+          setIsMobileMenuOpen(false);
+        }
+      };
+      window.addEventListener('keydown', handleKeyDown);
+      return () => {
+        document.body.style.overflow = '';
+        window.removeEventListener('keydown', handleKeyDown);
+      };
+    }
+  }, [isMobileMenuOpen]);
+
   // Sync activeTab when currentPath prop changes
   useEffect(() => {
     const matchedTab = getTabFromPath(currentPath);
@@ -291,7 +308,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onNavigate, curren
 
       {/* Mobile Slide-out Drawer & Overlay */}
       {isMobileMenuOpen && (
-        <div className="lg:hidden fixed inset-0 z-50 flex">
+        <div className="lg:hidden fixed inset-0 z-50 flex" role="dialog" aria-modal="true" aria-label="Navigation Menu">
           {/* Backdrop */}
           <div
             className="fixed inset-0 bg-black/80 backdrop-blur-sm transition-opacity"
@@ -300,7 +317,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onNavigate, curren
           />
 
           {/* Drawer Content */}
-          <div className="relative flex-1 flex flex-col max-w-xs w-full bg-[#07101D] border-r border-white/[0.08] z-10 animate-slideRight">
+          <div className="relative flex flex-col w-[min(88vw,360px)] h-[100dvh] max-h-[100dvh] bg-[#07101D] border-r border-white/[0.08] z-10 overflow-hidden shadow-2xl animate-slideRight">
             <Sidebar
               activeTab={activeTab}
               onSelectTab={handleSelectTab}

@@ -95,7 +95,7 @@ export const NotificationPermissionModal: React.FC<NotificationPermissionModalPr
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-fadeIn">
-      <div className="relative w-full max-w-md bg-gradient-to-b from-[#0A1628] via-[#07101D] to-[#05070B] border border-[#00CFFF]/40 rounded-3xl p-6 sm:p-7 shadow-2xl shadow-[#00CFFF]/10 space-y-6 text-white text-left overflow-hidden">
+      <div className="relative w-full max-w-md max-h-[calc(100dvh-2rem)] overflow-y-auto bg-gradient-to-b from-[#0A1628] via-[#07101D] to-[#05070B] border border-[#00CFFF]/40 rounded-3xl p-5 sm:p-7 shadow-2xl shadow-[#00CFFF]/10 space-y-5 sm:space-y-6 text-white text-left">
         
         {/* Glow ambient background */}
         <div className="absolute -top-24 -right-24 w-48 h-48 bg-[#00CFFF]/20 rounded-full blur-3xl pointer-events-none" />
