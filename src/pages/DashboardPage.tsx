@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { Sidebar, DashboardTab } from '../components/dashboard/Sidebar';
 import { Topbar } from '../components/dashboard/Topbar';
+import { MobileBottomNav } from '../components/dashboard/MobileBottomNav';
 import { OverviewView } from '../components/dashboard/OverviewView';
 import { ProfileView } from '../components/dashboard/ProfileView';
 import { SecurityView } from '../components/dashboard/SecurityView';
@@ -325,11 +326,18 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onNavigate, curren
           onNavigate={onNavigate}
         />
 
-        {/* Dynamic Main Body Content */}
-        <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {/* Dynamic Main Body Content (with bottom padding on mobile so persistent bottom nav never obstructs content) */}
+        <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8 pb-28 lg:pb-8">
           {renderTabContent()}
         </main>
       </div>
+
+      {/* Persistent Native-Style Mobile Bottom Navigation Bar (5 Items: Overview, Nodes, Deposit [Center], Network, Wallet) */}
+      <MobileBottomNav
+        activeTab={activeTab}
+        onSelectTab={handleSelectTab}
+        currentPath={currentPath}
+      />
 
       {/* Global Notification Permission Prompt Modal */}
       <NotificationPermissionModal userPublicId={user.publicId} />

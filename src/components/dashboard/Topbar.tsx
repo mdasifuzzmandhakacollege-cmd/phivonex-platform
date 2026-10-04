@@ -7,26 +7,21 @@ import {
   ChevronDown,
   ExternalLink,
   Shield,
-  Activity,
-  Check,
   Bell,
   CheckCheck,
+  Check,
   Clock,
   ArrowRight,
   Volume2,
   VolumeX,
   Wallet,
-  Wifi,
-  WifiOff
+  Activity,
 } from 'lucide-react';
-import { PhivonexLogo } from '../brand/PhivonexLogo';
 import { PhivonexSymbol } from '../brand/PhivonexSymbol';
 import { UserProfile } from '../../context/AuthContext';
 import { useNotifications } from '../../context/NotificationContext';
 import { useSystemConfig } from '../../context/SystemConfigContext';
 import { DashboardTab } from './Sidebar';
-import { PWAInstallHeaderButton } from '../PWAInstallPrompt';
-import { NetworkPulseTrigger } from './NetworkPulseTrigger';
 
 interface TopbarProps {
   user: UserProfile | null;
@@ -35,15 +30,6 @@ interface TopbarProps {
   onSelectTab: (tab: DashboardTab) => void;
   onLogout: () => Promise<void>;
   onNavigate: (route: string) => void;
-}
-
-interface RecentNotification {
-  id: string;
-  type: string;
-  title: string;
-  message: string;
-  readAt: string | null;
-  createdAt: string;
 }
 
 export const Topbar: React.FC<TopbarProps> = ({
@@ -59,7 +45,7 @@ export const Topbar: React.FC<TopbarProps> = ({
   const [isNotifOpen, setIsNotifOpen] = useState(false);
   const [availableBalance, setAvailableBalance] = useState<number | null>(null);
 
-  // Poll available wallet balance every 10 seconds for real-time header display
+  // Poll available wallet balance for real-time header display
   useEffect(() => {
     let isMounted = true;
     const fetchBalance = async () => {
@@ -82,7 +68,7 @@ export const Topbar: React.FC<TopbarProps> = ({
       clearInterval(interval);
     };
   }, []);
-  
+
   const {
     unreadCount,
     notifications,
@@ -114,7 +100,6 @@ export const Topbar: React.FC<TopbarProps> = ({
     await markAllAsRead();
   };
 
-  // Recent 5 notifications for the preview dropdown
   const recentNotifications = notifications.slice(0, 5);
 
   const isAdmin = Boolean(
@@ -141,39 +126,6 @@ export const Topbar: React.FC<TopbarProps> = ({
     return () => document.removeEventListener('mousedown', handleOutsideClick);
   }, []);
 
-  const getPageTitle = (tab: DashboardTab) => {
-    switch (tab) {
-      case 'overview':
-        return 'Network Overview';
-      case 'nodes':
-        return 'Node Infrastructure';
-      case 'network':
-        return 'Network Topology';
-      case 'referrals':
-        return 'Direct Referrals';
-      case 'wallet':
-        return 'Wallet & Ledger';
-      case 'swap':
-        return 'Internal Coin Swap';
-      case 'deposit':
-        return 'BNB & USDT Deposit Portal';
-      case 'withdrawals':
-        return 'Asset Withdrawals';
-      case 'notifications':
-        return 'Protocol Notifications';
-      case 'rewards':
-        return 'Rewards & Mining Ledger';
-      case 'transactions':
-        return 'Ledger Transactions';
-      case 'profile':
-        return 'Operator Profile';
-      case 'security':
-        return 'Security & Sessions';
-      default:
-        return 'Dashboard';
-    }
-  };
-
   const getInitials = (name?: string) => {
     if (!name) return 'OP';
     const parts = name.trim().split(' ');
@@ -184,96 +136,53 @@ export const Topbar: React.FC<TopbarProps> = ({
   };
 
   return (
-    <header className="sticky top-0 z-20 h-16 bg-[#07101D]/90 backdrop-blur-md border-b border-white/[0.08] px-4 sm:px-6 lg:px-8 flex items-center justify-between">
-      {/* Left Area: Mobile Menu Trigger + Logo + Breadcrumb / Title */}
-      <div className="flex items-center gap-3 sm:gap-4">
-        {/* Mobile Menu Button */}
+    <header className="sticky top-0 z-20 h-16 bg-[#07101D]/90 backdrop-blur-md border-b border-white/[0.08] px-3 sm:px-6 lg:px-8 flex items-center justify-between">
+      {/* Left: Mobile Menu Trigger + PHIVONEX Logo & Title */}
+      <div className="flex items-center gap-2.5 sm:gap-3">
+        {/* Mobile Hamburger Button */}
         <button
           onClick={onOpenMobileMenu}
-          className="lg:hidden p-2 rounded-lg bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.08] text-[#98A2B3] hover:text-white transition-colors cursor-pointer min-h-[44px] min-w-[44px] flex items-center justify-center"
-          aria-label="Open mobile navigation"
+          className="lg:hidden p-2 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.08] text-[#98A2B3] hover:text-white transition-colors cursor-pointer min-h-[42px] min-w-[42px] flex items-center justify-center active:scale-95"
+          aria-label="Open navigation menu"
         >
           <Menu className="w-5 h-5" />
         </button>
 
-        {/* Mobile Logo (hidden on lg where sidebar has logo) */}
-        <div className="lg:hidden flex items-center">
-          <button
-            onClick={() => onNavigate('/')}
-            className="flex items-center gap-1.5 focus:outline-none cursor-pointer"
-            aria-label="PHIVONEX Home"
-          >
-            <PhivonexSymbol size={26} />
-          </button>
-        </div>
-
-        {/* Page Title & Breadcrumb */}
-        <div className="flex items-center gap-2">
-          <h1 className="text-sm sm:text-base font-bold text-white tracking-tight">
-            {getPageTitle(activeTab)}
-          </h1>
-          <div
-            className={`hidden sm:flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-mono border transition-all ${
-              isConnected
-                ? 'bg-[#00CFFF]/10 border-[#00CFFF]/30 text-[#00CFFF]'
-                : 'bg-[#F04438]/10 border-[#F04438]/30 text-[#F04438] animate-pulse'
-            }`}
-            title={isConnected ? 'Connected to Live Protocol Ledger & Real-Time Sync' : 'Disconnected from Protocol Sync'}
-          >
-            <span className={`w-1.5 h-1.5 rounded-full ${isConnected ? 'bg-[#00CFFF] animate-pulse' : 'bg-[#F04438]'}`} />
-            <span>{isConnected ? 'Protocol Live' : 'Ledger Offline'}</span>
+        {/* Brand Logo & Title */}
+        <div
+          onClick={() => onSelectTab('overview')}
+          className="flex items-center gap-2.5 cursor-pointer select-none group"
+          title="PHIVONEX Dashboard"
+        >
+          <div className="transition-transform duration-200 group-hover:scale-105">
+            <PhivonexSymbol size={28} />
           </div>
+          <span className="font-extrabold text-sm sm:text-base tracking-wider text-white">
+            PHIVONEX
+          </span>
         </div>
       </div>
 
-      {/* Right Area: Available Balance + Public Portal Link + PWA Install + Network Status + User Menu */}
-      <div className="flex items-center gap-1.5 sm:gap-2.5">
-        {/* Available Balance Header Badge */}
+      {/* Right: Available Balance + Notifications + Profile Avatar / Dropdown Trigger */}
+      <div className="flex items-center gap-2 sm:gap-3">
+        {/* Available Balance Pill Button */}
         <button
           onClick={() => onSelectTab('wallet')}
-          className="flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3 py-1.5 rounded-xl bg-[#00CFFF]/10 hover:bg-[#00CFFF]/20 border border-[#00CFFF]/30 transition-all cursor-pointer min-h-[44px] shadow-sm hover:shadow-[#00CFFF]/20 shrink-0"
-          title="Click to view Wallet & Ledger"
+          className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl bg-[#00CFFF]/10 hover:bg-[#00CFFF]/20 border border-[#00CFFF]/30 transition-all cursor-pointer min-h-[42px] shadow-sm hover:shadow-[#00CFFF]/20 shrink-0 active:scale-95"
+          title="View Wallet & Ledger"
+          aria-label="Wallet Available Balance"
         >
           <Wallet className="w-3.5 h-3.5 text-[#00CFFF] shrink-0" />
-          <div className="flex items-center gap-1 font-mono text-xs">
-            <span className="text-[10px] uppercase text-[#98A2B3] hidden md:inline">Available:</span>
-            <span className="font-bold text-white tabular-nums">
-              ${availableBalance !== null ? availableBalance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '0.00'}
-            </span>
-            <span className="text-[10px] text-[#00CFFF] font-semibold hidden xs:inline">USDT</span>
-          </div>
+          <span className="font-mono font-bold text-white text-xs sm:text-sm tabular-nums">
+            ${availableBalance !== null ? availableBalance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '0.00'}
+          </span>
         </button>
 
-        {/* Real-time Network Pulse & Manual Trigger */}
-        <div className="hidden md:flex items-center">
-          <NetworkPulseTrigger variant="compact" />
-        </div>
-
-        <div className="hidden md:flex items-center">
-          <PWAInstallHeaderButton />
-        </div>
-
-        {/* Public Portal link */}
-        <button
-          onClick={() => onNavigate('/')}
-          className="hidden md:flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/[0.03] hover:bg-white/[0.06] border border-white/[0.08] text-xs text-[#98A2B3] hover:text-white font-medium transition-colors cursor-pointer min-h-[36px]"
-          title="Return to Public Presentation"
-        >
-          <span>Public Portal</span>
-          <ExternalLink className="w-3 h-3 text-white/40" />
-        </button>
-
-        {/* Security indicator */}
-        <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[#32D583]/[0.08] border border-[#32D583]/20 text-[11px] font-mono text-[#32D583]">
-          <ShieldCheck className="w-3.5 h-3.5" />
-          <span>TLS 1.3 Verified</span>
-        </div>
-
-        {/* Task #20: Notification Bell + Dropdown */}
+        {/* Notification Bell Trigger */}
         <div className="relative" ref={notifMenuRef}>
           <button
             onClick={handleToggleNotif}
-            className={`p-2.5 rounded-xl border transition-all cursor-pointer relative min-h-[44px] min-w-[44px] flex items-center justify-center ${
+            className={`p-2.5 rounded-xl border transition-all cursor-pointer relative min-h-[42px] min-w-[42px] flex items-center justify-center active:scale-95 ${
               isNotifOpen
                 ? 'bg-white/[0.08] border-[#00CFFF]/40 text-white'
                 : 'bg-white/[0.03] hover:bg-white/[0.08] border-white/[0.08] text-[#98A2B3] hover:text-white'
@@ -283,7 +192,7 @@ export const Topbar: React.FC<TopbarProps> = ({
           >
             <Bell className="w-4 h-4" />
             {unreadCount > 0 && (
-              <span className="absolute top-1.5 right-1.5 min-w-[18px] h-[18px] px-1 rounded-full bg-[#00CFFF] text-[#05070B] text-[10px] font-mono font-bold flex items-center justify-center shadow-lg shadow-[#00CFFF]/40 animate-pulse">
+              <span className="absolute top-1.5 right-1.5 min-w-[18px] h-[18px] px-1 rounded-full bg-[#F04438] text-white text-[10px] font-mono font-bold flex items-center justify-center shadow-lg shadow-[#F04438]/40 animate-pulse">
                 {unreadCount > 99 ? '99+' : unreadCount}
               </span>
             )}
@@ -302,7 +211,7 @@ export const Topbar: React.FC<TopbarProps> = ({
                   )}
                 </div>
                 <div className="flex items-center gap-2">
-                  {/* Subtle Audio Alert Awareness Toggle */}
+                  {/* Audio alert toggle */}
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
@@ -407,40 +316,18 @@ export const Topbar: React.FC<TopbarProps> = ({
           )}
         </div>
 
-        {/* Admin Quick Action Button */}
-        {isAdmin && (
-          <button
-            onClick={() => onNavigate('/admin')}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-gradient-to-r from-[#F04438]/20 via-[#FF8C00]/20 to-[#00CFFF]/20 hover:from-[#F04438]/30 hover:to-[#00CFFF]/30 border border-[#F04438]/50 text-white text-xs font-bold transition-all cursor-pointer shadow-md hover:shadow-[#F04438]/20 active:scale-95"
-            title="Open Admin Control Plane"
-          >
-            <Shield className="w-3.5 h-3.5 text-[#F04438]" />
-            <span className="hidden sm:inline">Admin Panel</span>
-          </button>
-        )}
-
-        {/* User Menu Dropdown */}
+        {/* User Avatar / Dropdown Trigger */}
         <div className="relative" ref={userMenuRef}>
           <button
             onClick={() => setIsUserMenuOpen(!isUserMenuOpen)}
-            className="flex items-center gap-2.5 p-1.5 sm:px-3 sm:py-2 rounded-xl bg-white/[0.03] hover:bg-white/[0.08] border border-white/[0.08] transition-all cursor-pointer min-h-[44px]"
+            className="flex items-center gap-2 p-1 sm:px-2.5 sm:py-1.5 rounded-xl bg-white/[0.03] hover:bg-white/[0.08] border border-white/[0.08] transition-all cursor-pointer min-h-[42px] active:scale-95"
             aria-expanded={isUserMenuOpen}
             aria-haspopup="true"
             aria-label="User account menu"
           >
-            {/* Operator Avatar */}
-            <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-[#00CFFF]/20 to-[#168BFF]/20 border border-[#00CFFF]/40 flex items-center justify-center text-xs font-mono font-bold text-[#00CFFF]">
+            {/* Operator Avatar Circle */}
+            <div className="w-8 h-8 rounded-full bg-gradient-to-br from-[#00CFFF]/25 to-[#168BFF]/25 border border-[#00CFFF]/40 flex items-center justify-center text-xs font-mono font-bold text-[#00CFFF] shrink-0">
               {getInitials(user?.fullName)}
-            </div>
-
-            {/* User Info (hidden on very small screens) */}
-            <div className="hidden sm:block text-left max-w-[130px]">
-              <div className="text-xs font-semibold text-white truncate">
-                {user?.fullName || 'Operator'}
-              </div>
-              <div className="text-[10px] font-mono text-[#98A2B3] truncate">
-                {user?.publicId || 'PHX-OPERATOR'}
-              </div>
             </div>
 
             <ChevronDown className={`w-3.5 h-3.5 text-[#98A2B3] transition-transform duration-200 ${isUserMenuOpen ? 'rotate-180' : ''}`} />
@@ -448,9 +335,9 @@ export const Topbar: React.FC<TopbarProps> = ({
 
           {/* User Menu Dropdown Box */}
           {isUserMenuOpen && (
-            <div className="absolute right-0 mt-2 w-64 rounded-2xl bg-[#07101D] border border-white/[0.12] shadow-2xl p-2 z-50 animate-fadeIn">
+            <div className="absolute right-0 mt-2 w-64 sm:w-72 rounded-2xl bg-[#07101D] border border-white/[0.12] shadow-2xl p-2.5 z-50 animate-fadeIn">
               {/* Profile Header Box */}
-              <div className="p-3 rounded-xl bg-white/[0.03] border border-white/[0.06] mb-2 space-y-1">
+              <div className="p-3 rounded-xl bg-white/[0.03] border border-white/[0.06] mb-2 space-y-1.5">
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-bold text-white truncate block">
                     {user?.fullName || 'Operator'}
@@ -464,6 +351,18 @@ export const Topbar: React.FC<TopbarProps> = ({
                 </div>
                 <div className="text-[10px] text-[#98A2B3] truncate">
                   {user?.email || ''}
+                </div>
+
+                {/* Relocated Security & Protocol Badges */}
+                <div className="flex items-center justify-between text-[10px] font-mono text-[#32D583] bg-[#32D583]/10 px-2 py-1 rounded-lg border border-[#32D583]/20 pt-1">
+                  <div className="flex items-center gap-1">
+                    <ShieldCheck className="w-3.5 h-3.5 text-[#32D583]" />
+                    <span>TLS 1.3 Verified</span>
+                  </div>
+                  <div className="flex items-center gap-1 text-[#00CFFF]">
+                    <span className={`w-1.5 h-1.5 rounded-full ${isConnected ? 'bg-[#00CFFF] animate-pulse' : 'bg-[#F04438]'}`} />
+                    <span>{isConnected ? 'Protocol Live' : 'Ledger Offline'}</span>
+                  </div>
                 </div>
               </div>
 
@@ -502,6 +401,20 @@ export const Topbar: React.FC<TopbarProps> = ({
                 >
                   <ShieldCheck className="w-4 h-4 text-[#168BFF]" />
                   <span>Security &amp; Sessions</span>
+                </button>
+
+                <button
+                  onClick={() => {
+                    onNavigate('/');
+                    setIsUserMenuOpen(false);
+                  }}
+                  className="w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs text-[#98A2B3] hover:text-white hover:bg-white/[0.06] transition-colors cursor-pointer min-h-[40px]"
+                >
+                  <div className="flex items-center gap-2.5">
+                    <Activity className="w-4 h-4 text-[#32D583]" />
+                    <span>Public Portal</span>
+                  </div>
+                  <ExternalLink className="w-3.5 h-3.5 text-[#98A2B3]" />
                 </button>
 
                 <div className="my-1.5 border-t border-white/[0.08]" />

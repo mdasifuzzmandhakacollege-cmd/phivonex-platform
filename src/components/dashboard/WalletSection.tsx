@@ -333,7 +333,7 @@ export const WalletSection: React.FC<WalletSectionProps> = ({ onNavigateTab }) =
               <>
                 <button
                   onClick={() => onNavigateTab('deposit')}
-                  className="px-3.5 py-2 rounded-xl bg-[#00CFFF] hover:bg-[#00CFFF]/90 text-[#05070B] text-xs font-bold font-mono flex items-center gap-1.5 transition-all cursor-pointer min-h-[44px]"
+                  className="px-3.5 py-2 rounded-xl bg-[#00CFFF] hover:bg-[#00CFFF]/90 text-[#05070B] text-xs font-bold font-mono flex items-center gap-1.5 transition-all cursor-pointer min-h-[44px] shadow-sm shadow-[#00CFFF]/20"
                 >
                   <ArrowDownLeft className="w-3.5 h-3.5" />
                   <span>Deposit</span>
@@ -343,7 +343,14 @@ export const WalletSection: React.FC<WalletSectionProps> = ({ onNavigateTab }) =
                   className="px-3.5 py-2 rounded-xl bg-white/[0.05] hover:bg-white/[0.1] text-white border border-white/[0.1] text-xs font-medium flex items-center gap-1.5 transition-all cursor-pointer min-h-[44px]"
                 >
                   <Coins className="w-3.5 h-3.5 text-[#00CFFF]" />
-                  <span>Swap</span>
+                  <span>Swap PHIVO</span>
+                </button>
+                <button
+                  onClick={() => onNavigateTab('withdrawals')}
+                  className="px-3.5 py-2 rounded-xl bg-white/[0.05] hover:bg-white/[0.1] text-white border border-white/[0.1] text-xs font-medium flex items-center gap-1.5 transition-all cursor-pointer min-h-[44px]"
+                >
+                  <ArrowUpRight className="w-3.5 h-3.5 text-[#F04438]" />
+                  <span>Withdraw</span>
                 </button>
               </>
             )}
