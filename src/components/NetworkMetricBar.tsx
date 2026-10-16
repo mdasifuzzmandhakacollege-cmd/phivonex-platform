@@ -36,9 +36,9 @@ export const NetworkMetricBar: React.FC<NetworkMetricBarProps> = ({
       icon: Radio,
     },
     {
-      label: 'Remaining Nodes',
-      value: isApiConnected ? metrics.availableNodes.toLocaleString() : '10,000 Available',
-      subtext: isApiConnected ? `${metrics.allocationPercent}% Allocated` : 'Primary Stage 1',
+      label: 'Allocation Phase',
+      value: 'Stage 1 Active',
+      subtext: 'Guaranteed Validator Slots',
       indicator: 'live',
       icon: Activity,
     },

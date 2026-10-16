@@ -88,6 +88,70 @@ export const EconomicControls: React.FC = () => {
   // Audit filter
   const [auditFilterKey, setAuditFilterKey] = useState<string>('ALL');
 
+  // Reward Engine & Dual Mode states
+  const [rewardEngineStatus, setRewardEngineStatus] = useState<any>(null);
+  const [isDistributingRewards, setIsDistributingRewards] = useState<boolean>(false);
+  const [rewardModeSubmitting, setRewardModeSubmitting] = useState<boolean>(false);
+
+  const fetchRewardEngineStatus = useCallback(async () => {
+    try {
+      const res = await fetch('/api/rewards/admin/status');
+      if (res.ok) {
+        const data = await res.json();
+        setRewardEngineStatus(data);
+      }
+    } catch (err) {
+      console.warn('[EconomicControls] Failed to fetch reward engine status:', err);
+    }
+  }, []);
+
+  const handleSwitchRewardMode = async (newMode: 'AUTOMATIC' | 'MANUAL') => {
+    try {
+      setRewardModeSubmitting(true);
+      const res = await fetch('/api/rewards/admin/mode', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: newMode, reason: `Switched to ${newMode} mode via Admin Economic Controls` }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || 'Failed to update reward mode');
+      setFeedback({ type: 'success', message: data.message });
+      await fetchRewardEngineStatus();
+      await fetchConfigs();
+    } catch (err: any) {
+      setFeedback({ type: 'error', message: err.message || 'Mode switch failed' });
+    } finally {
+      setRewardModeSubmitting(false);
+    }
+  };
+
+  const handleTriggerManualRewards = async () => {
+    if (!window.confirm('Are you sure you want to trigger daily node mining reward distribution right now? This will disburse PHIVO to all active eligible nodes and update the ledger.')) {
+      return;
+    }
+    try {
+      setIsDistributingRewards(true);
+      const res = await fetch('/api/rewards/admin/distribute-daily-now', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || data.error || 'Failed to distribute rewards');
+      setFeedback({
+        type: 'success',
+        message: `Successfully distributed daily mining rewards! Settled Epoch #${data.epochNumber} (${data.publicEpochId}). Credited ${data.rewardsCreated} node(s) with ${data.totalRewardsDistributedUsd} PHIVO.`,
+      });
+      await fetchRewardEngineStatus();
+      await fetchConfigs();
+      await fetchAuditLogs();
+    } catch (err: any) {
+      setFeedback({ type: 'error', message: err.message || 'Failed to distribute daily rewards.' });
+    } finally {
+      setIsDistributingRewards(false);
+    }
+  };
+
   // Fetch configs
   const fetchConfigs = useCallback(async () => {
     try {
@@ -126,7 +190,8 @@ export const EconomicControls: React.FC = () => {
   useEffect(() => {
     fetchConfigs();
     fetchAuditLogs();
-  }, [fetchConfigs, fetchAuditLogs]);
+    fetchRewardEngineStatus();
+  }, [fetchConfigs, fetchAuditLogs, fetchRewardEngineStatus]);
 
   // Helper to get config by key
   const getConfig = (key: string): EconomicConfigItem | undefined => {
@@ -749,43 +814,49 @@ export const EconomicControls: React.FC = () => {
           </span>
         </div>
 
+        {/* DUAL MODE & CONTROLS GRID */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          {/* Rewards Master Switch */}
+          {/* Mode Switch Card: Automatic vs Manual */}
           <div className="p-4 rounded-xl bg-[#05070B] border border-white/[0.06] flex flex-col justify-between space-y-3">
             <div>
               <div className="flex items-center justify-between">
-                <span className="text-xs font-semibold text-[#98A2B3]">Reward Engine Status</span>
-                <span className="text-[10px] font-mono text-[#00CFFF]">v{nodeRewardsEnabled?.version || 1}</span>
+                <span className="text-xs font-semibold text-[#98A2B3]">Distribution Mode</span>
+                <span className="text-[10px] font-mono text-[#00CFFF]">
+                  {rewardEngineStatus?.mode || 'AUTOMATIC'}
+                </span>
               </div>
               <div className="flex items-center gap-2 mt-1">
                 <span
                   className={`px-2.5 py-1 rounded-md text-xs font-mono font-bold flex items-center gap-1.5 ${
-                    nodeRewardsEnabled?.status === 'ACTIVE'
-                      ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
-                      : 'bg-red-500/10 text-red-400 border border-red-500/20'
+                    (rewardEngineStatus?.mode || 'AUTOMATIC') === 'AUTOMATIC'
+                      ? 'bg-[#00CFFF]/10 text-[#00CFFF] border border-[#00CFFF]/30'
+                      : 'bg-amber-500/10 text-amber-400 border border-amber-500/30'
                   }`}
                 >
-                  <Power className="w-3 h-3" />
-                  {nodeRewardsEnabled?.status === 'ACTIVE' ? 'DISTRIBUTIONS ENABLED' : 'DISTRIBUTIONS PAUSED'}
+                  <Zap className="w-3 h-3" />
+                  {(rewardEngineStatus?.mode || 'AUTOMATIC') === 'AUTOMATIC' ? 'AUTOMATIC MODE (Daily Schedule)' : 'MANUAL MODE (Admin Dispatched)'}
                 </span>
               </div>
-              <p className="text-[11px] text-[#98A2B3] mt-1">
-                When paused, daily epoch scheduler skips reward creation.
+              <p className="text-[11px] text-[#98A2B3] mt-1.5 leading-relaxed">
+                {(rewardEngineStatus?.mode || 'AUTOMATIC') === 'AUTOMATIC'
+                  ? 'Daily ROI / Mining Rewards are distributed automatically on scheduled daily cycle.'
+                  : 'Automatic scheduler is paused. Rewards will ONLY disburse when triggered manually by admin below.'}
               </p>
             </div>
             <div className="pt-2 flex items-center justify-between border-t border-white/[0.04]">
               <span className="text-[10px] text-white/50 font-mono">
-                Status: {nodeRewardsEnabled?.status || 'ACTIVE'}
+                Mode: {rewardEngineStatus?.mode || 'AUTOMATIC'}
               </span>
               <button
-                onClick={() => nodeRewardsEnabled && handleQuickToggle(nodeRewardsEnabled)}
+                onClick={() => handleSwitchRewardMode((rewardEngineStatus?.mode || 'AUTOMATIC') === 'AUTOMATIC' ? 'MANUAL' : 'AUTOMATIC')}
+                disabled={rewardModeSubmitting}
                 className={`px-3 py-1 rounded-lg text-[11px] font-bold border transition-colors cursor-pointer ${
-                  nodeRewardsEnabled?.status === 'ACTIVE'
-                    ? 'bg-red-500/10 hover:bg-red-500/20 text-red-400 border-red-500/30'
-                    : 'bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border-emerald-500/30'
+                  (rewardEngineStatus?.mode || 'AUTOMATIC') === 'AUTOMATIC'
+                    ? 'bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border-amber-500/30'
+                    : 'bg-[#00CFFF]/10 hover:bg-[#00CFFF]/20 text-[#00CFFF] border-[#00CFFF]/30'
                 }`}
               >
-                {nodeRewardsEnabled?.status === 'ACTIVE' ? 'Pause Engine' : 'Enable Engine'}
+                {rewardModeSubmitting ? 'Updating...' : (rewardEngineStatus?.mode || 'AUTOMATIC') === 'AUTOMATIC' ? 'Switch to MANUAL' : 'Switch to AUTOMATIC'}
               </button>
             </div>
           </div>
@@ -829,15 +900,118 @@ export const EconomicControls: React.FC = () => {
             </div>
           </div>
 
-          {/* Zero Default Integrity Box */}
-          <div className="p-4 rounded-xl bg-[#05070B] border border-white/[0.06] flex flex-col justify-center space-y-2">
-            <div className="flex items-center gap-1.5 text-xs font-bold text-amber-300">
-              <ShieldAlert className="w-4 h-4 text-amber-400 shrink-0" />
-              Strict No-Invented-Default Rule
+          {/* Rewards Master Switch */}
+          <div className="p-4 rounded-xl bg-[#05070B] border border-white/[0.06] flex flex-col justify-between space-y-3">
+            <div>
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-semibold text-[#98A2B3]">Engine Master Switch</span>
+                <span className="text-[10px] font-mono text-[#00CFFF]">v{nodeRewardsEnabled?.version || 1}</span>
+              </div>
+              <div className="flex items-center gap-2 mt-1">
+                <span
+                  className={`px-2.5 py-1 rounded-md text-xs font-mono font-bold flex items-center gap-1.5 ${
+                    nodeRewardsEnabled?.status === 'ACTIVE'
+                      ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                      : 'bg-red-500/10 text-red-400 border border-red-500/20'
+                  }`}
+                >
+                  <Power className="w-3 h-3" />
+                  {nodeRewardsEnabled?.status === 'ACTIVE' ? 'DISTRIBUTIONS ENABLED' : 'DISTRIBUTIONS PAUSED'}
+                </span>
+              </div>
+              <p className="text-[11px] text-[#98A2B3] mt-1">
+                When paused, all reward distributions (both manual and auto) are locked.
+              </p>
             </div>
-            <p className="text-[11px] text-[#98A2B3] leading-relaxed">
-              In accordance with core architecture, if no reward rate is explicitly configured by administration, epoch settlements strictly abort with <strong className="text-white font-mono">REWARD_RATE_NOT_CONFIGURED</strong>, preventing unintended payouts.
-            </p>
+            <div className="pt-2 flex items-center justify-between border-t border-white/[0.04]">
+              <span className="text-[10px] text-white/50 font-mono">
+                Status: {nodeRewardsEnabled?.status || 'ACTIVE'}
+              </span>
+              <button
+                onClick={() => nodeRewardsEnabled && handleQuickToggle(nodeRewardsEnabled)}
+                className={`px-3 py-1 rounded-lg text-[11px] font-bold border transition-colors cursor-pointer ${
+                  nodeRewardsEnabled?.status === 'ACTIVE'
+                    ? 'bg-red-500/10 hover:bg-red-500/20 text-red-400 border-red-500/30'
+                    : 'bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border-emerald-500/30'
+                }`}
+              >
+                {nodeRewardsEnabled?.status === 'ACTIVE' ? 'Pause Master Engine' : 'Enable Master Engine'}
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* MANUAL DAILY ROI / MINING DISPATCHER PANEL */}
+        <div className="p-5 rounded-xl bg-gradient-to-r from-[#0B1527] via-[#07101D] to-[#0A182F] border border-[#00CFFF]/30 shadow-xl space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-white/[0.08]">
+            <div className="flex items-center gap-2.5">
+              <div className="w-8 h-8 rounded-lg bg-[#00CFFF]/20 border border-[#00CFFF]/40 flex items-center justify-center text-[#00CFFF]">
+                <Zap className="w-4 h-4" />
+              </div>
+              <div>
+                <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                  <span>Manual Daily Mining Reward Dispatcher</span>
+                  <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-amber-500/20 text-amber-300 font-semibold border border-amber-500/30">
+                    Live Dispatch
+                  </span>
+                </h3>
+                <p className="text-xs text-[#98A2B3]">
+                  Trigger the daily mining ROI distribution cycle manually whenever needed. All active eligible nodes will be credited instantly in their ledger.
+                </p>
+              </div>
+            </div>
+
+            <button
+              onClick={handleTriggerManualRewards}
+              disabled={isDistributingRewards || nodeRewardsEnabled?.status !== 'ACTIVE' || rewardRate?.configValue === null}
+              className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-[#00CFFF] to-[#168BFF] hover:brightness-110 text-[#05070B] font-extrabold text-xs flex items-center justify-center gap-2 transition-all cursor-pointer shadow-lg shadow-[#00CFFF]/20 disabled:opacity-50 disabled:cursor-not-allowed shrink-0 min-h-[44px]"
+            >
+              {isDistributingRewards ? (
+                <>
+                  <RefreshCw className="w-4 h-4 animate-spin text-[#05070B]" />
+                  <span>Distributing ROI &amp; Crediting Ledgers...</span>
+                </>
+              ) : (
+                <>
+                  <Zap className="w-4 h-4 text-[#05070B]" />
+                  <span>Trigger Daily Mining ROI Now (Send Rewards)</span>
+                </>
+              )}
+            </button>
+          </div>
+
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs font-mono">
+            <div className="p-3 rounded-lg bg-[#05070B] border border-white/[0.06]">
+              <span className="text-[10px] text-[#98A2B3] block">ACTIVE ELIGIBLE NODES</span>
+              <span className="text-base font-bold text-white">
+                {rewardEngineStatus?.activeNodesCount ?? 0} Nodes
+              </span>
+            </div>
+            <div className="p-3 rounded-lg bg-[#05070B] border border-white/[0.06]">
+              <span className="text-[10px] text-[#98A2B3] block">RATE PER NODE</span>
+              <span className="text-base font-bold text-amber-400">
+                {rewardRate?.configValue ? `${Number(rewardRate.configValue)} PHIVO` : 'Not Set'}
+              </span>
+            </div>
+            <div className="p-3 rounded-lg bg-[#05070B] border border-white/[0.06]">
+              <span className="text-[10px] text-[#98A2B3] block">ESTIMATED DISPATCH</span>
+              <span className="text-base font-bold text-[#00CFFF]">
+                {rewardRate?.configValue
+                  ? `${((rewardEngineStatus?.activeNodesCount || 0) * Number(rewardRate.configValue)).toLocaleString()} PHIVO`
+                  : '0.00 PHIVO'}
+              </span>
+            </div>
+            <div className="p-3 rounded-lg bg-[#05070B] border border-white/[0.06]">
+              <span className="text-[10px] text-[#98A2B3] block">LAST SETTLED EPOCH</span>
+              <span className="text-xs font-bold text-emerald-400 truncate block">
+                {rewardEngineStatus?.lastSettledEpoch?.publicEpochId || 'No Epoch Settled Yet'}
+              </span>
+              {rewardEngineStatus?.lastSettledEpoch?.settledAt && (
+                <span className="text-[9px] text-[#98A2B3] block truncate">
+                  {new Date(rewardEngineStatus.lastSettledEpoch.settledAt).toLocaleTimeString()}
+                </span>
+              )}
+            </div>
           </div>
         </div>
       </div>

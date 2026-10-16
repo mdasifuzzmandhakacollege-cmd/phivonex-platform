@@ -708,7 +708,7 @@ export const RewardsView: React.FC<RewardsViewProps> = ({ user: _user, onNavigat
                           />
                           <div>
                             <div className="text-white font-bold">{node.publicNodeId}</div>
-                            <div className="text-[10px] text-[#98A2B3]">Node #{node.nodeNumber}</div>
+                            <div className="text-[10px] text-[#00CFFF]">Tier-1 Consensus Validator</div>
                           </div>
                         </div>
                       </td>

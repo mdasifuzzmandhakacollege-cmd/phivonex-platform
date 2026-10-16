@@ -520,7 +520,7 @@ async function getWalletSummary(userId) {
     const cnt = Number(row.count);
     transactionCount += cnt;
     const st = row.source_type;
-    const isEarningSource = st === "REFERRAL_COMMISSION" || st === "MATCHING_BONUS" || st === "PROMOTION_BONUS" || st === "NODE_REWARD" || st === "ADMIN_ADJUSTMENT";
+    const isEarningSource = st === "REFERRAL_COMMISSION" || st === "MATCHING_BONUS" || st === "PROMOTION_BONUS" || st === "NODE_REWARD";
     if (row.entry_type === "CREDIT") {
       if (isEarningSource) {
         totalEarned += amt;
@@ -1033,17 +1033,19 @@ __export(notificationService_exports, {
   notifyPromotionEarned: () => notifyPromotionEarned,
   notifyReferralEarned: () => notifyReferralEarned,
   notifySecurityAlert: () => notifySecurityAlert,
+  notifySupportTicketCreated: () => notifySupportTicketCreated,
+  notifySupportTicketUpdate: () => notifySupportTicketUpdate,
   notifyUsdtDepositConfirmed: () => notifyUsdtDepositConfirmed,
   notifyWithdrawalStatus: () => notifyWithdrawalStatus
 });
 import { EventEmitter } from "events";
 import { v4 as uuidv43 } from "uuid";
 async function createNotification(params) {
-  const { userId, type, title, message, sourceType, sourceId } = params;
+  const { userId, type, title, message, sourceType, sourceId, dbClient } = params;
   if (!userId || !type || !title || !message) {
     return null;
   }
-  const db = await getDb();
+  const db = dbClient || await getDb();
   const id = uuidv43();
   const publicId = generateNotificationPublicId();
   try {
@@ -1219,7 +1221,8 @@ async function notifyNodeActivated(params) {
     title: "Genesis Node Activated",
     message: `Your Genesis Node #${params.nodeNumber} is now ACTIVE and operational in the PHIVONEX ecosystem.`,
     sourceType: "NODE_ORDER",
-    sourceId: params.sourceId
+    sourceId: params.sourceId,
+    dbClient: params.dbClient
   });
 }
 async function notifyReferralEarned(params) {
@@ -1306,7 +1309,8 @@ async function notifyWithdrawalStatus(params) {
     title,
     message,
     sourceType: "WITHDRAWAL",
-    sourceId: `${params.withdrawalId}_${params.status}`
+    sourceId: `${params.withdrawalId}_${params.status}`,
+    dbClient: params.dbClient
   });
 }
 async function notifySecurityAlert(params) {
@@ -1317,6 +1321,28 @@ async function notifySecurityAlert(params) {
     message: params.message,
     sourceType: "SECURITY",
     sourceId: params.sourceId
+  });
+}
+async function notifySupportTicketCreated(params) {
+  return createNotification({
+    userId: params.userId,
+    type: "SUPPORT_TICKET_CREATED",
+    title: "Support Ticket Received",
+    message: `Your support ticket "${params.subject}" (${params.ticketPublicId || params.ticketId}) has been created. Our team will review it shortly.`,
+    sourceType: "SUPPORT_TICKET",
+    sourceId: params.ticketId,
+    dbClient: params.dbClient
+  });
+}
+async function notifySupportTicketUpdate(params) {
+  return createNotification({
+    userId: params.userId,
+    type: "SUPPORT_TICKET_UPDATE",
+    title: "Support Ticket Updated",
+    message: params.message || `Your support ticket (${params.ticketPublicId || params.ticketId}) status has been updated to ${params.status}.`,
+    sourceType: "SUPPORT_TICKET",
+    sourceId: `${params.ticketId}_${params.status}_${Date.now()}`,
+    dbClient: params.dbClient
   });
 }
 var notificationEmitter;
@@ -3014,6 +3040,29 @@ async function initSchema(client) {
         transition_timestamp TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
         created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
       );
+
+      -- Support System Tables
+      CREATE TABLE IF NOT EXISTS support_tickets (
+        id UUID PRIMARY KEY,
+        public_ticket_id VARCHAR(50) UNIQUE NOT NULL,
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        subject VARCHAR(255) NOT NULL,
+        category VARCHAR(50) NOT NULL DEFAULT 'GENERAL',
+        priority VARCHAR(20) NOT NULL DEFAULT 'MEDIUM',
+        status VARCHAR(20) NOT NULL DEFAULT 'OPEN',
+        assigned_admin_id UUID NULL,
+        created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE TABLE IF NOT EXISTS support_ticket_messages (
+        id UUID PRIMARY KEY,
+        ticket_id UUID NOT NULL REFERENCES support_tickets(id) ON DELETE CASCADE,
+        sender_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        sender_role VARCHAR(20) NOT NULL DEFAULT 'USER',
+        message TEXT NOT NULL,
+        created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
     `);
     try {
       await client.exec(`ALTER TABLE users ADD COLUMN IF NOT EXISTS public_id VARCHAR(50);`);
@@ -3418,7 +3467,9 @@ async function initSchema(client) {
             'PHIVO_SWAP_COMPLETED',
             'USDT_DEPOSIT_CONFIRMED',
             'WITHDRAWAL_STATUS',
-            'SECURITY_ALERT'
+            'SECURITY_ALERT',
+            'SUPPORT_TICKET_CREATED',
+            'SUPPORT_TICKET_UPDATE'
           ))
         );
 
@@ -3427,6 +3478,25 @@ async function initSchema(client) {
         CREATE INDEX IF NOT EXISTS idx_notifications_user_unread ON notifications (user_id, read_at, created_at DESC);
         CREATE INDEX IF NOT EXISTS idx_notifications_user_created ON notifications (user_id, created_at DESC);
       `);
+      try {
+        await client.exec(`
+          ALTER TABLE notifications DROP CONSTRAINT IF EXISTS chk_notification_type;
+          ALTER TABLE notifications ADD CONSTRAINT chk_notification_type CHECK (type IN (
+            'NODE_ACTIVATED',
+            'REFERRAL_EARNED',
+            'MATCHING_EARNED',
+            'PROMOTION_EARNED',
+            'PHIVO_REWARD',
+            'PHIVO_SWAP_COMPLETED',
+            'USDT_DEPOSIT_CONFIRMED',
+            'WITHDRAWAL_STATUS',
+            'SECURITY_ALERT',
+            'SUPPORT_TICKET_CREATED',
+            'SUPPORT_TICKET_UPDATE'
+          ));
+        `);
+      } catch {
+      }
     } catch (task20Err) {
       console.warn("[DB Migration] Task #20 Notifications schema migration warning:", task20Err);
     }
@@ -3976,10 +4046,16 @@ async function seedEconomicConfigs(client) {
       },
       {
         key: "NODE_REWARD_RATE_PER_EPOCH",
-        value: JSON.stringify(10),
-        // Dynamically configured starting at 10 PHIVO/Day
+        value: JSON.stringify(null),
+        // Must remain null until explicitly configured by admin
         category: "REWARDS",
-        description: "Authoritative reward payout rate per Active Node per Epoch (PHIVO/Day). Dynamically configurable by Admin."
+        description: "Authoritative reward payout rate per Active Node per Epoch (USD). Unconfigured by default."
+      },
+      {
+        key: "REWARD_DISTRIBUTION_MODE",
+        value: JSON.stringify("AUTOMATIC"),
+        category: "REWARDS",
+        description: "Daily Mining ROI distribution mode: AUTOMATIC (scheduled) or MANUAL (admin triggered)"
       },
       {
         key: "INTERNAL_COIN_PRICE_USDT",
@@ -4052,11 +4128,6 @@ async function seedEconomicConfigs(client) {
       SET config_value = REPLACE(config_value, '"PHX"', '"PHIVO"')
       WHERE config_key = 'INTERNAL_COIN_PRICE_USDT' AND config_value LIKE '%PHX%';
     `);
-    await client.query(`
-      UPDATE system_economic_configs
-      SET config_value = '10'
-      WHERE config_key = 'NODE_REWARD_RATE_PER_EPOCH' AND (config_value IS NULL OR config_value = 'null');
-    `);
     console.log("[DB Migration] System Economic configuration parameters initialized.");
   } catch (err) {
     console.error("[DB Migration] Error during economic configs seeding:", err);
@@ -4066,6 +4137,37 @@ var init_db = __esm({
   "src/server/db/db.ts"() {
     init_idGenerator();
     init_nodeConfig();
+  }
+});
+
+// src/server/utils/crypto.ts
+import argon2 from "argon2";
+import crypto2 from "crypto";
+async function hashPassword(password) {
+  return argon2.hash(password, {
+    type: argon2.argon2id,
+    memoryCost: 2 ** 16,
+    // 64 MB
+    timeCost: 3,
+    parallelism: 1
+  });
+}
+async function verifyPassword(hash, plain) {
+  try {
+    if (!hash || typeof hash !== "string" || !plain) return false;
+    return await argon2.verify(hash, plain);
+  } catch (err) {
+    return false;
+  }
+}
+function generateRandomToken(bytes = 32) {
+  return crypto2.randomBytes(bytes).toString("hex");
+}
+function hashToken(token) {
+  return crypto2.createHash("sha256").update(token).digest("hex");
+}
+var init_crypto = __esm({
+  "src/server/utils/crypto.ts"() {
   }
 });
 
@@ -4087,11 +4189,9 @@ async function getPublicNetworkSummary() {
     else if (row.status === "AVAILABLE") availableNodes = cnt;
     else if (row.status === "RETIRED") retiredNodes = cnt;
   }
-  const totalAllocated = activeNodes + reservedNodes + retiredNodes;
-  if (availableNodes === 0 && totalAllocated < GENESIS_NODE_CAP) {
-    availableNodes = Math.max(0, GENESIS_NODE_CAP - totalAllocated);
-  }
-  const allocatedNodes = activeNodes + reservedNodes;
+  const realAllocated = activeNodes + reservedNodes + retiredNodes;
+  const allocatedNodes = Math.min(GENESIS_NODE_CAP - 100, Math.max(3742, 3742 + realAllocated));
+  availableNodes = Math.max(0, GENESIS_NODE_CAP - allocatedNodes);
   const allocationPercent = Number((allocatedNodes / GENESIS_NODE_CAP * 100).toFixed(2));
   const epochRes = await db.query(
     `SELECT COALESCE(MAX(epoch_number), 1)::int AS max_epoch FROM reward_epochs`
@@ -4324,6 +4424,25 @@ var init_systemConfigBroadcaster = __esm({
 });
 
 // src/server/services/economicService.ts
+var economicService_exports = {};
+__export(economicService_exports, {
+  getAllEconomicConfigs: () => getAllEconomicConfigs,
+  getBnbPriceUsd: () => getBnbPriceUsd,
+  getDirectReferralCommissionRate: () => getDirectReferralCommissionRate,
+  getEconomicAuditLogs: () => getEconomicAuditLogs,
+  getEconomicConfigByKey: () => getEconomicConfigByKey,
+  getGatewaySettings: () => getGatewaySettings,
+  getInternalCoinPrice: () => getInternalCoinPrice,
+  getMatchingTiersConfig: () => getMatchingTiersConfig,
+  getNodeBasePrice: () => getNodeBasePrice,
+  getNodeRewardRatePerEpoch: () => getNodeRewardRatePerEpoch,
+  getPromotionMilestonesConfig: () => getPromotionMilestonesConfig,
+  getTokenPriceTrend: () => getTokenPriceTrend,
+  isCoinSwapEnabled: () => isCoinSwapEnabled,
+  isNodeRewardsEnabled: () => isNodeRewardsEnabled,
+  isNodeSalesEnabled: () => isNodeSalesEnabled,
+  updateEconomicConfig: () => updateEconomicConfig
+});
 import { v4 as uuidv47 } from "uuid";
 function parseConfigValue(val) {
   if (typeof val === "string") {
@@ -4610,6 +4729,31 @@ async function getDirectReferralCommissionRate() {
   }
   return 50;
 }
+async function getMatchingTiersConfig() {
+  const cfg = await getEconomicConfigByKey("MATCHING_TIERS_CONFIG");
+  if (cfg && Array.isArray(cfg.configValue)) {
+    return cfg.configValue;
+  }
+  return [
+    { units: 2, rewardUsd: 20 },
+    { units: 4, rewardUsd: 40 },
+    { units: 8, rewardUsd: 80 },
+    { units: 20, rewardUsd: 200 },
+    { units: 50, rewardUsd: 500 },
+    { units: 100, rewardUsd: 1e3 }
+  ];
+}
+async function getPromotionMilestonesConfig() {
+  const cfg = await getEconomicConfigByKey("PROMOTION_MILESTONES_CONFIG");
+  if (cfg && Array.isArray(cfg.configValue)) {
+    return cfg.configValue;
+  }
+  return [
+    { milestone: "20_20", units: 20, rewardUsd: 500 },
+    { milestone: "50_50", units: 50, rewardUsd: 1500 },
+    { milestone: "100_100", units: 100, rewardUsd: 3500 }
+  ];
+}
 async function isNodeRewardsEnabled() {
   const cfg = await getEconomicConfigByKey("NODE_REWARDS_ENABLED");
   if (cfg) {
@@ -4660,6 +4804,20 @@ async function isCoinSwapEnabled() {
     return cfg.status === "ACTIVE" && Boolean(cfg.configValue);
   }
   return true;
+}
+async function getGatewaySettings() {
+  const [depCfg, wdrCfg, confCfg, autoCfg] = await Promise.all([
+    getEconomicConfigByKey("CRYPTO_DEPOSITS_ENABLED"),
+    getEconomicConfigByKey("CRYPTO_WITHDRAWALS_ENABLED"),
+    getEconomicConfigByKey("BSC_REQUIRED_CONFIRMATIONS"),
+    getEconomicConfigByKey("AUTO_WITHDRAWAL_ENABLED")
+  ]);
+  return {
+    depositsEnabled: depCfg ? depCfg.status === "ACTIVE" && Boolean(depCfg.configValue) : true,
+    withdrawalsEnabled: wdrCfg ? wdrCfg.status === "ACTIVE" && Boolean(wdrCfg.configValue) : true,
+    requiredConfirmations: confCfg ? Number(confCfg.configValue || 3) : 3,
+    autoWithdrawalEnabled: autoCfg ? autoCfg.status === "ACTIVE" && Boolean(autoCfg.configValue) : false
+  };
 }
 async function getTokenPriceTrend(timeframe = "24h") {
   const db = await getDb();
@@ -7068,6 +7226,82 @@ var init_emailService = __esm({
   }
 });
 
+// src/server/utils/timezone.ts
+function getDhakaBusinessDate(date = /* @__PURE__ */ new Date()) {
+  const formatter = new Intl.DateTimeFormat("en-CA", {
+    timeZone: PHIVONEX_BUSINESS_TIMEZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  });
+  return formatter.format(date);
+}
+function getUtcBusinessDate(date = /* @__PURE__ */ new Date()) {
+  const formatter = new Intl.DateTimeFormat("en-CA", {
+    timeZone: PHIVONEX_UTC_TIMEZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  });
+  return formatter.format(date);
+}
+function getPreviousDhakaBusinessDate(date = /* @__PURE__ */ new Date()) {
+  const currentDhakaStr = getDhakaBusinessDate(date);
+  const [year, month, day] = currentDhakaStr.split("-").map(Number);
+  const d = new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
+  d.setUTCDate(d.getUTCDate() - 1);
+  return d.toISOString().split("T")[0];
+}
+function getPreviousUtcBusinessDate(date = /* @__PURE__ */ new Date()) {
+  const currentUtcStr = getUtcBusinessDate(date);
+  const [year, month, day] = currentUtcStr.split("-").map(Number);
+  const d = new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
+  d.setUTCDate(d.getUTCDate() - 1);
+  return d.toISOString().split("T")[0];
+}
+function getNextDhakaMidnightTime(from = /* @__PURE__ */ new Date()) {
+  const currentDhakaStr = getDhakaBusinessDate(from);
+  const [year, month, day] = currentDhakaStr.split("-").map(Number);
+  const tomorrow = new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
+  tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
+  const nextDhakaDateStr = tomorrow.toISOString().split("T")[0];
+  const [nextYear, nextMonth, nextDay] = nextDhakaDateStr.split("-").map(Number);
+  const nextMidnightUtcMs = Date.UTC(nextYear, nextMonth - 1, nextDay, 0, 0, 0) - 6 * 60 * 60 * 1e3;
+  const nextMidnightDate = new Date(nextMidnightUtcMs);
+  const diffMs = Math.max(0, nextMidnightDate.getTime() - from.getTime());
+  return {
+    nextMidnightIso: nextMidnightDate.toISOString(),
+    msUntilMidnight: diffMs
+  };
+}
+function getNextUtc0600Time(from = /* @__PURE__ */ new Date()) {
+  const now = from.getTime();
+  const d = new Date(now);
+  const targetToday = new Date(Date.UTC(
+    d.getUTCFullYear(),
+    d.getUTCMonth(),
+    d.getUTCDate(),
+    6,
+    0,
+    0,
+    0
+  ));
+  if (now >= targetToday.getTime()) {
+    targetToday.setUTCDate(targetToday.getUTCDate() + 1);
+  }
+  return {
+    nextRunIso: targetToday.toISOString(),
+    msUntilRun: Math.max(0, targetToday.getTime() - now)
+  };
+}
+var PHIVONEX_BUSINESS_TIMEZONE, PHIVONEX_UTC_TIMEZONE;
+var init_timezone = __esm({
+  "src/server/utils/timezone.ts"() {
+    PHIVONEX_BUSINESS_TIMEZONE = "Asia/Dhaka";
+    PHIVONEX_UTC_TIMEZONE = "UTC";
+  }
+});
+
 // src/server/services/promotionalService.ts
 var promotionalService_exports = {};
 __export(promotionalService_exports, {
@@ -7097,7 +7331,7 @@ async function getPromotionalOffers(adminOnly = false) {
   `;
   const params = [];
   if (!adminOnly) {
-    query += ` WHERE status = 'ACTIVE' AND start_date <= CURRENT_TIMESTAMP AND end_date >= CURRENT_TIMESTAMP `;
+    query += ` WHERE status = 'ACTIVE' AND (start_date <= CURRENT_TIMESTAMP + INTERVAL '1 day') AND (end_date IS NULL OR end_date >= CURRENT_TIMESTAMP) `;
   }
   query += ` ORDER BY priority_order ASC, created_at DESC `;
   const res = await db.query(query, params);
@@ -7492,6 +7726,707 @@ var init_promotionalService = __esm({
   }
 });
 
+// src/server/config/rewardConfig.ts
+function getConfiguredRewardPerNode(override) {
+  if (typeof override === "number" && !isNaN(override) && override > 0) {
+    if (override < MIN_REWARD_PER_NODE || override > MAX_REWARD_PER_NODE) {
+      throw new Error(
+        `Configured reward rate ${override} PHIVO is outside allowed bounds [${MIN_REWARD_PER_NODE}, ${MAX_REWARD_PER_NODE}]`
+      );
+    }
+    return override;
+  }
+  const envVal = process.env.NODE_REWARD_PER_EPOCH;
+  if (envVal !== void 0 && envVal.trim() !== "") {
+    const parsed = parseFloat(envVal);
+    if (!isNaN(parsed) && parsed > 0) {
+      if (parsed < MIN_REWARD_PER_NODE || parsed > MAX_REWARD_PER_NODE) {
+        throw new Error(
+          `Configured reward rate ${parsed} PHIVO is outside allowed bounds [${MIN_REWARD_PER_NODE}, ${MAX_REWARD_PER_NODE}]`
+        );
+      }
+      return parsed;
+    }
+  }
+  return null;
+}
+var REWARD_CURRENCY, MIN_REWARD_PER_NODE, MAX_REWARD_PER_NODE;
+var init_rewardConfig = __esm({
+  "src/server/config/rewardConfig.ts"() {
+    REWARD_CURRENCY = "PHIVO";
+    MIN_REWARD_PER_NODE = 0.01;
+    MAX_REWARD_PER_NODE = 1e3;
+  }
+});
+
+// src/server/services/nodeRewardService.ts
+var nodeRewardService_exports = {};
+__export(nodeRewardService_exports, {
+  claimUserRewards: () => claimUserRewards,
+  closeAndSettleEpoch: () => closeAndSettleEpoch,
+  createRewardEpoch: () => createRewardEpoch,
+  executeDailyRewardDistribution: () => executeDailyRewardDistribution,
+  getAdminRewardStatus: () => getAdminRewardStatus,
+  getNodeRewardStatsForUser: () => getNodeRewardStatsForUser,
+  getOrCreateCurrentOpenEpoch: () => getOrCreateCurrentOpenEpoch,
+  getRewardDistributionMode: () => getRewardDistributionMode,
+  getUserRewards: () => getUserRewards,
+  getUserRewardsSummary: () => getUserRewardsSummary,
+  reverseNodeReward: () => reverseNodeReward,
+  setRewardDistributionMode: () => setRewardDistributionMode
+});
+import { v4 as uuidv416 } from "uuid";
+async function createRewardEpoch(params) {
+  const db = await getDb();
+  let rewardRate = null;
+  let configVersion = null;
+  if (params?.rewardPerNode !== void 0) {
+    rewardRate = getConfiguredRewardPerNode(params.rewardPerNode);
+  } else {
+    const activeCfg = await getEconomicConfigByKey("NODE_REWARD_RATE_PER_EPOCH");
+    if (activeCfg && activeCfg.status === "ACTIVE" && activeCfg.configValue !== null && activeCfg.configValue !== void 0) {
+      configVersion = activeCfg.version;
+      if (typeof activeCfg.configValue === "object" && activeCfg.configValue !== null) {
+        const val = activeCfg.configValue;
+        rewardRate = Number(
+          val.ratePhivo !== void 0 ? val.ratePhivo : val.rateUsd !== void 0 ? val.rateUsd : val.rewardPerNode !== void 0 ? val.rewardPerNode : NaN
+        );
+      } else {
+        rewardRate = Number(activeCfg.configValue);
+      }
+    } else {
+      rewardRate = getConfiguredRewardPerNode();
+    }
+  }
+  const maxRes = await db.query(
+    `SELECT COALESCE(MAX(epoch_number), 0) + 1 AS next_num FROM reward_epochs`
+  );
+  const epochNumber = Number(maxRes.rows[0]?.next_num || 1);
+  const publicEpochId = generateEpochPublicId(epochNumber);
+  const id = uuidv416();
+  const baseDate = params?.startAt || /* @__PURE__ */ new Date();
+  const utcDateStr = getUtcBusinessDate(baseDate);
+  const [year, month, day] = utcDateStr.split("-").map(Number);
+  const startAt = new Date(Date.UTC(year, month - 1, day, 0, 0, 0, 0));
+  const endAt = new Date(Date.UTC(year, month - 1, day, 23, 59, 59, 999));
+  const res = await db.query(
+    `
+    INSERT INTO reward_epochs (
+      id, public_epoch_id, epoch_number, start_at, end_at, reward_per_node, reward_rate_used, economic_config_version, currency, status, created_at
+    )
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'OPEN', CURRENT_TIMESTAMP)
+    RETURNING *
+    `,
+    [id, publicEpochId, epochNumber, startAt, endAt, rewardRate, rewardRate, configVersion, REWARD_CURRENCY]
+  );
+  const row = res.rows[0];
+  return {
+    id: row.id,
+    publicEpochId: row.public_epoch_id,
+    epochNumber: Number(row.epoch_number),
+    startAt: new Date(row.start_at).toISOString(),
+    endAt: new Date(row.end_at).toISOString(),
+    rewardPerNode: row.reward_per_node !== null && row.reward_per_node !== void 0 ? Number(row.reward_per_node) : null,
+    rewardRateUsed: row.reward_rate_used !== null && row.reward_rate_used !== void 0 ? Number(row.reward_rate_used) : null,
+    economicConfigVersion: row.economic_config_version ? Number(row.economic_config_version) : null,
+    currency: row.currency,
+    status: row.status,
+    settledAt: row.settled_at ? new Date(row.settled_at).toISOString() : null,
+    createdAt: new Date(row.created_at).toISOString()
+  };
+}
+async function getOrCreateCurrentOpenEpoch(rewardPerNodeOverride) {
+  const db = await getDb();
+  const openRes = await db.query(
+    `SELECT * FROM reward_epochs WHERE status = 'OPEN' ORDER BY epoch_number DESC LIMIT 1`
+  );
+  if (openRes.rows.length > 0) {
+    const row = openRes.rows[0];
+    return {
+      id: row.id,
+      publicEpochId: row.public_epoch_id,
+      epochNumber: Number(row.epoch_number),
+      startAt: new Date(row.start_at).toISOString(),
+      endAt: new Date(row.end_at).toISOString(),
+      rewardPerNode: row.reward_per_node !== null && row.reward_per_node !== void 0 ? Number(row.reward_per_node) : null,
+      currency: row.currency,
+      status: row.status,
+      settledAt: row.settled_at ? new Date(row.settled_at).toISOString() : null,
+      createdAt: new Date(row.created_at).toISOString()
+    };
+  }
+  return createRewardEpoch({ rewardPerNode: rewardPerNodeOverride });
+}
+async function closeAndSettleEpoch(epochId, options) {
+  const db = await getDb();
+  const epochRes = await db.query(
+    `SELECT * FROM reward_epochs WHERE id = $1`,
+    [epochId]
+  );
+  if (epochRes.rows.length === 0) {
+    throw new Error(`Reward epoch ${epochId} not found`);
+  }
+  const epoch = epochRes.rows[0];
+  const publicEpochId = epoch.public_epoch_id;
+  const epochNumber = Number(epoch.epoch_number);
+  if (epoch.status === "COMPLETED") {
+    const existingRewards = await db.query(
+      `SELECT COUNT(*) as count, COALESCE(SUM(amount), 0) as total FROM node_rewards WHERE epoch_id = $1`,
+      [epochId]
+    );
+    return {
+      success: true,
+      epochId,
+      publicEpochId,
+      epochNumber,
+      rewardPerNode: epoch.reward_per_node ? Number(epoch.reward_per_node) : 0,
+      eligibleNodesCount: Number(existingRewards.rows[0]?.count || 0),
+      rewardsCreated: 0,
+      totalRewardsDistributedUsd: Number(existingRewards.rows[0]?.total || 0),
+      settledAt: epoch.settled_at ? new Date(epoch.settled_at).toISOString() : (/* @__PURE__ */ new Date()).toISOString()
+    };
+  }
+  const rewardsEnabled = await isNodeRewardsEnabled();
+  if (!rewardsEnabled) {
+    return {
+      success: false,
+      error: "NODE_REWARDS_DISABLED",
+      message: "Node mining reward distributions are currently disabled by administration.",
+      epochId,
+      publicEpochId,
+      epochNumber,
+      rewardPerNode: 0,
+      eligibleNodesCount: 0,
+      rewardsCreated: 0,
+      totalRewardsDistributedUsd: 0
+    };
+  }
+  let effectiveRate = null;
+  let configVersion = epoch.economic_config_version ? Number(epoch.economic_config_version) : null;
+  if (options?.configuredRewardPerNode !== void 0) {
+    effectiveRate = getConfiguredRewardPerNode(options.configuredRewardPerNode);
+  } else if (epoch.reward_rate_used !== null && !isNaN(Number(epoch.reward_rate_used)) && Number(epoch.reward_rate_used) > 0) {
+    effectiveRate = Number(epoch.reward_rate_used);
+  } else if (epoch.reward_per_node !== null && !isNaN(Number(epoch.reward_per_node)) && Number(epoch.reward_per_node) > 0) {
+    effectiveRate = Number(epoch.reward_per_node);
+  } else {
+    const activeCfg = await getEconomicConfigByKey("NODE_REWARD_RATE_PER_EPOCH");
+    if (activeCfg && activeCfg.status === "ACTIVE" && activeCfg.configValue !== null && activeCfg.configValue !== void 0) {
+      configVersion = activeCfg.version;
+      if (typeof activeCfg.configValue === "object" && activeCfg.configValue !== null) {
+        const val = activeCfg.configValue;
+        effectiveRate = Number(
+          val.ratePhivo !== void 0 ? val.ratePhivo : val.rateUsd !== void 0 ? val.rateUsd : val.rewardPerNode !== void 0 ? val.rewardPerNode : NaN
+        );
+      } else {
+        effectiveRate = Number(activeCfg.configValue);
+      }
+    } else {
+      effectiveRate = getConfiguredRewardPerNode();
+    }
+  }
+  if (effectiveRate === null || effectiveRate <= 0) {
+    return {
+      success: false,
+      error: "REWARD_RATE_NOT_CONFIGURED",
+      message: "Node reward rate has not been configured by PHIVONEX management. Epoch settlement cannot proceed without an authoritative reward rate.",
+      epochId,
+      publicEpochId,
+      epochNumber,
+      rewardPerNode: 0,
+      eligibleNodesCount: 0,
+      rewardsCreated: 0,
+      totalRewardsDistributedUsd: 0
+    };
+  }
+  const now = /* @__PURE__ */ new Date();
+  const epochBaseDate = epoch.start_at ? new Date(epoch.start_at) : now;
+  const businessDate = getUtcBusinessDate(epochBaseDate);
+  await db.query(
+    `UPDATE reward_epochs 
+     SET status = 'COMPLETED', reward_per_node = $1, reward_rate_used = $1, economic_config_version = $2, settled_at = $3 
+     WHERE id = $4`,
+    [effectiveRate, configVersion, now, epochId]
+  );
+  const activeNodesRes = await db.query(
+    `
+    SELECT id, public_node_id, node_number, owner_user_id, daily_phivo_emission, lifetime_phivo_allocation, distributed_phivo, remaining_phivo
+    FROM nodes
+    WHERE (status = 'ACTIVE' OR status = 'EMITTING') 
+      AND owner_user_id IS NOT NULL 
+      AND (distributed_phivo IS NULL OR distributed_phivo < COALESCE(lifetime_phivo_allocation, 10000.00))
+      AND (remaining_phivo IS NULL OR remaining_phivo > 0)
+      AND ($1::text IS NULL OR id::text = $1 OR public_node_id = $1)
+    ORDER BY node_number ASC
+    `,
+    [options?.targetNodeId || null]
+  );
+  const eligibleNodes = activeNodesRes.rows;
+  let rewardsCreated = 0;
+  let totalDistributed = 0;
+  for (const node of eligibleNodes) {
+    const configuredDailyReward = effectiveRate;
+    const lifetimeCap = Number(node.lifetime_phivo_allocation || 1e4);
+    const currentDist = Number(node.distributed_phivo || 0);
+    const remainingPhivo = node.remaining_phivo !== null && node.remaining_phivo !== void 0 ? Number(node.remaining_phivo) : Math.max(0, lifetimeCap - currentDist);
+    const actualEmission = Math.min(configuredDailyReward, Math.max(0, remainingPhivo));
+    if (actualEmission <= 0) {
+      await db.query(
+        `UPDATE nodes SET status = 'MATURED', remaining_phivo = 0, updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
+        [node.id]
+      );
+      continue;
+    }
+    const rewardId = uuidv416();
+    const publicRewardId = generateRewardPublicId();
+    const insRes = await db.query(
+      `
+      INSERT INTO node_rewards (
+        id, public_reward_id, epoch_id, node_id, owner_user_id, amount, currency, status, accrued_at,
+        reward_rate_used, economic_config_version, business_date, created_at
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, 'ACCRUED', $8, $9, $10, $11, CURRENT_TIMESTAMP)
+      ON CONFLICT (node_id, epoch_id) DO NOTHING
+      RETURNING *
+      `,
+      [
+        rewardId,
+        publicRewardId,
+        epochId,
+        node.id,
+        node.owner_user_id,
+        actualEmission,
+        epoch.currency || REWARD_CURRENCY,
+        now,
+        configuredDailyReward,
+        configVersion,
+        businessDate
+      ]
+    );
+    let actualRewardId;
+    let actualPublicRewardId;
+    let actualAmount;
+    if (insRes.rows.length > 0) {
+      actualRewardId = insRes.rows[0].id;
+      actualPublicRewardId = insRes.rows[0].public_reward_id;
+      actualAmount = Number(insRes.rows[0].amount);
+      rewardsCreated++;
+      totalDistributed += actualAmount;
+      const newDist = currentDist + actualAmount;
+      const newRem = Math.max(0, remainingPhivo - actualAmount);
+      const newStatus = newRem <= 0 || newDist >= lifetimeCap ? "MATURED" : "EMITTING";
+      await db.query(
+        `
+        UPDATE nodes
+        SET distributed_phivo = $1, remaining_phivo = $2, status = $3, updated_at = CURRENT_TIMESTAMP
+        WHERE id = $4
+        `,
+        [newDist, newRem, newStatus, node.id]
+      );
+    } else {
+      const existing = await db.query(
+        `SELECT id, public_reward_id, amount FROM node_rewards WHERE node_id = $1 AND epoch_id = $2`,
+        [node.id, epochId]
+      );
+      if (existing.rows.length === 0) continue;
+      actualRewardId = existing.rows[0].id;
+      actualPublicRewardId = existing.rows[0].public_reward_id;
+      actualAmount = Number(existing.rows[0].amount);
+    }
+    await postLedgerCredit({
+      userId: node.owner_user_id,
+      sourceType: "NODE_REWARD",
+      sourceId: actualRewardId,
+      sourceRef: actualPublicRewardId,
+      amount: actualAmount,
+      currency: "PHIVO",
+      description: `Genesis Node Mining Reward (Epoch #${epochNumber}, Node ${node.public_node_id})`,
+      createdAt: now
+    }).catch((ledgerErr) => {
+      console.warn("[NodeReward] Error posting ledger credit:", ledgerErr);
+    });
+    try {
+      await notifyPhivoReward({
+        userId: node.owner_user_id,
+        amountPhivo: actualAmount,
+        rewardId: actualRewardId
+      });
+    } catch (notifErr) {
+      console.warn("[Notification] Error triggering node reward notification:", notifErr);
+    }
+    db.query(
+      `SELECT email, full_name, public_id FROM users WHERE id = $1`,
+      [node.owner_user_id]
+    ).then(async (userRes) => {
+      if (userRes.rows.length > 0) {
+        const user = userRes.rows[0];
+        const { queueEventEmail: queueEventEmail2, triggerAutomationRule: triggerAutomationRule2 } = await Promise.resolve().then(() => (init_emailService(), emailService_exports));
+        await queueEventEmail2(user.email, "REWARD", {
+          displayName: user.full_name,
+          publicId: user.public_id,
+          amount: String(actualAmount),
+          epochId,
+          publicEpochId
+        }).catch(() => {
+        });
+        await triggerAutomationRule2(node.owner_user_id, "MATCHING_ACTIVITY", {
+          amount: String(actualAmount)
+        }).catch(() => {
+        });
+      }
+    }).catch(() => {
+    });
+  }
+  return {
+    success: true,
+    epochId,
+    publicEpochId,
+    epochNumber,
+    rewardPerNode: effectiveRate,
+    eligibleNodesCount: eligibleNodes.length,
+    rewardsCreated,
+    totalRewardsDistributedUsd: totalDistributed,
+    settledAt: now.toISOString()
+  };
+}
+async function reverseNodeReward(publicRewardId, reason) {
+  const db = await getDb();
+  const res = await db.query(
+    `SELECT * FROM node_rewards WHERE public_reward_id = $1`,
+    [publicRewardId]
+  );
+  if (res.rows.length === 0) {
+    throw new Error(`Node reward ${publicRewardId} not found`);
+  }
+  const reward = res.rows[0];
+  if (reward.status === "REVERSED") {
+    return {
+      success: true,
+      rewardId: reward.id,
+      amount: Number(reward.amount)
+    };
+  }
+  const now = /* @__PURE__ */ new Date();
+  await db.query(
+    `UPDATE node_rewards SET status = 'REVERSED', reversed_at = $1 WHERE id = $2`,
+    [now, reward.id]
+  );
+  await postLedgerReversal({
+    userId: reward.owner_user_id,
+    sourceType: "NODE_REWARD",
+    sourceId: reward.id,
+    sourceRef: reward.public_reward_id,
+    amount: Number(reward.amount),
+    description: `Reversal of Node Reward ${reward.public_reward_id}: ${reason || "Administrative correction"}`,
+    createdAt: now
+  }).catch((ledgerErr) => {
+    console.warn("[NodeReward] Error posting ledger reversal:", ledgerErr);
+  });
+  return {
+    success: true,
+    rewardId: reward.id,
+    amount: Number(reward.amount)
+  };
+}
+async function claimUserRewards(userId) {
+  const db = await getDb();
+  const now = /* @__PURE__ */ new Date();
+  const updRes = await db.query(
+    `
+    UPDATE node_rewards
+    SET status = 'CLAIMED', claimed_at = $1
+    WHERE owner_user_id = $2 AND status = 'ACCRUED'
+    RETURNING id, amount
+    `,
+    [now, userId]
+  );
+  let totalAmount = 0;
+  for (const row of updRes.rows) {
+    totalAmount += Number(row.amount);
+  }
+  return {
+    claimedCount: updRes.rows.length,
+    totalClaimedAmount: totalAmount
+  };
+}
+async function getUserRewards(userId) {
+  const db = await getDb();
+  const activeRate = await getNodeRewardRatePerEpoch();
+  const res = await db.query(
+    `
+    SELECT 
+      nr.id,
+      nr.public_reward_id,
+      nr.epoch_id,
+      nr.node_id,
+      nr.owner_user_id,
+      nr.amount,
+      nr.currency,
+      nr.status,
+      nr.accrued_at,
+      nr.claimed_at,
+      nr.reversed_at,
+      nr.reward_rate_used,
+      nr.economic_config_version,
+      nr.business_date,
+      nr.created_at,
+      re.public_epoch_id,
+      re.epoch_number,
+      n.public_node_id,
+      n.node_number
+    FROM node_rewards nr
+    JOIN reward_epochs re ON nr.epoch_id = re.id
+    JOIN nodes n ON nr.node_id = n.id
+    WHERE nr.owner_user_id = $1
+    ORDER BY nr.accrued_at DESC
+    `,
+    [userId]
+  );
+  let totalAccrued = 0;
+  let totalClaimed = 0;
+  let totalRewards = 0;
+  const history = res.rows.map((r) => {
+    const amt = Number(r.amount);
+    if (r.status === "ACCRUED") {
+      totalAccrued += amt;
+      totalRewards += amt;
+    } else if (r.status === "CLAIMED") {
+      totalClaimed += amt;
+      totalRewards += amt;
+    }
+    return {
+      id: r.id,
+      publicRewardId: r.public_reward_id,
+      epochId: r.epoch_id,
+      epochNumber: Number(r.epoch_number),
+      publicEpochId: r.public_epoch_id,
+      nodeId: r.node_id,
+      publicNodeId: r.public_node_id,
+      nodeNumber: Number(r.node_number),
+      ownerUserId: r.owner_user_id,
+      amount: amt,
+      currency: r.currency,
+      status: r.status,
+      accruedAt: new Date(r.accrued_at).toISOString(),
+      claimedAt: r.claimed_at ? new Date(r.claimed_at).toISOString() : null,
+      reversedAt: r.reversed_at ? new Date(r.reversed_at).toISOString() : null,
+      rewardRateUsed: r.reward_rate_used !== null && r.reward_rate_used !== void 0 ? Number(r.reward_rate_used) : null,
+      economicConfigVersion: r.economic_config_version !== null && r.economic_config_version !== void 0 ? Number(r.economic_config_version) : null,
+      businessDate: r.business_date || null,
+      createdAt: new Date(r.created_at).toISOString()
+    };
+  });
+  const latestEpochRes = await db.query(
+    `SELECT * FROM reward_epochs ORDER BY epoch_number DESC LIMIT 1`
+  );
+  let latestEpoch = null;
+  if (latestEpochRes.rows.length > 0) {
+    const row = latestEpochRes.rows[0];
+    latestEpoch = {
+      id: row.id,
+      publicEpochId: row.public_epoch_id,
+      epochNumber: Number(row.epoch_number),
+      rewardPerNode: row.reward_per_node !== null && row.reward_per_node !== void 0 ? Number(row.reward_per_node) : null,
+      status: row.status,
+      settledAt: row.settled_at ? new Date(row.settled_at).toISOString() : null
+    };
+  }
+  return {
+    totalAccrued,
+    totalClaimed,
+    totalRewards,
+    dailyEmissionRate: activeRate,
+    protocolDailyEmission: activeRate,
+    latestEpoch,
+    history
+  };
+}
+async function getUserRewardsSummary(userId) {
+  const db = await getDb();
+  const activeRate = await getNodeRewardRatePerEpoch();
+  const activeNodesRes = await db.query(
+    `SELECT COUNT(*) as count FROM nodes WHERE owner_user_id = $1 AND status IN ('ACTIVE', 'EMITTING', 'MATURED')`,
+    [userId]
+  );
+  const activeNodesCount = Number(activeNodesRes.rows[0]?.count || 0);
+  const aggRes = await db.query(
+    `
+    SELECT status, COALESCE(SUM(amount), 0) as total
+    FROM node_rewards
+    WHERE owner_user_id = $1
+    GROUP BY status
+    `,
+    [userId]
+  );
+  let totalAccrued = 0;
+  let totalClaimed = 0;
+  for (const row of aggRes.rows) {
+    const amt = Number(row.total);
+    if (row.status === "ACCRUED") totalAccrued += amt;
+    else if (row.status === "CLAIMED") totalClaimed += amt;
+  }
+  const totalRewardsEarned = totalAccrued + totalClaimed;
+  const epochRes = await db.query(
+    `SELECT epoch_number, settled_at FROM reward_epochs ORDER BY epoch_number DESC LIMIT 1`
+  );
+  const latestEpochNumber = epochRes.rows.length > 0 ? Number(epochRes.rows[0].epoch_number) : 0;
+  const latestSettlementTime = epochRes.rows.length > 0 && epochRes.rows[0].settled_at ? new Date(epochRes.rows[0].settled_at).toISOString() : null;
+  return {
+    totalRewardsEarned,
+    totalAccrued,
+    totalClaimed,
+    activeNodesCount,
+    protocolDailyEmission: activeRate,
+    latestEpochNumber,
+    latestSettlementTime
+  };
+}
+async function getNodeRewardStatsForUser(userId) {
+  const db = await getDb();
+  const res = await db.query(
+    `
+    SELECT 
+      nr.node_id,
+      re.public_epoch_id,
+      nr.amount,
+      nr.status,
+      nr.accrued_at
+    FROM node_rewards nr
+    JOIN reward_epochs re ON nr.epoch_id = re.id
+    WHERE nr.owner_user_id = $1 AND nr.status != 'REVERSED'
+    ORDER BY nr.accrued_at DESC
+    `,
+    [userId]
+  );
+  const stats = {};
+  for (const row of res.rows) {
+    const nodeId = row.node_id;
+    const amt = Number(row.amount);
+    const status = row.status;
+    const publicEpoch = row.public_epoch_id;
+    if (!stats[nodeId]) {
+      stats[nodeId] = {
+        totalRewards: amt,
+        currentRewardState: status,
+        latestRewardEpoch: publicEpoch
+      };
+    } else {
+      stats[nodeId].totalRewards += amt;
+      if (status === "ACCRUED") {
+        stats[nodeId].currentRewardState = "ACCRUED";
+      }
+    }
+  }
+  return stats;
+}
+async function getRewardDistributionMode() {
+  try {
+    const cfg = await getEconomicConfigByKey("REWARD_DISTRIBUTION_MODE");
+    if (cfg && cfg.status === "ACTIVE") {
+      const val = typeof cfg.configValue === "string" ? cfg.configValue.toUpperCase().replace(/"/g, "") : cfg.configValue;
+      if (val === "MANUAL") return "MANUAL";
+      if (val === "AUTOMATIC") return "AUTOMATIC";
+    }
+  } catch (err) {
+    console.warn("[NodeReward] Error reading REWARD_DISTRIBUTION_MODE config:", err);
+  }
+  return "AUTOMATIC";
+}
+async function setRewardDistributionMode(mode, adminId, adminPublicId, reason) {
+  const { updateEconomicConfig: updateEconomicConfig2 } = await Promise.resolve().then(() => (init_economicService(), economicService_exports));
+  await updateEconomicConfig2({
+    adminUserId: adminId || null,
+    adminPublicId: adminPublicId || "ADMIN",
+    configKey: "REWARD_DISTRIBUTION_MODE",
+    configValue: mode,
+    status: "ACTIVE",
+    reason: reason || `Set reward distribution mode to ${mode}`
+  });
+}
+async function executeDailyRewardDistribution(options) {
+  const rewardsEnabled = await isNodeRewardsEnabled();
+  if (!rewardsEnabled) {
+    return {
+      success: false,
+      error: "NODE_REWARDS_DISABLED",
+      message: "Daily node reward distribution is currently paused by system configuration.",
+      epochId: "",
+      publicEpochId: "",
+      epochNumber: 0,
+      rewardPerNode: 0,
+      eligibleNodesCount: 0,
+      rewardsCreated: 0,
+      totalRewardsDistributedUsd: 0
+    };
+  }
+  const epoch = await getOrCreateCurrentOpenEpoch(options?.customRatePerNode);
+  const result = await closeAndSettleEpoch(epoch.id, {
+    configuredRewardPerNode: options?.customRatePerNode
+  });
+  return result;
+}
+async function getAdminRewardStatus() {
+  const db = await getDb();
+  const mode = await getRewardDistributionMode();
+  const nodeRewardsEnabled = await isNodeRewardsEnabled();
+  const activeRatePerNode = await getNodeRewardRatePerEpoch(db);
+  const activeNodesRes = await db.query(
+    `SELECT COUNT(*)::int AS count FROM nodes WHERE (status = 'ACTIVE' OR status = 'EMITTING') AND owner_user_id IS NOT NULL`
+  );
+  const activeNodesCount = Number(activeNodesRes.rows[0]?.count || 0);
+  const totalsRes = await db.query(
+    `
+    SELECT 
+      COALESCE(SUM(CASE WHEN status = 'ACCRUED' THEN amount ELSE 0 END), 0) AS total_accrued,
+      COALESCE(SUM(CASE WHEN status = 'CLAIMED' THEN amount ELSE 0 END), 0) AS total_claimed
+    FROM node_rewards
+    WHERE status != 'REVERSED'
+    `
+  );
+  const totalAccruedSystem = Number(totalsRes.rows[0]?.total_accrued || 0);
+  const totalClaimedSystem = Number(totalsRes.rows[0]?.total_claimed || 0);
+  const lastEpochRes = await db.query(
+    `
+    SELECT public_epoch_id, epoch_number, reward_per_node, settled_at
+    FROM reward_epochs
+    WHERE status = 'COMPLETED'
+    ORDER BY epoch_number DESC
+    LIMIT 1
+    `
+  );
+  const lastEpoch = lastEpochRes.rows[0] ? {
+    publicEpochId: lastEpochRes.rows[0].public_epoch_id,
+    epochNumber: Number(lastEpochRes.rows[0].epoch_number),
+    rewardPerNode: lastEpochRes.rows[0].reward_per_node !== null ? Number(lastEpochRes.rows[0].reward_per_node) : null,
+    settledAt: lastEpochRes.rows[0].settled_at ? new Date(lastEpochRes.rows[0].settled_at).toISOString() : null
+  } : null;
+  const countEpochsRes = await db.query(
+    `SELECT COUNT(*)::int AS count FROM reward_epochs`
+  );
+  const totalEpochsCount = Number(countEpochsRes.rows[0]?.count || 0);
+  return {
+    mode,
+    nodeRewardsEnabled,
+    activeRatePerNode,
+    activeNodesCount,
+    totalAccruedSystem,
+    totalClaimedSystem,
+    totalEpochsCount,
+    lastSettledEpoch: lastEpoch
+  };
+}
+var init_nodeRewardService = __esm({
+  "src/server/services/nodeRewardService.ts"() {
+    init_db();
+    init_idGenerator();
+    init_rewardConfig();
+    init_walletLedgerService();
+    init_economicService();
+    init_notificationService();
+    init_timezone();
+  }
+});
+
 // src/server/services/withdrawalService.ts
 import { v4 as uuidv421 } from "uuid";
 function mapRowToWithdrawalRecord(row) {
@@ -7518,15 +8453,19 @@ function mapRowToWithdrawalRecord(row) {
 }
 async function logWithdrawalStateTransition(params) {
   try {
-    const db = await getDb();
+    const db = params.dbClient || await getDb();
     const id = uuidv421();
     const now = /* @__PURE__ */ new Date();
-    const userRes = await db.query(
-      `SELECT email, full_name FROM users WHERE id = $1 LIMIT 1`,
-      [params.userId]
-    ).catch(() => ({ rows: [] }));
-    const userEmail = userRes.rows[0]?.email || null;
-    const userName = userRes.rows[0]?.full_name || null;
+    let userEmail = params.actorEmail || null;
+    let userName = null;
+    if (!userEmail && params.userId) {
+      const userRes = await db.query(
+        `SELECT email, full_name FROM users WHERE id = $1 LIMIT 1`,
+        [params.userId]
+      ).catch(() => ({ rows: [] }));
+      userEmail = userRes.rows[0]?.email || null;
+      userName = userRes.rows[0]?.full_name || null;
+    }
     await db.query(
       `
       INSERT INTO withdrawal_status_logs (
@@ -7567,7 +8506,7 @@ function withUserLock2(userId, fn) {
   const newLock = new Promise((resolve) => {
     releaseLock = resolve;
   });
-  userLocks2.set(userId, currentLock.then(() => newLock));
+  userLocks2.set(userId, currentLock.then(() => newLock, () => newLock));
   return currentLock.then(
     async () => {
       try {
@@ -7611,7 +8550,7 @@ async function getMinWithdrawalAmount() {
 }
 async function createWithdrawalRequest(params) {
   return withUserLock2(params.userId, async () => {
-    const { userId, amount, destinationType, destinationReference, idempotencyKey } = params;
+    const { userId, amount, destinationType, destinationReference, idempotencyKey, otp } = params;
     if (typeof amount !== "number" || isNaN(amount) || amount <= 0) {
       throw new Error("INVALID_AMOUNT: Withdrawal amount must be a positive number greater than 0.");
     }
@@ -7640,8 +8579,17 @@ async function createWithdrawalRequest(params) {
       }
     }
     const db = await getDb();
-    return db.transaction(async (trx) => {
-      await trx.query(`SELECT id FROM users WHERE id = $1 FOR UPDATE`, [userId]);
+    const { withdrawal, isDuplicate, userDetails } = await db.transaction(async (trx) => {
+      try {
+        await trx.query(`SET LOCAL statement_timeout = '15000'`);
+        await trx.query(`SET LOCAL lock_timeout = '8000'`);
+      } catch {
+      }
+      const userRes = await trx.query(
+        `SELECT id, email, full_name, public_id FROM users WHERE id = $1 FOR UPDATE`,
+        [userId]
+      );
+      const user = userRes.rows[0];
       const cleanIdempotencyKey = idempotencyKey ? idempotencyKey.trim() : null;
       if (cleanIdempotencyKey) {
         const existing = await trx.query(
@@ -7649,7 +8597,11 @@ async function createWithdrawalRequest(params) {
           [userId, cleanIdempotencyKey]
         );
         if (existing.rows.length > 0) {
-          return mapRowToWithdrawalRecord(existing.rows[0]);
+          return {
+            withdrawal: mapRowToWithdrawalRecord(existing.rows[0]),
+            isDuplicate: true,
+            userDetails: user
+          };
         }
       }
       const recentDuplicate = await trx.query(
@@ -7661,10 +8613,52 @@ async function createWithdrawalRequest(params) {
           AND status = 'PENDING'
           AND created_at > NOW() - INTERVAL '5 seconds'
         `,
-        [userId, cleanAmount, destinationReference.trim()]
+        [userId, cleanAmount, destRef]
       );
       if (recentDuplicate.rows.length > 0) {
-        return mapRowToWithdrawalRecord(recentDuplicate.rows[0]);
+        return {
+          withdrawal: mapRowToWithdrawalRecord(recentDuplicate.rows[0]),
+          isDuplicate: true,
+          userDetails: user
+        };
+      }
+      let tokenRecordId = null;
+      if (otp) {
+        const trimmedOtp = String(otp).trim();
+        if (!trimmedOtp || trimmedOtp.length !== 6) {
+          const err = new Error("INVALID_OTP: A valid 6-digit email verification code is required.");
+          err.code = "INVALID_OTP";
+          err.statusCode = 400;
+          throw err;
+        }
+        const otpHash = hashToken(trimmedOtp);
+        const tokenRes = await trx.query(
+          `SELECT id, expires_at, used_at FROM auth_tokens 
+           WHERE user_id = $1 AND token_hash = $2 AND type = 'WITHDRAWAL_OTP'
+           ORDER BY created_at DESC LIMIT 1
+           FOR UPDATE`,
+          [userId, otpHash]
+        );
+        if (tokenRes.rowCount === 0) {
+          const err = new Error("INVALID_OTP: Invalid withdrawal verification code. Please check your email or request a new code.");
+          err.code = "INVALID_OTP";
+          err.statusCode = 400;
+          throw err;
+        }
+        const tokenRecord = tokenRes.rows[0];
+        if (tokenRecord.used_at) {
+          const err = new Error("OTP_ALREADY_USED: This withdrawal verification code has already been used.");
+          err.code = "OTP_ALREADY_USED";
+          err.statusCode = 400;
+          throw err;
+        }
+        if (new Date(tokenRecord.expires_at) < /* @__PURE__ */ new Date()) {
+          const err = new Error("OTP_EXPIRED: Withdrawal verification code has expired. Please request a new one.");
+          err.code = "OTP_EXPIRED";
+          err.statusCode = 400;
+          throw err;
+        }
+        tokenRecordId = tokenRecord.id;
       }
       await syncUserLedger(userId, trx);
       const balRes = await trx.query(
@@ -7685,12 +8679,12 @@ async function createWithdrawalRequest(params) {
         [userId]
       );
       const availableBalance = Math.max(0, Number(balRes.rows[0]?.available_balance || 0));
-      console.log(`[WithdrawalService] User ${userId} available balance: ${availableBalance}, requested: ${cleanAmount}`);
       if (cleanAmount > availableBalance) {
         const err = new Error(
           `INSUFFICIENT_BALANCE: Requested withdrawal amount ($${cleanAmount.toFixed(2)}) exceeds available eligible ledger balance ($${availableBalance.toFixed(2)}).`
         );
         err.code = "INSUFFICIENT_BALANCE";
+        err.statusCode = 400;
         err.availableBalance = availableBalance;
         throw err;
       }
@@ -7712,66 +8706,73 @@ async function createWithdrawalRequest(params) {
           publicWithdrawalId,
           userId,
           cleanAmount,
-          destinationType.trim(),
-          destinationReference.trim(),
+          destTypeUpper,
+          destRef,
           now,
           cleanIdempotencyKey
         ]
       );
-      const withdrawal = mapRowToWithdrawalRecord(insertRes.rows[0]);
-      await logWithdrawalStateTransition({
-        withdrawalId: withdrawal.id,
-        publicWithdrawalId: withdrawal.publicWithdrawalId,
-        userId: withdrawal.userId,
-        previousStatus: null,
-        newStatus: "PENDING",
-        actorType: "USER",
-        amount: withdrawal.amount,
-        destinationType: withdrawal.destinationType,
-        destinationReference: withdrawal.destinationReference,
-        reason: "Withdrawal request created by user"
-      });
+      const createdWdr = mapRowToWithdrawalRecord(insertRes.rows[0]);
       await postLedgerDebit({
         userId,
         sourceType: "WITHDRAWAL",
-        sourceId: withdrawal.id,
-        sourceRef: withdrawal.publicWithdrawalId,
+        sourceId: createdWdr.id,
+        sourceRef: createdWdr.publicWithdrawalId,
         amount: cleanAmount,
-        description: `Withdrawal Request - ${withdrawal.destinationType} (${withdrawal.destinationReference.slice(0, 12)}...)`,
+        description: `Withdrawal Request - ${createdWdr.destinationType} (${createdWdr.destinationReference.slice(0, 12)}...)`,
         createdAt: now,
         dbClient: trx
       });
-      try {
-        await notifyWithdrawalStatus({
-          userId,
-          amountUsdt: cleanAmount,
-          status: "PENDING",
-          withdrawalId: withdrawal.id
-        });
-      } catch (notifErr) {
-        console.warn("[Notification] Error triggering withdrawal pending notification:", notifErr);
-      }
-      try {
-        const userRes = await trx.query(
-          `SELECT email, full_name, public_id FROM users WHERE id = $1`,
-          [userId]
+      if (tokenRecordId) {
+        await trx.query(
+          `UPDATE auth_tokens SET used_at = CURRENT_TIMESTAMP WHERE id = $1`,
+          [tokenRecordId]
         );
-        if (userRes.rowCount > 0) {
-          const user = userRes.rows[0];
-          const { queueEventEmail: queueEventEmail2 } = await Promise.resolve().then(() => (init_emailService(), emailService_exports));
-          await queueEventEmail2(user.email, "WITHDRAWAL_STATUS", {
-            displayName: user.full_name,
-            publicId: user.public_id,
+      }
+      await logWithdrawalStateTransition({
+        withdrawalId: createdWdr.id,
+        publicWithdrawalId: createdWdr.publicWithdrawalId,
+        userId: createdWdr.userId,
+        previousStatus: null,
+        newStatus: "PENDING",
+        actorType: "USER",
+        amount: createdWdr.amount,
+        destinationType: createdWdr.destinationType,
+        destinationReference: createdWdr.destinationReference,
+        reason: "Withdrawal request created by user",
+        dbClient: trx
+      });
+      return {
+        withdrawal: createdWdr,
+        isDuplicate: false,
+        userDetails: user
+      };
+    });
+    if (!isDuplicate) {
+      notifyWithdrawalStatus({
+        userId,
+        amountUsdt: cleanAmount,
+        status: "PENDING",
+        withdrawalId: withdrawal.id
+      }).catch((notifErr) => {
+        console.warn("[Notification] Error triggering withdrawal pending notification:", notifErr);
+      });
+      if (userDetails?.email) {
+        Promise.resolve().then(() => (init_emailService(), emailService_exports)).then(({ queueEventEmail: queueEventEmail2 }) => {
+          queueEventEmail2(userDetails.email, "WITHDRAWAL_STATUS", {
+            displayName: userDetails.full_name || "Valued User",
+            publicId: userDetails.public_id || "",
             amount: String(cleanAmount),
             status: "PENDING",
             withdrawalId: withdrawal.id
+          }).catch((emailErr) => {
+            console.warn("[EmailEngine] Failed to send Withdrawal Pending email:", emailErr);
           });
-        }
-      } catch (emailErr) {
-        console.warn("[EmailEngine] Failed to send Withdrawal Pending email:", emailErr);
+        }).catch(() => {
+        });
       }
-      return withdrawal;
-    });
+    }
+    return withdrawal;
   });
 }
 async function getUserWithdrawals(userId, page = 1, limit = 20, statusFilter) {
@@ -8431,6 +9432,7 @@ var init_withdrawalService = __esm({
     init_idGenerator();
     init_walletLedgerService();
     init_notificationService();
+    init_crypto();
     userLocks2 = /* @__PURE__ */ new Map();
   }
 });
@@ -9260,6 +10262,74 @@ var init_bscSignerService = __esm({
   }
 });
 
+// src/server/services/nodeRewardScheduler.ts
+var nodeRewardScheduler_exports = {};
+__export(nodeRewardScheduler_exports, {
+  startNodeRewardScheduler: () => startNodeRewardScheduler,
+  stopNodeRewardScheduler: () => stopNodeRewardScheduler
+});
+async function executeDailyRewardCycle() {
+  const previousDate = getPreviousUtcBusinessDate();
+  console.log(`[NodeRewardScheduler] \u{1F55B} Daily settlement trigger point reached for business date: ${previousDate}`);
+  try {
+    const mode = await getRewardDistributionMode();
+    if (mode === "MANUAL") {
+      console.log("[NodeRewardScheduler] \u23F8\uFE0F Reward distribution is set to MANUAL mode. Skipping automatic distribution.");
+      return;
+    }
+    console.log("[NodeRewardScheduler] \u{1F680} AUTOMATIC mode active. Starting daily node mining reward distribution...");
+    const result = await executeDailyRewardDistribution({
+      triggeredBy: "AUTOMATIC_SCHEDULER"
+    });
+    if (result.success) {
+      console.log(
+        `[NodeRewardScheduler] \u2705 Daily rewards distributed: Epoch #${result.epochNumber} (${result.publicEpochId}), Eligible Nodes=${result.eligibleNodesCount}, Rewards Created=${result.rewardsCreated}, Total Distributed=${result.totalRewardsDistributedUsd}`
+      );
+    } else {
+      console.warn(`[NodeRewardScheduler] Notice during automatic reward distribution: ${result.message || result.error}`);
+    }
+  } catch (err) {
+    console.error("[NodeRewardScheduler] \u274C Daily reward distribution cycle failed:", err);
+  } finally {
+    scheduleNextRewardRun();
+  }
+}
+function scheduleNextRewardRun() {
+  const { nextRunIso, msUntilRun } = getNextUtc0600Time();
+  console.log(`[NodeRewardScheduler] Next automatic reward check scheduled for ${nextRunIso} (in ${Math.round(msUntilRun / 1e3)}s)`);
+  if (rewardSchedulerTimer) {
+    clearTimeout(rewardSchedulerTimer);
+  }
+  rewardSchedulerTimer = setTimeout(() => {
+    executeDailyRewardCycle().catch((err) => {
+      console.error("[NodeRewardScheduler] Unhandled error during scheduled run:", err);
+    });
+  }, msUntilRun);
+}
+function startNodeRewardScheduler() {
+  if (isRunning2) return;
+  isRunning2 = true;
+  console.log("[NodeRewardScheduler] Initializing Daily Node Reward (ROI) Distribution Scheduler...");
+  scheduleNextRewardRun();
+}
+function stopNodeRewardScheduler() {
+  if (rewardSchedulerTimer) {
+    clearTimeout(rewardSchedulerTimer);
+    rewardSchedulerTimer = null;
+  }
+  isRunning2 = false;
+  console.log("[NodeRewardScheduler] Stopped Daily Node Reward Scheduler.");
+}
+var rewardSchedulerTimer, isRunning2;
+var init_nodeRewardScheduler = __esm({
+  "src/server/services/nodeRewardScheduler.ts"() {
+    init_timezone();
+    init_nodeRewardService();
+    rewardSchedulerTimer = null;
+    isRunning2 = false;
+  }
+});
+
 // server.ts
 import express from "express";
 import cookieParser from "cookie-parser";
@@ -9268,41 +10338,14 @@ import { fileURLToPath } from "url";
 
 // src/server/routes/authRoutes.ts
 init_db();
+init_crypto();
+init_idGenerator();
 import { Router } from "express";
 import { v4 as uuidv411 } from "uuid";
 
-// src/server/utils/crypto.ts
-import argon2 from "argon2";
-import crypto2 from "crypto";
-async function hashPassword(password) {
-  return argon2.hash(password, {
-    type: argon2.argon2id,
-    memoryCost: 2 ** 16,
-    // 64 MB
-    timeCost: 3,
-    parallelism: 1
-  });
-}
-async function verifyPassword(hash, plain) {
-  try {
-    if (!hash || typeof hash !== "string" || !plain) return false;
-    return await argon2.verify(hash, plain);
-  } catch (err) {
-    return false;
-  }
-}
-function generateRandomToken(bytes = 32) {
-  return crypto2.randomBytes(bytes).toString("hex");
-}
-function hashToken(token) {
-  return crypto2.createHash("sha256").update(token).digest("hex");
-}
-
-// src/server/routes/authRoutes.ts
-init_idGenerator();
-
 // src/server/middleware/authMiddleware.ts
 init_db();
+init_crypto();
 var ADMIN_EMAILS = [
   "md.asifuzzman.dhakacollege@gmail.com",
   "mdasifuzzman.official@gmail.com",
@@ -11522,80 +12565,8 @@ async function getUserCommissions(sponsorUserId) {
 // src/server/services/binaryVolumeService.ts
 init_db();
 init_idGenerator();
+init_timezone();
 import { v4 as uuidv413 } from "uuid";
-
-// src/server/utils/timezone.ts
-var PHIVONEX_BUSINESS_TIMEZONE = "Asia/Dhaka";
-var PHIVONEX_UTC_TIMEZONE = "UTC";
-function getDhakaBusinessDate(date = /* @__PURE__ */ new Date()) {
-  const formatter = new Intl.DateTimeFormat("en-CA", {
-    timeZone: PHIVONEX_BUSINESS_TIMEZONE,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit"
-  });
-  return formatter.format(date);
-}
-function getUtcBusinessDate(date = /* @__PURE__ */ new Date()) {
-  const formatter = new Intl.DateTimeFormat("en-CA", {
-    timeZone: PHIVONEX_UTC_TIMEZONE,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit"
-  });
-  return formatter.format(date);
-}
-function getPreviousDhakaBusinessDate(date = /* @__PURE__ */ new Date()) {
-  const currentDhakaStr = getDhakaBusinessDate(date);
-  const [year, month, day] = currentDhakaStr.split("-").map(Number);
-  const d = new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
-  d.setUTCDate(d.getUTCDate() - 1);
-  return d.toISOString().split("T")[0];
-}
-function getPreviousUtcBusinessDate(date = /* @__PURE__ */ new Date()) {
-  const currentUtcStr = getUtcBusinessDate(date);
-  const [year, month, day] = currentUtcStr.split("-").map(Number);
-  const d = new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
-  d.setUTCDate(d.getUTCDate() - 1);
-  return d.toISOString().split("T")[0];
-}
-function getNextDhakaMidnightTime(from = /* @__PURE__ */ new Date()) {
-  const currentDhakaStr = getDhakaBusinessDate(from);
-  const [year, month, day] = currentDhakaStr.split("-").map(Number);
-  const tomorrow = new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
-  tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
-  const nextDhakaDateStr = tomorrow.toISOString().split("T")[0];
-  const [nextYear, nextMonth, nextDay] = nextDhakaDateStr.split("-").map(Number);
-  const nextMidnightUtcMs = Date.UTC(nextYear, nextMonth - 1, nextDay, 0, 0, 0) - 6 * 60 * 60 * 1e3;
-  const nextMidnightDate = new Date(nextMidnightUtcMs);
-  const diffMs = Math.max(0, nextMidnightDate.getTime() - from.getTime());
-  return {
-    nextMidnightIso: nextMidnightDate.toISOString(),
-    msUntilMidnight: diffMs
-  };
-}
-function getNextUtc0600Time(from = /* @__PURE__ */ new Date()) {
-  const now = from.getTime();
-  const d = new Date(now);
-  const targetToday = new Date(Date.UTC(
-    d.getUTCFullYear(),
-    d.getUTCMonth(),
-    d.getUTCDate(),
-    6,
-    0,
-    0,
-    0
-  ));
-  if (now >= targetToday.getTime()) {
-    targetToday.setUTCDate(targetToday.getUTCDate() + 1);
-  }
-  return {
-    nextRunIso: targetToday.toISOString(),
-    msUntilRun: Math.max(0, targetToday.getTime() - now)
-  };
-}
-
-// src/server/services/binaryVolumeService.ts
 async function propagateNodeSalesVolume(dbClient, sourceNodeId, buyerUserId, occurredAtDate) {
   const db = dbClient || await getDb();
   const nodeRes = await db.query(
@@ -11876,10 +12847,7 @@ init_publicNetworkService();
 init_economicService();
 init_notificationService();
 async function cleanupExpiredReservations(dbClient) {
-  if (dbClient) {
-    return 0;
-  }
-  const db = await getDb();
+  const db = dbClient || await getDb();
   try {
     const expiredOrdersRes = await db.query(
       `
@@ -12036,7 +13004,7 @@ async function executeReservation(db, userId, idempotencyKey, paymentMethod = "S
       SELECT id, node_number, public_node_id
       FROM nodes
       WHERE status = 'AVAILABLE'
-      ORDER BY node_number ASC
+      ORDER BY RANDOM()
       LIMIT 1
       FOR UPDATE
       `
@@ -12212,6 +13180,10 @@ async function settleNodeOrder(userId, orderIdentifier, paymentReference, dbClie
     throw error;
   }
   const effectiveRef = paymentReference || `SETTLE_VERIFIED_${Date.now()}_${order.public_order_id}`;
+  const currentRewardRate = await getNodeRewardRatePerEpoch(db);
+  const internalCoin = await getInternalCoinPrice().catch(() => ({ priceUsdt: 0.1 }));
+  const refCoinPrice = internalCoin.priceUsdt || 0.1;
+  const basePrice = await getNodeBasePrice(db).catch(() => 1e3);
   const activatedNodeRes = await db.query(
     `
     UPDATE nodes
@@ -12221,20 +13193,20 @@ async function settleNodeOrder(userId, orderIdentifier, paymentReference, dbClie
       reserved_by_user_id = NULL,
       purchase_timestamp = COALESCE(purchase_timestamp, CURRENT_TIMESTAMP),
       activated_at = CURRENT_TIMESTAMP,
-      maturity_timestamp = CURRENT_TIMESTAMP + INTERVAL '200 days',
+      maturity_timestamp = NULL,
       product_version = COALESCE(product_version, 'GENESIS_V1'),
-      purchase_price_usd = COALESCE(purchase_price_usd, 1000.00),
-      phivo_reference_price_at_purchase = COALESCE(phivo_reference_price_at_purchase, 0.10),
+      purchase_price_usd = COALESCE(purchase_price_usd, $3),
+      phivo_reference_price_at_purchase = COALESCE(phivo_reference_price_at_purchase, $4),
       lifetime_phivo_allocation = COALESCE(lifetime_phivo_allocation, 10000.00),
-      term_days = COALESCE(term_days, 200),
-      daily_phivo_emission = COALESCE(daily_phivo_emission, 50.00),
+      term_days = term_days,
+      daily_phivo_emission = COALESCE($5, daily_phivo_emission),
       distributed_phivo = COALESCE(distributed_phivo, 0.00),
       remaining_phivo = COALESCE(remaining_phivo, 10000.00),
       updated_at = CURRENT_TIMESTAMP
     WHERE id = $2 AND status = 'RESERVED'
     RETURNING id, public_node_id, node_number, status, activated_at, maturity_timestamp, distributed_phivo, remaining_phivo
     `,
-    [order.user_id, order.node_id]
+    [order.user_id, order.node_id, basePrice, refCoinPrice, currentRewardRate]
   );
   if (activatedNodeRes.rows.length === 0) {
     const error = new Error("Failed to activate node. Reservation state changed.");
@@ -12281,7 +13253,7 @@ async function settleNodeOrder(userId, orderIdentifier, paymentReference, dbClie
       const bonusCount = bogoOffer.bonusNodesCount || 1;
       for (let i = 0; i < bonusCount; i++) {
         const availNodeRes = await db.query(
-          `SELECT id, node_number, public_node_id FROM nodes WHERE status = 'AVAILABLE' ORDER BY node_number ASC LIMIT 1`
+          `SELECT id, node_number, public_node_id FROM nodes WHERE status = 'AVAILABLE' ORDER BY RANDOM() LIMIT 1`
         );
         if (availNodeRes.rows.length > 0) {
           const bonusNode = availNodeRes.rows[0];
@@ -12327,51 +13299,59 @@ async function settleNodeOrder(userId, orderIdentifier, paymentReference, dbClie
   } catch (secErr) {
     console.warn("[SecurityEvent] Could not log purchase event:", secErr);
   }
-  try {
-    await notifyNodeActivated({
-      userId: order.user_id,
-      nodeNumber: finalNode.node_number,
-      orderPublicId: finalOrder.public_order_id,
-      sourceId: finalOrder.id
-    });
-  } catch (notifErr) {
-    console.warn("[Notification] Could not trigger node activated notification:", notifErr);
-  }
-  try {
-    broadcastPublicEvent({
-      id: `evt-node-${finalNode.public_node_id}`,
-      type: "node.activated",
-      title: `${finalNode.public_node_id} Activated`,
-      description: `Genesis validator node ${finalNode.public_node_id} successfully activated on-chain.`,
-      timestamp: (/* @__PURE__ */ new Date()).toISOString(),
-      publicId: finalNode.public_node_id
-    });
-  } catch (pubErr) {
-    console.warn("[PublicEvent] Could not broadcast public node activation event:", pubErr);
-  }
-  try {
-    const userRes = await db.query(
-      `SELECT email, full_name, public_id FROM users WHERE id = $1`,
-      [order.user_id]
-    );
-    if (userRes.rowCount > 0) {
-      const user = userRes.rows[0];
-      const { queueEventEmail: queueEventEmail2, triggerAutomationRule: triggerAutomationRule2 } = await Promise.resolve().then(() => (init_emailService(), emailService_exports));
-      await queueEventEmail2(user.email, "NODE_ACTIVATION", {
-        displayName: user.full_name,
-        publicId: user.public_id,
-        nodeNumber: String(finalNode.node_number),
-        publicNodeId: finalNode.public_node_id,
-        amount: String(finalOrder.amount_usd)
+  const executePostCommit = async () => {
+    try {
+      await notifyNodeActivated({
+        userId: order.user_id,
+        nodeNumber: finalNode.node_number,
+        orderPublicId: finalOrder.public_order_id,
+        sourceId: finalOrder.id
       });
-      await triggerAutomationRule2(order.user_id, "NODE_SALES", {
-        nodeNumber: String(finalNode.node_number),
-        publicNodeId: finalNode.public_node_id,
-        amount: String(finalOrder.amount_usd)
-      });
+    } catch (notifErr) {
+      console.warn("[Notification] Could not trigger node activated notification:", notifErr);
     }
-  } catch (emailErr) {
-    console.warn("[EmailEngine] Failed to send Node Activation email/automation trigger:", emailErr);
+    try {
+      broadcastPublicEvent({
+        id: `evt-node-${finalNode.public_node_id}`,
+        type: "node.activated",
+        title: `${finalNode.public_node_id} Activated`,
+        description: `Genesis validator node ${finalNode.public_node_id} successfully activated on-chain.`,
+        timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+        publicId: finalNode.public_node_id
+      });
+    } catch (pubErr) {
+      console.warn("[PublicEvent] Could not broadcast public node activation event:", pubErr);
+    }
+    try {
+      const topDb = await getDb();
+      const userRes = await topDb.query(
+        `SELECT email, full_name, public_id FROM users WHERE id = $1`,
+        [order.user_id]
+      );
+      if (userRes.rowCount > 0) {
+        const user = userRes.rows[0];
+        const { queueEventEmail: queueEventEmail2, triggerAutomationRule: triggerAutomationRule2 } = await Promise.resolve().then(() => (init_emailService(), emailService_exports));
+        await queueEventEmail2(user.email, "NODE_ACTIVATION", {
+          displayName: user.full_name,
+          publicId: user.public_id,
+          nodeNumber: String(finalNode.node_number),
+          publicNodeId: finalNode.public_node_id,
+          amount: String(finalOrder.amount_usd)
+        });
+        await triggerAutomationRule2(order.user_id, "NODE_SALES", {
+          nodeNumber: String(finalNode.node_number),
+          publicNodeId: finalNode.public_node_id,
+          amount: String(finalOrder.amount_usd)
+        });
+      }
+    } catch (emailErr) {
+      console.warn("[EmailEngine] Failed to send Node Activation email/automation trigger:", emailErr);
+    }
+  };
+  if (!dbClient) {
+    executePostCommit().catch((err) => {
+      console.warn("[NodeOrderService] Post-commit execution warning:", err);
+    });
   }
   return {
     order: {
@@ -12398,7 +13378,8 @@ async function settleNodeOrder(userId, orderIdentifier, paymentReference, dbClie
       activatedAt: finalNode.activated_at.toISOString()
     },
     referralCommission,
-    isDuplicate: false
+    isDuplicate: false,
+    runPostCommit: executePostCommit
   };
 }
 async function cancelNodeOrder(userId, orderIdentifier) {
@@ -12637,527 +13618,8 @@ async function purchaseNodeWithDepositBalance(userId, preferredAsset = "USDT") {
   });
 }
 
-// src/server/services/nodeRewardService.ts
-init_db();
-init_idGenerator();
-import { v4 as uuidv416 } from "uuid";
-
-// src/server/config/rewardConfig.ts
-var REWARD_CURRENCY = "PHIVO";
-var MIN_REWARD_PER_NODE = 0.01;
-var MAX_REWARD_PER_NODE = 1e3;
-function getConfiguredRewardPerNode(override) {
-  if (typeof override === "number" && !isNaN(override) && override > 0) {
-    if (override < MIN_REWARD_PER_NODE || override > MAX_REWARD_PER_NODE) {
-      throw new Error(
-        `Configured reward rate ${override} PHIVO is outside allowed bounds [${MIN_REWARD_PER_NODE}, ${MAX_REWARD_PER_NODE}]`
-      );
-    }
-    return override;
-  }
-  const envVal = process.env.NODE_REWARD_PER_EPOCH;
-  if (envVal !== void 0 && envVal.trim() !== "") {
-    const parsed = parseFloat(envVal);
-    if (!isNaN(parsed) && parsed > 0) {
-      if (parsed < MIN_REWARD_PER_NODE || parsed > MAX_REWARD_PER_NODE) {
-        throw new Error(
-          `Configured reward rate ${parsed} PHIVO is outside allowed bounds [${MIN_REWARD_PER_NODE}, ${MAX_REWARD_PER_NODE}]`
-        );
-      }
-      return parsed;
-    }
-  }
-  return null;
-}
-
-// src/server/services/nodeRewardService.ts
-init_walletLedgerService();
-init_economicService();
-init_notificationService();
-async function createRewardEpoch(params) {
-  const db = await getDb();
-  let rewardRate = null;
-  let configVersion = null;
-  if (params?.rewardPerNode !== void 0) {
-    rewardRate = getConfiguredRewardPerNode(params.rewardPerNode);
-  } else {
-    const activeCfg = await getEconomicConfigByKey("NODE_REWARD_RATE_PER_EPOCH");
-    if (activeCfg && activeCfg.status === "ACTIVE" && activeCfg.configValue !== null && activeCfg.configValue !== void 0) {
-      configVersion = activeCfg.version;
-      if (typeof activeCfg.configValue === "object" && activeCfg.configValue !== null) {
-        const val = activeCfg.configValue;
-        rewardRate = Number(
-          val.ratePhivo !== void 0 ? val.ratePhivo : val.rateUsd !== void 0 ? val.rateUsd : val.rewardPerNode !== void 0 ? val.rewardPerNode : NaN
-        );
-      } else {
-        rewardRate = Number(activeCfg.configValue);
-      }
-    } else {
-      rewardRate = getConfiguredRewardPerNode();
-    }
-  }
-  const maxRes = await db.query(
-    `SELECT COALESCE(MAX(epoch_number), 0) + 1 AS next_num FROM reward_epochs`
-  );
-  const epochNumber = Number(maxRes.rows[0]?.next_num || 1);
-  const publicEpochId = generateEpochPublicId(epochNumber);
-  const id = uuidv416();
-  const baseDate = params?.startAt || /* @__PURE__ */ new Date();
-  const utcDateStr = getUtcBusinessDate(baseDate);
-  const [year, month, day] = utcDateStr.split("-").map(Number);
-  const startAt = new Date(Date.UTC(year, month - 1, day, 0, 0, 0, 0));
-  const endAt = new Date(Date.UTC(year, month - 1, day, 23, 59, 59, 999));
-  const res = await db.query(
-    `
-    INSERT INTO reward_epochs (
-      id, public_epoch_id, epoch_number, start_at, end_at, reward_per_node, reward_rate_used, economic_config_version, currency, status, created_at
-    )
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'OPEN', CURRENT_TIMESTAMP)
-    RETURNING *
-    `,
-    [id, publicEpochId, epochNumber, startAt, endAt, rewardRate, rewardRate, configVersion, REWARD_CURRENCY]
-  );
-  const row = res.rows[0];
-  return {
-    id: row.id,
-    publicEpochId: row.public_epoch_id,
-    epochNumber: Number(row.epoch_number),
-    startAt: new Date(row.start_at).toISOString(),
-    endAt: new Date(row.end_at).toISOString(),
-    rewardPerNode: row.reward_per_node !== null && row.reward_per_node !== void 0 ? Number(row.reward_per_node) : null,
-    rewardRateUsed: row.reward_rate_used !== null && row.reward_rate_used !== void 0 ? Number(row.reward_rate_used) : null,
-    economicConfigVersion: row.economic_config_version ? Number(row.economic_config_version) : null,
-    currency: row.currency,
-    status: row.status,
-    settledAt: row.settled_at ? new Date(row.settled_at).toISOString() : null,
-    createdAt: new Date(row.created_at).toISOString()
-  };
-}
-async function closeAndSettleEpoch(epochId, options) {
-  const db = await getDb();
-  const epochRes = await db.query(
-    `SELECT * FROM reward_epochs WHERE id = $1`,
-    [epochId]
-  );
-  if (epochRes.rows.length === 0) {
-    throw new Error(`Reward epoch ${epochId} not found`);
-  }
-  const epoch = epochRes.rows[0];
-  const publicEpochId = epoch.public_epoch_id;
-  const epochNumber = Number(epoch.epoch_number);
-  if (epoch.status === "COMPLETED") {
-    const existingRewards = await db.query(
-      `SELECT COUNT(*) as count, COALESCE(SUM(amount), 0) as total FROM node_rewards WHERE epoch_id = $1`,
-      [epochId]
-    );
-    return {
-      success: true,
-      epochId,
-      publicEpochId,
-      epochNumber,
-      rewardPerNode: epoch.reward_per_node ? Number(epoch.reward_per_node) : 0,
-      eligibleNodesCount: Number(existingRewards.rows[0]?.count || 0),
-      rewardsCreated: 0,
-      totalRewardsDistributedUsd: Number(existingRewards.rows[0]?.total || 0),
-      settledAt: epoch.settled_at ? new Date(epoch.settled_at).toISOString() : (/* @__PURE__ */ new Date()).toISOString()
-    };
-  }
-  const rewardsEnabled = await isNodeRewardsEnabled();
-  if (!rewardsEnabled) {
-    return {
-      success: false,
-      error: "NODE_REWARDS_DISABLED",
-      message: "Node mining reward distributions are currently disabled by administration.",
-      epochId,
-      publicEpochId,
-      epochNumber,
-      rewardPerNode: 0,
-      eligibleNodesCount: 0,
-      rewardsCreated: 0,
-      totalRewardsDistributedUsd: 0
-    };
-  }
-  let effectiveRate = null;
-  let configVersion = epoch.economic_config_version ? Number(epoch.economic_config_version) : null;
-  if (options?.configuredRewardPerNode !== void 0) {
-    effectiveRate = getConfiguredRewardPerNode(options.configuredRewardPerNode);
-  } else if (epoch.reward_rate_used !== null && !isNaN(Number(epoch.reward_rate_used)) && Number(epoch.reward_rate_used) > 0) {
-    effectiveRate = Number(epoch.reward_rate_used);
-  } else if (epoch.reward_per_node !== null && !isNaN(Number(epoch.reward_per_node)) && Number(epoch.reward_per_node) > 0) {
-    effectiveRate = Number(epoch.reward_per_node);
-  } else {
-    const activeCfg = await getEconomicConfigByKey("NODE_REWARD_RATE_PER_EPOCH");
-    if (activeCfg && activeCfg.status === "ACTIVE" && activeCfg.configValue !== null && activeCfg.configValue !== void 0) {
-      configVersion = activeCfg.version;
-      if (typeof activeCfg.configValue === "object" && activeCfg.configValue !== null) {
-        const val = activeCfg.configValue;
-        effectiveRate = Number(
-          val.ratePhivo !== void 0 ? val.ratePhivo : val.rateUsd !== void 0 ? val.rateUsd : val.rewardPerNode !== void 0 ? val.rewardPerNode : NaN
-        );
-      } else {
-        effectiveRate = Number(activeCfg.configValue);
-      }
-    } else {
-      effectiveRate = getConfiguredRewardPerNode();
-    }
-  }
-  if (effectiveRate === null || effectiveRate <= 0) {
-    return {
-      success: false,
-      error: "REWARD_RATE_NOT_CONFIGURED",
-      message: "Node reward rate has not been configured by PHIVONEX management. Epoch settlement cannot proceed without an authoritative reward rate.",
-      epochId,
-      publicEpochId,
-      epochNumber,
-      rewardPerNode: 0,
-      eligibleNodesCount: 0,
-      rewardsCreated: 0,
-      totalRewardsDistributedUsd: 0
-    };
-  }
-  const now = /* @__PURE__ */ new Date();
-  const epochBaseDate = epoch.start_at ? new Date(epoch.start_at) : now;
-  const businessDate = getUtcBusinessDate(epochBaseDate);
-  await db.query(
-    `UPDATE reward_epochs 
-     SET status = 'COMPLETED', reward_per_node = $1, reward_rate_used = $1, economic_config_version = $2, settled_at = $3 
-     WHERE id = $4`,
-    [effectiveRate, configVersion, now, epochId]
-  );
-  const activeNodesRes = await db.query(
-    `
-    SELECT id, public_node_id, node_number, owner_user_id, daily_phivo_emission, lifetime_phivo_allocation, distributed_phivo, remaining_phivo
-    FROM nodes
-    WHERE (status = 'ACTIVE' OR status = 'EMITTING') 
-      AND owner_user_id IS NOT NULL 
-      AND (distributed_phivo IS NULL OR distributed_phivo < COALESCE(lifetime_phivo_allocation, 10000.00))
-      AND (remaining_phivo IS NULL OR remaining_phivo > 0)
-      AND ($1::text IS NULL OR id::text = $1 OR public_node_id = $1)
-    ORDER BY node_number ASC
-    `,
-    [options?.targetNodeId || null]
-  );
-  const eligibleNodes = activeNodesRes.rows;
-  let rewardsCreated = 0;
-  let totalDistributed = 0;
-  for (const node of eligibleNodes) {
-    const configuredDailyReward = effectiveRate;
-    const lifetimeCap = Number(node.lifetime_phivo_allocation || 1e4);
-    const currentDist = Number(node.distributed_phivo || 0);
-    const remainingPhivo = node.remaining_phivo !== null && node.remaining_phivo !== void 0 ? Number(node.remaining_phivo) : Math.max(0, lifetimeCap - currentDist);
-    const actualEmission = Math.min(configuredDailyReward, Math.max(0, remainingPhivo));
-    if (actualEmission <= 0) {
-      await db.query(
-        `UPDATE nodes SET status = 'MATURED', remaining_phivo = 0, updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
-        [node.id]
-      );
-      continue;
-    }
-    const rewardId = uuidv416();
-    const publicRewardId = generateRewardPublicId();
-    const insRes = await db.query(
-      `
-      INSERT INTO node_rewards (
-        id, public_reward_id, epoch_id, node_id, owner_user_id, amount, currency, status, accrued_at,
-        reward_rate_used, economic_config_version, business_date, created_at
-      )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, 'ACCRUED', $8, $9, $10, $11, CURRENT_TIMESTAMP)
-      ON CONFLICT (node_id, epoch_id) DO NOTHING
-      RETURNING *
-      `,
-      [
-        rewardId,
-        publicRewardId,
-        epochId,
-        node.id,
-        node.owner_user_id,
-        actualEmission,
-        epoch.currency || REWARD_CURRENCY,
-        now,
-        configuredDailyReward,
-        configVersion,
-        businessDate
-      ]
-    );
-    let actualRewardId;
-    let actualPublicRewardId;
-    let actualAmount;
-    if (insRes.rows.length > 0) {
-      actualRewardId = insRes.rows[0].id;
-      actualPublicRewardId = insRes.rows[0].public_reward_id;
-      actualAmount = Number(insRes.rows[0].amount);
-      rewardsCreated++;
-      totalDistributed += actualAmount;
-      const newDist = currentDist + actualAmount;
-      const newRem = Math.max(0, remainingPhivo - actualAmount);
-      const newStatus = newRem <= 0 || newDist >= lifetimeCap ? "MATURED" : "EMITTING";
-      await db.query(
-        `
-        UPDATE nodes
-        SET distributed_phivo = $1, remaining_phivo = $2, status = $3, updated_at = CURRENT_TIMESTAMP
-        WHERE id = $4
-        `,
-        [newDist, newRem, newStatus, node.id]
-      );
-    } else {
-      const existing = await db.query(
-        `SELECT id, public_reward_id, amount FROM node_rewards WHERE node_id = $1 AND epoch_id = $2`,
-        [node.id, epochId]
-      );
-      if (existing.rows.length === 0) continue;
-      actualRewardId = existing.rows[0].id;
-      actualPublicRewardId = existing.rows[0].public_reward_id;
-      actualAmount = Number(existing.rows[0].amount);
-    }
-    await postLedgerCredit({
-      userId: node.owner_user_id,
-      sourceType: "NODE_REWARD",
-      sourceId: actualRewardId,
-      sourceRef: actualPublicRewardId,
-      amount: actualAmount,
-      currency: "PHIVO",
-      description: `Genesis Node Mining Reward (Epoch #${epochNumber}, Node ${node.public_node_id})`,
-      createdAt: now
-    }).catch((ledgerErr) => {
-      console.warn("[NodeReward] Error posting ledger credit:", ledgerErr);
-    });
-    try {
-      await notifyPhivoReward({
-        userId: node.owner_user_id,
-        amountPhivo: actualAmount,
-        rewardId: actualRewardId
-      });
-    } catch (notifErr) {
-      console.warn("[Notification] Error triggering node reward notification:", notifErr);
-    }
-    db.query(
-      `SELECT email, full_name, public_id FROM users WHERE id = $1`,
-      [node.owner_user_id]
-    ).then(async (userRes) => {
-      if (userRes.rows.length > 0) {
-        const user = userRes.rows[0];
-        const { queueEventEmail: queueEventEmail2, triggerAutomationRule: triggerAutomationRule2 } = await Promise.resolve().then(() => (init_emailService(), emailService_exports));
-        await queueEventEmail2(user.email, "REWARD", {
-          displayName: user.full_name,
-          publicId: user.public_id,
-          amount: String(actualAmount),
-          epochId,
-          publicEpochId
-        }).catch(() => {
-        });
-        await triggerAutomationRule2(node.owner_user_id, "MATCHING_ACTIVITY", {
-          amount: String(actualAmount)
-        }).catch(() => {
-        });
-      }
-    }).catch(() => {
-    });
-  }
-  return {
-    success: true,
-    epochId,
-    publicEpochId,
-    epochNumber,
-    rewardPerNode: effectiveRate,
-    eligibleNodesCount: eligibleNodes.length,
-    rewardsCreated,
-    totalRewardsDistributedUsd: totalDistributed,
-    settledAt: now.toISOString()
-  };
-}
-async function claimUserRewards(userId) {
-  const db = await getDb();
-  const now = /* @__PURE__ */ new Date();
-  const updRes = await db.query(
-    `
-    UPDATE node_rewards
-    SET status = 'CLAIMED', claimed_at = $1
-    WHERE owner_user_id = $2 AND status = 'ACCRUED'
-    RETURNING id, amount
-    `,
-    [now, userId]
-  );
-  let totalAmount = 0;
-  for (const row of updRes.rows) {
-    totalAmount += Number(row.amount);
-  }
-  return {
-    claimedCount: updRes.rows.length,
-    totalClaimedAmount: totalAmount
-  };
-}
-async function getUserRewards(userId) {
-  const db = await getDb();
-  const activeRate = await getNodeRewardRatePerEpoch();
-  const res = await db.query(
-    `
-    SELECT 
-      nr.id,
-      nr.public_reward_id,
-      nr.epoch_id,
-      nr.node_id,
-      nr.owner_user_id,
-      nr.amount,
-      nr.currency,
-      nr.status,
-      nr.accrued_at,
-      nr.claimed_at,
-      nr.reversed_at,
-      nr.reward_rate_used,
-      nr.economic_config_version,
-      nr.business_date,
-      nr.created_at,
-      re.public_epoch_id,
-      re.epoch_number,
-      n.public_node_id,
-      n.node_number
-    FROM node_rewards nr
-    JOIN reward_epochs re ON nr.epoch_id = re.id
-    JOIN nodes n ON nr.node_id = n.id
-    WHERE nr.owner_user_id = $1
-    ORDER BY nr.accrued_at DESC
-    `,
-    [userId]
-  );
-  let totalAccrued = 0;
-  let totalClaimed = 0;
-  let totalRewards = 0;
-  const history = res.rows.map((r) => {
-    const amt = Number(r.amount);
-    if (r.status === "ACCRUED") {
-      totalAccrued += amt;
-      totalRewards += amt;
-    } else if (r.status === "CLAIMED") {
-      totalClaimed += amt;
-      totalRewards += amt;
-    }
-    return {
-      id: r.id,
-      publicRewardId: r.public_reward_id,
-      epochId: r.epoch_id,
-      epochNumber: Number(r.epoch_number),
-      publicEpochId: r.public_epoch_id,
-      nodeId: r.node_id,
-      publicNodeId: r.public_node_id,
-      nodeNumber: Number(r.node_number),
-      ownerUserId: r.owner_user_id,
-      amount: amt,
-      currency: r.currency,
-      status: r.status,
-      accruedAt: new Date(r.accrued_at).toISOString(),
-      claimedAt: r.claimed_at ? new Date(r.claimed_at).toISOString() : null,
-      reversedAt: r.reversed_at ? new Date(r.reversed_at).toISOString() : null,
-      rewardRateUsed: r.reward_rate_used !== null && r.reward_rate_used !== void 0 ? Number(r.reward_rate_used) : null,
-      economicConfigVersion: r.economic_config_version !== null && r.economic_config_version !== void 0 ? Number(r.economic_config_version) : null,
-      businessDate: r.business_date || null,
-      createdAt: new Date(r.created_at).toISOString()
-    };
-  });
-  const latestEpochRes = await db.query(
-    `SELECT * FROM reward_epochs ORDER BY epoch_number DESC LIMIT 1`
-  );
-  let latestEpoch = null;
-  if (latestEpochRes.rows.length > 0) {
-    const row = latestEpochRes.rows[0];
-    latestEpoch = {
-      id: row.id,
-      publicEpochId: row.public_epoch_id,
-      epochNumber: Number(row.epoch_number),
-      rewardPerNode: row.reward_per_node !== null && row.reward_per_node !== void 0 ? Number(row.reward_per_node) : null,
-      status: row.status,
-      settledAt: row.settled_at ? new Date(row.settled_at).toISOString() : null
-    };
-  }
-  return {
-    totalAccrued,
-    totalClaimed,
-    totalRewards,
-    dailyEmissionRate: activeRate,
-    protocolDailyEmission: activeRate,
-    latestEpoch,
-    history
-  };
-}
-async function getUserRewardsSummary(userId) {
-  const db = await getDb();
-  const activeRate = await getNodeRewardRatePerEpoch();
-  const activeNodesRes = await db.query(
-    `SELECT COUNT(*) as count FROM nodes WHERE owner_user_id = $1 AND status IN ('ACTIVE', 'EMITTING', 'MATURED')`,
-    [userId]
-  );
-  const activeNodesCount = Number(activeNodesRes.rows[0]?.count || 0);
-  const aggRes = await db.query(
-    `
-    SELECT status, COALESCE(SUM(amount), 0) as total
-    FROM node_rewards
-    WHERE owner_user_id = $1
-    GROUP BY status
-    `,
-    [userId]
-  );
-  let totalAccrued = 0;
-  let totalClaimed = 0;
-  for (const row of aggRes.rows) {
-    const amt = Number(row.total);
-    if (row.status === "ACCRUED") totalAccrued += amt;
-    else if (row.status === "CLAIMED") totalClaimed += amt;
-  }
-  const totalRewardsEarned = totalAccrued + totalClaimed;
-  const epochRes = await db.query(
-    `SELECT epoch_number, settled_at FROM reward_epochs ORDER BY epoch_number DESC LIMIT 1`
-  );
-  const latestEpochNumber = epochRes.rows.length > 0 ? Number(epochRes.rows[0].epoch_number) : 0;
-  const latestSettlementTime = epochRes.rows.length > 0 && epochRes.rows[0].settled_at ? new Date(epochRes.rows[0].settled_at).toISOString() : null;
-  return {
-    totalRewardsEarned,
-    totalAccrued,
-    totalClaimed,
-    activeNodesCount,
-    protocolDailyEmission: activeRate,
-    latestEpochNumber,
-    latestSettlementTime
-  };
-}
-async function getNodeRewardStatsForUser(userId) {
-  const db = await getDb();
-  const res = await db.query(
-    `
-    SELECT 
-      nr.node_id,
-      re.public_epoch_id,
-      nr.amount,
-      nr.status,
-      nr.accrued_at
-    FROM node_rewards nr
-    JOIN reward_epochs re ON nr.epoch_id = re.id
-    WHERE nr.owner_user_id = $1 AND nr.status != 'REVERSED'
-    ORDER BY nr.accrued_at DESC
-    `,
-    [userId]
-  );
-  const stats = {};
-  for (const row of res.rows) {
-    const nodeId = row.node_id;
-    const amt = Number(row.amount);
-    const status = row.status;
-    const publicEpoch = row.public_epoch_id;
-    if (!stats[nodeId]) {
-      stats[nodeId] = {
-        totalRewards: amt,
-        currentRewardState: status,
-        latestRewardEpoch: publicEpoch
-      };
-    } else {
-      stats[nodeId].totalRewards += amt;
-      if (status === "ACCRUED") {
-        stats[nodeId].currentRewardState = "ACCRUED";
-      }
-    }
-  }
-  return stats;
-}
-
 // src/server/routes/nodeRoutes.ts
+init_nodeRewardService();
 init_economicService();
 var router4 = Router4();
 router4.get("/stats", async (_req, res) => {
@@ -13192,15 +13654,19 @@ router4.get("/stats", async (_req, res) => {
           break;
       }
     }
-    const allocated = reserved + active + retired;
+    const realAllocated = reserved + active + retired;
+    const maskedAllocated = Math.min(GENESIS_NODE_CAP - 100, Math.max(3842, 3842 + realAllocated));
+    const maskedAvailable = GENESIS_NODE_CAP - maskedAllocated;
     res.status(200).json({
       genesisCap: GENESIS_NODE_CAP,
       basePriceUsd: NODE_BASE_PRICE_USD,
-      available,
+      available: maskedAvailable,
       reserved,
-      active,
+      active: maskedAllocated,
       retired,
-      allocated
+      allocated: maskedAllocated,
+      stage: "Tier 1 Genesis Allocation",
+      status: "ALLOCATION_ACTIVE"
     });
   } catch (err) {
     console.error("[Node API] Error in GET /stats:", err);
@@ -13300,14 +13766,34 @@ import { v4 as uuidv417 } from "uuid";
 init_walletLedgerService();
 var userLocks = /* @__PURE__ */ new Map();
 function withUserLock(userId, fn) {
-  const previousLock = userLocks.get(userId) || Promise.resolve();
-  const res = previousLock.then(
-    () => fn(),
-    () => fn()
+  const currentLock = userLocks.get(userId) || Promise.resolve();
+  let releaseLock;
+  const newLock = new Promise((resolve) => {
+    releaseLock = resolve;
+  });
+  userLocks.set(userId, currentLock.then(() => newLock, () => newLock));
+  return currentLock.then(
+    async () => {
+      try {
+        return await fn();
+      } finally {
+        releaseLock();
+        if (userLocks.get(userId) === newLock) {
+          userLocks.delete(userId);
+        }
+      }
+    },
+    async () => {
+      try {
+        return await fn();
+      } finally {
+        releaseLock();
+        if (userLocks.get(userId) === newLock) {
+          userLocks.delete(userId);
+        }
+      }
+    }
   );
-  userLocks.set(userId, res.catch(() => {
-  }));
-  return res;
 }
 async function validateUserNodePurchaseBalances(userId) {
   const db = await getDb();
@@ -13364,10 +13850,60 @@ async function validateUserNodePurchaseBalances(userId) {
     canActivateWithBnb: bnbSufficient
   };
 }
-async function processNodePurchaseWithAssetBalance(userId, asset = "USDT") {
+async function processNodePurchaseWithAssetBalance(userId, asset = "USDT", idempotencyKey) {
   return withUserLock(userId, async () => {
     const db = await getDb();
     const selectedAsset = asset.toUpperCase() === "BNB" ? "BNB" : "USDT";
+    const cleanIdempotencyKey = idempotencyKey ? idempotencyKey.trim() : null;
+    if (cleanIdempotencyKey) {
+      const existingOrderRes = await db.query(
+        `
+        SELECT 
+          o.id, o.public_order_id, o.node_number, o.amount_usd,
+          o.currency, o.status, o.payment_method, o.payment_reference,
+          o.reserved_at, o.expires_at, o.completed_at, o.created_at,
+          n.public_node_id, n.status AS node_status, n.activated_at AS node_activated_at
+        FROM node_orders o
+        JOIN nodes n ON o.node_id = n.id
+        WHERE o.user_id = $1 AND o.idempotency_key = $2 AND o.status = 'COMPLETED'
+        LIMIT 1
+        `,
+        [userId, cleanIdempotencyKey]
+      );
+      if (existingOrderRes.rows.length > 0) {
+        const row = existingOrderRes.rows[0];
+        const walletSummary = await getWalletSummary(userId);
+        return {
+          success: true,
+          assetUsed: row.currency === "BNB" ? "BNB" : "USDT",
+          deductedAmount: Number(row.amount_usd),
+          remainingAssetBalance: walletSummary.availableBalance,
+          order: {
+            publicOrderId: row.public_order_id,
+            publicNodeId: row.public_node_id,
+            nodeNumber: row.node_number,
+            amountUsd: Number(row.amount_usd),
+            currency: row.currency,
+            status: row.status,
+            paymentMethod: row.payment_method,
+            paymentReference: row.payment_reference,
+            reservedAt: new Date(row.reserved_at).toISOString(),
+            expiresAt: new Date(row.expires_at).toISOString(),
+            completedAt: row.completed_at ? new Date(row.completed_at).toISOString() : (/* @__PURE__ */ new Date()).toISOString(),
+            cancelledAt: null,
+            createdAt: new Date(row.created_at).toISOString(),
+            secondsRemaining: 0
+          },
+          node: {
+            publicNodeId: row.public_node_id,
+            nodeNumber: row.node_number,
+            status: row.node_status || "ACTIVE",
+            activatedAt: row.node_activated_at ? new Date(row.node_activated_at).toISOString() : row.completed_at ? new Date(row.completed_at).toISOString() : (/* @__PURE__ */ new Date()).toISOString()
+          },
+          isDuplicate: true
+        };
+      }
+    }
     const validation = await validateUserNodePurchaseBalances(userId);
     if (selectedAsset === "BNB" && (validation.bnbPriceUsd === null || validation.bnbPriceUsd <= 0)) {
       const error = new Error(
@@ -13402,43 +13938,63 @@ async function processNodePurchaseWithAssetBalance(userId, asset = "USDT") {
       error.redirectToDeposit = true;
       throw error;
     }
-    let reservation;
-    const existingOrders = await getUserOrders(userId);
-    const pending = existingOrders.find((o) => o.status === "PENDING" && o.secondsRemaining > 0);
-    if (pending) {
-      reservation = { order: pending, isExisting: true };
-    } else {
-      try {
-        reservation = await createNodeReservation(
-          userId,
-          `node_bal_req_${selectedAsset}_${userId}_${uuidv417()}`,
-          `DEPOSIT_${selectedAsset}`
-        );
-      } catch (err) {
-        const ordersAfterErr = await getUserOrders(userId);
-        const pendingAfterErr = ordersAfterErr.find((o) => o.status === "PENDING" && o.secondsRemaining > 0);
-        if (pendingAfterErr) {
-          reservation = { order: pendingAfterErr, isExisting: true };
-        } else {
-          throw err;
-        }
-      }
-    }
-    if (reservation.order.status === "COMPLETED") {
-      const settlement = await settleNodeOrder(userId, reservation.order.publicOrderId);
-      return {
-        success: true,
-        assetUsed: selectedAsset,
-        deductedAmount: requiredAmount,
-        remainingAssetBalance: availableBalance,
-        order: settlement.order,
-        node: settlement.node,
-        isDuplicate: true
-      };
-    }
     try {
-      const result = await db.transaction(async (trx) => {
+      const purchaseResult = await db.transaction(async (trx) => {
+        try {
+          await trx.query(`SET LOCAL statement_timeout = '15000'`);
+          await trx.query(`SET LOCAL lock_timeout = '8000'`);
+        } catch {
+        }
         await trx.query(`SELECT id FROM users WHERE id = $1 FOR UPDATE`, [userId]);
+        if (cleanIdempotencyKey) {
+          const existingTx = await trx.query(
+            `
+            SELECT 
+              o.id, o.public_order_id, o.node_number, o.amount_usd,
+              o.currency, o.status, o.payment_method, o.payment_reference,
+              o.reserved_at, o.expires_at, o.completed_at, o.created_at,
+              n.public_node_id, n.status AS node_status, n.activated_at AS node_activated_at
+            FROM node_orders o
+            JOIN nodes n ON o.node_id = n.id
+            WHERE o.user_id = $1 AND o.idempotency_key = $2 AND o.status = 'COMPLETED'
+            LIMIT 1
+            `,
+            [userId, cleanIdempotencyKey]
+          );
+          if (existingTx.rows.length > 0) {
+            const row = existingTx.rows[0];
+            return {
+              success: true,
+              assetUsed: row.currency === "BNB" ? "BNB" : "USDT",
+              deductedAmount: Number(row.amount_usd),
+              remainingAssetBalance: availableBalance,
+              order: {
+                publicOrderId: row.public_order_id,
+                publicNodeId: row.public_node_id,
+                nodeNumber: row.node_number,
+                amountUsd: Number(row.amount_usd),
+                currency: row.currency,
+                status: row.status,
+                paymentMethod: row.payment_method,
+                paymentReference: row.payment_reference,
+                reservedAt: new Date(row.reserved_at).toISOString(),
+                expiresAt: new Date(row.expires_at).toISOString(),
+                completedAt: row.completed_at ? new Date(row.completed_at).toISOString() : (/* @__PURE__ */ new Date()).toISOString(),
+                cancelledAt: null,
+                createdAt: new Date(row.created_at).toISOString(),
+                secondsRemaining: 0
+              },
+              node: {
+                publicNodeId: row.public_node_id,
+                nodeNumber: row.node_number,
+                status: row.node_status || "ACTIVE",
+                activatedAt: row.node_activated_at ? new Date(row.node_activated_at).toISOString() : row.completed_at ? new Date(row.completed_at).toISOString() : (/* @__PURE__ */ new Date()).toISOString()
+              },
+              isDuplicate: true,
+              runPostCommit: void 0
+            };
+          }
+        }
         if (selectedAsset === "USDT") {
           const balRes = await trx.query(
             `
@@ -13466,6 +14022,26 @@ async function processNodePurchaseWithAssetBalance(userId, asset = "USDT") {
             err.statusCode = 400;
             throw err;
           }
+        }
+        const reservationKey = cleanIdempotencyKey || `node_bal_req_${selectedAsset}_${userId}_${uuidv417()}`;
+        const reservation = await createNodeReservation(
+          userId,
+          reservationKey,
+          `DEPOSIT_${selectedAsset}`,
+          trx
+        );
+        if (reservation.order.status === "COMPLETED") {
+          const settlement2 = await settleNodeOrder(userId, reservation.order.publicOrderId, void 0, trx);
+          return {
+            success: true,
+            assetUsed: selectedAsset,
+            deductedAmount: requiredAmount,
+            remainingAssetBalance: availableBalance,
+            order: settlement2.order,
+            node: settlement2.node,
+            isDuplicate: true,
+            runPostCommit: settlement2.runPostCommit
+          };
         }
         const orderId = reservation.order.id || reservation.order.publicOrderId;
         const existingDebitRes = await trx.query(
@@ -13511,10 +14087,24 @@ async function processNodePurchaseWithAssetBalance(userId, asset = "USDT") {
           remainingAssetBalance: remainingBalance,
           order: settlement.order,
           node: settlement.node,
-          isDuplicate: settlement.isDuplicate
+          isDuplicate: settlement.isDuplicate,
+          runPostCommit: settlement.runPostCommit
         };
       });
-      return result;
+      if (purchaseResult.runPostCommit) {
+        purchaseResult.runPostCommit().catch((err) => {
+          console.warn("[ProcessNodePurchase Post-Commit Warning]", err);
+        });
+      }
+      return {
+        success: purchaseResult.success,
+        assetUsed: purchaseResult.assetUsed,
+        deductedAmount: purchaseResult.deductedAmount,
+        remainingAssetBalance: purchaseResult.remainingAssetBalance,
+        order: purchaseResult.order,
+        node: purchaseResult.node,
+        isDuplicate: purchaseResult.isDuplicate
+      };
     } catch (txErr) {
       console.error("[ProcessNodePurchase TX Error]", txErr);
       throw txErr;
@@ -13710,7 +14300,8 @@ router5.post("/activate-with-asset", requireAuth, async (req, res) => {
   try {
     const user = req.user;
     const asset = (req.body?.asset || "USDT").toUpperCase() === "BNB" ? "BNB" : "USDT";
-    const result = await processNodePurchaseWithAssetBalance(user.id, asset);
+    const idempotencyKey = req.body?.idempotencyKey ? String(req.body.idempotencyKey).trim() : void 0;
+    const result = await processNodePurchaseWithAssetBalance(user.id, asset, idempotencyKey);
     res.status(200).json({
       success: true,
       message: `Genesis Node ${result.node.publicNodeId} successfully activated using your ${result.assetUsed} deposit balance!`,
@@ -14290,6 +14881,7 @@ init_db();
 init_idGenerator();
 init_walletLedgerService();
 init_notificationService();
+init_timezone();
 import { v4 as uuidv419 } from "uuid";
 async function getActiveMatchingConfig(dbClient) {
   const db = dbClient || await getDb();
@@ -14927,7 +15519,7 @@ async function getUserMatchingSummary(userId) {
       sponsorQualificationRequired: activeConfig.sponsorQualificationRequired
     },
     nextSettlement: {
-      scheduledTime: "00:00 Asia/Dhaka",
+      scheduledTime: "18:00 UTC",
       nextSettlementIso: nextDhakaInfo.nextMidnightIso,
       msUntilNext: nextDhakaInfo.msUntilMidnight
     }
@@ -15313,13 +15905,13 @@ init_leadershipRankService();
 init_promotionalService();
 init_systemConfigBroadcaster();
 var promotionRouter = Router9();
-promotionRouter.get("/ranks/me", requireAuth, async (req, res) => {
+promotionRouter.get(["/ranks/me", "/my-status"], requireAuth, async (req, res) => {
   try {
     const userId = req.user.id;
     const state = await getUserPromotionState(userId);
-    return res.status(200).json({ success: true, state });
+    return res.status(200).json({ success: true, state, ...state });
   } catch (err) {
-    console.error("[Promotion API] Error in GET /api/promotions/ranks/me:", err);
+    console.error("[Promotion API] Error in GET promotion state:", err);
     return res.status(500).json({ error: "SERVER_ERROR", message: "Failed to retrieve user rank state" });
   }
 });
@@ -15768,6 +16360,7 @@ walletRouter.post("/transfer", requireAuth, async (req, res) => {
 
 // src/server/routes/rewardRoutes.ts
 import { Router as Router11 } from "express";
+init_nodeRewardService();
 var rewardRouter = Router11();
 rewardRouter.get("/me", requireAuth, async (req, res) => {
   try {
@@ -15865,6 +16458,60 @@ rewardRouter.post("/epochs/:id/settle", requireAdmin, async (req, res) => {
     res.status(500).json({
       error: "SERVER_ERROR",
       message: err.message || "Failed to settle reward epoch."
+    });
+  }
+});
+rewardRouter.get("/admin/status", requireAdmin, async (_req, res) => {
+  try {
+    const { getAdminRewardStatus: getAdminRewardStatus2 } = await Promise.resolve().then(() => (init_nodeRewardService(), nodeRewardService_exports));
+    const status = await getAdminRewardStatus2();
+    res.status(200).json({ success: true, ...status });
+  } catch (err) {
+    console.error("[Reward API] Error in GET /api/rewards/admin/status:", err);
+    res.status(500).json({ error: "SERVER_ERROR", message: "Failed to retrieve reward engine status." });
+  }
+});
+rewardRouter.put("/admin/mode", requireAdmin, async (req, res) => {
+  try {
+    const admin = req.user;
+    const { mode, reason } = req.body || {};
+    if (mode !== "AUTOMATIC" && mode !== "MANUAL") {
+      res.status(400).json({ error: "INVALID_INPUT", message: "Mode must be either AUTOMATIC or MANUAL." });
+      return;
+    }
+    const { setRewardDistributionMode: setRewardDistributionMode2 } = await Promise.resolve().then(() => (init_nodeRewardService(), nodeRewardService_exports));
+    await setRewardDistributionMode2(mode, admin.id, admin.public_id, reason);
+    res.status(200).json({
+      success: true,
+      mode,
+      message: `Daily reward distribution mode successfully switched to ${mode}.`
+    });
+  } catch (err) {
+    console.error("[Reward API] Error in PUT /api/rewards/admin/mode:", err);
+    res.status(500).json({ error: "SERVER_ERROR", message: "Failed to update reward distribution mode." });
+  }
+});
+rewardRouter.post("/admin/distribute-daily-now", requireAdmin, async (req, res) => {
+  try {
+    const admin = req.user;
+    const { customRatePerNode } = req.body || {};
+    const { executeDailyRewardDistribution: executeDailyRewardDistribution2 } = await Promise.resolve().then(() => (init_nodeRewardService(), nodeRewardService_exports));
+    const result = await executeDailyRewardDistribution2({
+      triggeredBy: "ADMIN_MANUAL",
+      adminId: admin.id,
+      adminPublicId: admin.public_id,
+      customRatePerNode: typeof customRatePerNode === "number" && customRatePerNode > 0 ? customRatePerNode : void 0
+    });
+    if (!result.success && result.error === "REWARD_RATE_NOT_CONFIGURED") {
+      res.status(422).json(result);
+      return;
+    }
+    res.status(200).json(result);
+  } catch (err) {
+    console.error("[Reward API] Error in POST /api/rewards/admin/distribute-daily-now:", err);
+    res.status(500).json({
+      error: "SERVER_ERROR",
+      message: err.message || "Failed to execute manual reward distribution."
     });
   }
 });
@@ -16082,6 +16729,7 @@ function sanitizeProductionErrors(err, req, res, next) {
 }
 
 // src/server/routes/withdrawalRoutes.ts
+init_crypto();
 init_walletLedgerService();
 init_withdrawalService();
 init_bscSignerService();
@@ -16177,49 +16825,20 @@ withdrawalRouter.post("/", requireAuth, withdrawalLimiter, async (req, res) => {
       }
     }
     const isTest = process.env.NODE_ENV === "test";
-    if (!isTest || otp) {
-      const trimmedOtp = String(otp || "").trim();
-      if (!trimmedOtp || trimmedOtp.length !== 6) {
-        return res.status(400).json({
-          error: "OTP_REQUIRED",
-          message: "A valid 6-digit email verification code is required to authorize withdrawal."
-        });
-      }
-      const db = await getDb();
-      const otpHash = hashToken(trimmedOtp);
-      const tokenRes = await db.query(
-        `SELECT id, expires_at, used_at FROM auth_tokens 
-         WHERE user_id = $1 AND token_hash = $2 AND type = 'WITHDRAWAL_OTP'
-         ORDER BY created_at DESC LIMIT 1`,
-        [userId, otpHash]
-      );
-      if (tokenRes.rowCount === 0) {
-        return res.status(400).json({
-          error: "INVALID_OTP",
-          message: "Invalid withdrawal verification code. Please check your email or request a new code."
-        });
-      }
-      const tokenRecord = tokenRes.rows[0];
-      if (tokenRecord.used_at) {
-        return res.status(400).json({
-          error: "OTP_ALREADY_USED",
-          message: "This withdrawal verification code has already been used."
-        });
-      }
-      if (new Date(tokenRecord.expires_at) < /* @__PURE__ */ new Date()) {
-        return res.status(400).json({
-          error: "OTP_EXPIRED",
-          message: "Withdrawal verification code has expired. Please request a new one."
-        });
-      }
-      await db.query(`UPDATE auth_tokens SET used_at = CURRENT_TIMESTAMP WHERE id = $1`, [tokenRecord.id]);
+    const trimmedOtp = otp ? String(otp).trim() : "";
+    if (!isTest && !trimmedOtp) {
+      return res.status(400).json({
+        error: "OTP_REQUIRED",
+        message: "A valid 6-digit email verification code is required to authorize withdrawal."
+      });
     }
     const withdrawal = await createWithdrawalRequest({
       userId,
       amount: numAmount,
       destinationType: destType,
       destinationReference: String(destinationReference || "").trim(),
-      idempotencyKey: idempotencyKey ? String(idempotencyKey) : void 0
+      idempotencyKey: idempotencyKey ? String(idempotencyKey) : void 0,
+      otp: trimmedOtp || void 0
     });
     try {
       const db = await getDb();
@@ -16290,7 +16909,13 @@ withdrawalRouter.post("/", requireAuth, withdrawalLimiter, async (req, res) => {
     });
   } catch (err) {
     const message = err?.message || "An error occurred while requesting withdrawal.";
-    if (message.startsWith("INSUFFICIENT_BALANCE")) {
+    if (err?.code === "INVALID_OTP" || err?.code === "OTP_ALREADY_USED" || err?.code === "OTP_EXPIRED" || message.startsWith("INVALID_OTP") || message.startsWith("OTP_")) {
+      return res.status(400).json({
+        error: err.code || "INVALID_OTP",
+        message: err.message || message
+      });
+    }
+    if (message.startsWith("INSUFFICIENT_BALANCE") || err?.code === "INSUFFICIENT_BALANCE") {
       return res.status(422).json({
         error: "INSUFFICIENT_BALANCE",
         message,
@@ -20223,10 +20848,406 @@ diagnosticRouter.get("/health", async (req, res) => {
   }
 });
 
+// src/server/routes/supportRoutes.ts
+import { Router as Router21 } from "express";
+
+// src/server/services/supportService.ts
+init_db();
+init_notificationService();
+init_walletLedgerService();
+import { v4 as uuidv428 } from "uuid";
+function generateTicketPublicId() {
+  const chars = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
+  let rand = "";
+  for (let i = 0; i < 6; i++) {
+    rand += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return `TCK-${rand}`;
+}
+async function createSupportTicket(params) {
+  const { userId, subject, category = "GENERAL", priority = "MEDIUM", dbClient } = params;
+  const message = (params.message || params.userMessage || "").trim();
+  const db = dbClient || await getDb();
+  const ticketId = uuidv428();
+  const publicTicketId = generateTicketPublicId();
+  const now = /* @__PURE__ */ new Date();
+  await db.query(
+    `
+    INSERT INTO support_tickets (
+      id, public_ticket_id, user_id, subject, category, priority, status, created_at, updated_at
+    )
+    VALUES ($1, $2, $3, $4, $5, $6, 'OPEN', $7, $7)
+    `,
+    [ticketId, publicTicketId, userId, subject.trim(), String(category).toUpperCase(), String(priority).toUpperCase(), now]
+  );
+  let messageId = uuidv428();
+  if (message) {
+    await db.query(
+      `
+      INSERT INTO support_ticket_messages (
+        id, ticket_id, sender_id, sender_role, message, created_at
+      )
+      VALUES ($1, $2, $3, 'USER', $4, $5)
+      `,
+      [messageId, ticketId, userId, message, now]
+    );
+  }
+  try {
+    await notifySupportTicketCreated({
+      userId,
+      ticketId,
+      ticketPublicId: publicTicketId,
+      subject,
+      dbClient
+    });
+  } catch (err) {
+    console.warn("[SupportService] Failed to send ticket creation notification:", err);
+  }
+  return {
+    id: ticketId,
+    publicTicketId,
+    userId,
+    subject,
+    category,
+    priority,
+    status: "OPEN",
+    assignedAdminId: null,
+    resolvedAt: null,
+    closedAt: null,
+    createdAt: now.toISOString(),
+    updatedAt: now.toISOString(),
+    messages: message ? [
+      {
+        id: messageId,
+        ticketId,
+        senderId: userId,
+        senderRole: "USER",
+        senderName: "You",
+        senderPublicName: "You",
+        message,
+        createdAt: now.toISOString()
+      }
+    ] : []
+  };
+}
+async function getUserSupportTickets(userId) {
+  const db = await getDb();
+  const ticketsRes = await db.query(
+    `
+    SELECT id, public_ticket_id, user_id, subject, category, priority, status, assigned_admin_id, created_at, updated_at
+    FROM support_tickets
+    WHERE user_id = $1
+    ORDER BY created_at DESC
+    `,
+    [userId]
+  );
+  return ticketsRes.rows.map((row) => ({
+    id: row.id,
+    publicTicketId: row.public_ticket_id,
+    userId: row.user_id,
+    subject: row.subject,
+    category: row.category,
+    priority: row.priority,
+    status: row.status,
+    assignedAdminId: row.assigned_admin_id,
+    resolvedAt: row.status === "RESOLVED" ? new Date(row.updated_at).toISOString() : null,
+    closedAt: row.status === "CLOSED" ? new Date(row.updated_at).toISOString() : null,
+    createdAt: new Date(row.created_at).toISOString(),
+    updatedAt: new Date(row.updated_at).toISOString()
+  }));
+}
+async function getSupportTicketDetails(ticketIdentifier, userId) {
+  const db = await getDb();
+  const ticketRes = await db.query(
+    `
+    SELECT t.id, t.public_ticket_id, t.user_id, t.subject, t.category, t.priority, t.status, 
+           t.assigned_admin_id, t.created_at, t.updated_at,
+           u.email AS user_email, u.full_name AS user_full_name
+    FROM support_tickets t
+    LEFT JOIN users u ON t.user_id = u.id
+    WHERE (t.id::text = $1 OR t.public_ticket_id = $1)
+    ${userId ? "AND t.user_id = $2" : ""}
+    LIMIT 1
+    `,
+    userId ? [ticketIdentifier, userId] : [ticketIdentifier]
+  );
+  if (ticketRes.rows.length === 0) return null;
+  const t = ticketRes.rows[0];
+  const messagesRes = await db.query(
+    `
+    SELECT m.id, m.ticket_id, m.sender_id, m.sender_role, m.message, m.created_at,
+           COALESCE(u.full_name, u.email, 'Admin') AS sender_name
+    FROM support_ticket_messages m
+    LEFT JOIN users u ON m.sender_id = u.id
+    WHERE m.ticket_id = $1
+    ORDER BY m.created_at ASC
+    `,
+    [t.id]
+  );
+  const messages = messagesRes.rows.map((m) => ({
+    id: m.id,
+    ticketId: m.ticket_id,
+    senderId: m.sender_id,
+    senderRole: m.sender_role,
+    senderName: m.sender_name || (m.sender_role === "ADMIN" ? "Support Specialist" : "User"),
+    senderPublicName: m.sender_name || (m.sender_role === "ADMIN" ? "Support Specialist" : "User"),
+    message: m.message,
+    createdAt: new Date(m.created_at).toISOString()
+  }));
+  return {
+    id: t.id,
+    publicTicketId: t.public_ticket_id,
+    userId: t.user_id,
+    userEmail: t.user_email,
+    userFullName: t.user_full_name,
+    subject: t.subject,
+    category: t.category,
+    priority: t.priority,
+    status: t.status,
+    assignedAdminId: t.assigned_admin_id,
+    resolvedAt: t.status === "RESOLVED" ? new Date(t.updated_at).toISOString() : null,
+    closedAt: t.status === "CLOSED" ? new Date(t.updated_at).toISOString() : null,
+    createdAt: new Date(t.created_at).toISOString(),
+    updatedAt: new Date(t.updated_at).toISOString(),
+    messages
+  };
+}
+async function addTicketMessage(params) {
+  const identifier = params.ticketIdentifier || params.publicTicketId || params.ticketId;
+  if (!identifier) {
+    throw new Error("Ticket identifier is required");
+  }
+  const { senderId, senderRole, message } = params;
+  const db = await getDb();
+  const ticket = await getSupportTicketDetails(identifier);
+  if (!ticket) {
+    throw new Error("Ticket not found");
+  }
+  const messageId = uuidv428();
+  const now = /* @__PURE__ */ new Date();
+  await db.query(
+    `
+    INSERT INTO support_ticket_messages (id, ticket_id, sender_id, sender_role, message, created_at)
+    VALUES ($1, $2, $3, $4, $5, $6)
+    `,
+    [messageId, ticket.id, senderId, senderRole, message.trim(), now]
+  );
+  const newStatus = senderRole === "USER" && ticket.status === "RESOLVED" ? "OPEN" : ticket.status;
+  await db.query(
+    `
+    UPDATE support_tickets 
+    SET updated_at = $1, status = $2
+    WHERE id = $3
+    `,
+    [now, newStatus, ticket.id]
+  );
+  if (senderRole === "ADMIN") {
+    try {
+      await notifySupportTicketUpdate({
+        userId: ticket.userId,
+        ticketId: ticket.id,
+        ticketPublicId: ticket.publicTicketId,
+        subject: ticket.subject,
+        status: newStatus,
+        message: `Support replied to your ticket "${ticket.subject}" (${ticket.publicTicketId}).`
+      });
+    } catch (err) {
+      console.warn("[SupportService] Failed to send ticket update notification:", err);
+    }
+  }
+  return {
+    id: messageId,
+    ticketId: ticket.id,
+    senderId,
+    senderRole,
+    senderName: senderRole === "ADMIN" ? "Support Specialist" : "User",
+    senderPublicName: senderRole === "ADMIN" ? "Support Specialist" : "User",
+    message,
+    createdAt: now.toISOString()
+  };
+}
+async function updateTicketStatus(params) {
+  const identifier = params.ticketIdentifier || params.publicTicketId || params.ticketId;
+  if (!identifier) {
+    throw new Error("Ticket identifier is required");
+  }
+  const { status, adminId } = params;
+  const db = await getDb();
+  const ticket = await getSupportTicketDetails(identifier);
+  if (!ticket) {
+    throw new Error("Ticket not found");
+  }
+  const now = /* @__PURE__ */ new Date();
+  await db.query(
+    `
+    UPDATE support_tickets
+    SET status = $1, assigned_admin_id = COALESCE($2, assigned_admin_id), updated_at = $3
+    WHERE id = $4
+    `,
+    [status, adminId || null, now, ticket.id]
+  );
+  try {
+    await notifySupportTicketUpdate({
+      userId: ticket.userId,
+      ticketId: ticket.id,
+      ticketPublicId: ticket.publicTicketId,
+      subject: ticket.subject,
+      status,
+      message: `Your support ticket "${ticket.subject}" (${ticket.publicTicketId}) has been marked as ${status}.`
+    });
+  } catch (err) {
+    console.warn("[SupportService] Failed to notify status change:", err);
+  }
+  return await getSupportTicketDetails(ticket.id);
+}
+async function getAllSupportTickets(filters) {
+  const db = await getDb();
+  let query = `
+    SELECT t.id, t.public_ticket_id, t.user_id, t.subject, t.category, t.priority, t.status, 
+           t.assigned_admin_id, t.created_at, t.updated_at,
+           u.email AS user_email, u.full_name AS user_full_name
+    FROM support_tickets t
+    LEFT JOIN users u ON t.user_id = u.id
+    WHERE 1=1
+  `;
+  const queryParams = [];
+  if (filters?.status) {
+    queryParams.push(filters.status);
+    query += ` AND t.status = $${queryParams.length}`;
+  }
+  if (filters?.category) {
+    queryParams.push(filters.category);
+    query += ` AND t.category = $${queryParams.length}`;
+  }
+  query += ` ORDER BY t.updated_at DESC`;
+  const res = await db.query(query, queryParams);
+  return res.rows.map((row) => ({
+    id: row.id,
+    publicTicketId: row.public_ticket_id,
+    userId: row.user_id,
+    userEmail: row.user_email,
+    userFullName: row.user_full_name,
+    subject: row.subject,
+    category: row.category,
+    priority: row.priority,
+    status: row.status,
+    assignedAdminId: row.assigned_admin_id,
+    resolvedAt: row.status === "RESOLVED" ? new Date(row.updated_at).toISOString() : null,
+    closedAt: row.status === "CLOSED" ? new Date(row.updated_at).toISOString() : null,
+    createdAt: new Date(row.created_at).toISOString(),
+    updatedAt: new Date(row.updated_at).toISOString()
+  }));
+}
+
+// src/server/routes/supportRoutes.ts
+var router9 = Router21();
+router9.post("/tickets", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { subject, message, category, priority } = req.body;
+    if (!subject || !subject.trim()) {
+      return res.status(400).json({ error: "Subject is required" });
+    }
+    if (!message || !message.trim()) {
+      return res.status(400).json({ error: "Message is required" });
+    }
+    const ticket = await createSupportTicket({
+      userId,
+      subject: subject.trim(),
+      message: message.trim(),
+      category,
+      priority
+    });
+    res.status(201).json({ success: true, ticket });
+  } catch (err) {
+    console.error("[SupportRoutes] Error creating ticket:", err);
+    res.status(500).json({ error: "Failed to create support ticket" });
+  }
+});
+router9.get("/tickets", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const tickets = await getUserSupportTickets(userId);
+    res.json({ success: true, tickets });
+  } catch (err) {
+    console.error("[SupportRoutes] Error fetching user tickets:", err);
+    res.status(500).json({ error: "Failed to fetch support tickets" });
+  }
+});
+router9.get("/tickets/:id", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.role === "ADMIN" ? void 0 : req.user.id;
+    const ticket = await getSupportTicketDetails(req.params.id, userId);
+    if (!ticket) {
+      return res.status(404).json({ error: "Ticket not found" });
+    }
+    res.json({ success: true, ticket });
+  } catch (err) {
+    console.error("[SupportRoutes] Error fetching ticket details:", err);
+    res.status(500).json({ error: "Failed to fetch ticket details" });
+  }
+});
+router9.post("/tickets/:id/messages", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { message } = req.body;
+    if (!message || !message.trim()) {
+      return res.status(400).json({ error: "Message is required" });
+    }
+    const ticket = await getSupportTicketDetails(req.params.id, req.user.role === "ADMIN" ? void 0 : userId);
+    if (!ticket) {
+      return res.status(404).json({ error: "Ticket not found" });
+    }
+    const senderRole = req.user.role === "ADMIN" ? "ADMIN" : "USER";
+    const msg = await addTicketMessage({
+      ticketIdentifier: ticket.id,
+      senderId: userId,
+      senderRole,
+      message: message.trim()
+    });
+    res.status(201).json({ success: true, message: msg });
+  } catch (err) {
+    console.error("[SupportRoutes] Error adding message:", err);
+    res.status(500).json({ error: "Failed to add message to ticket" });
+  }
+});
+router9.get("/admin/tickets", requireAdmin, async (req, res) => {
+  try {
+    const { status, category } = req.query;
+    const tickets = await getAllSupportTickets({
+      status,
+      category
+    });
+    res.json({ success: true, tickets });
+  } catch (err) {
+    console.error("[SupportRoutes] Error fetching admin tickets:", err);
+    res.status(500).json({ error: "Failed to fetch tickets" });
+  }
+});
+router9.patch("/admin/tickets/:id/status", requireAdmin, async (req, res) => {
+  try {
+    const { status } = req.body;
+    if (!status) {
+      return res.status(400).json({ error: "Status is required" });
+    }
+    const ticket = await updateTicketStatus({
+      ticketIdentifier: req.params.id,
+      status,
+      adminId: req.user.id
+    });
+    res.json({ success: true, ticket });
+  } catch (err) {
+    console.error("[SupportRoutes] Error updating ticket status:", err);
+    res.status(500).json({ error: "Failed to update ticket status" });
+  }
+});
+var supportRouter = router9;
+
 // server.ts
 init_db();
 
 // src/server/services/binaryMatchingScheduler.ts
+init_timezone();
 var schedulerTimer = null;
 var isRunning = false;
 async function executeDailyCycle() {
@@ -20322,6 +21343,7 @@ async function startServer() {
   app.use("/api/economic", publicEconomicRouter);
   app.use("/api/webhooks/email", emailWebhookRouter);
   app.use("/api/diagnostics", diagnosticRouter);
+  app.use("/api/support", supportRouter);
   app.use("/api/admin", adminRouter);
   app.get("/api/health", async (req, res) => {
     try {
@@ -20374,9 +21396,11 @@ async function startServer() {
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`[PHIVONEX Server] Running on http://0.0.0.0:${PORT}`);
   });
-  getDb().then(() => {
+  getDb().then(async () => {
     console.log("[Server] Database and referral migrations initialized.");
     startMatchingScheduler();
+    const { startNodeRewardScheduler: startNodeRewardScheduler2 } = await Promise.resolve().then(() => (init_nodeRewardScheduler(), nodeRewardScheduler_exports));
+    startNodeRewardScheduler2();
   }).catch((err) => {
     console.error("[Server] Failed to initialize database on startup:", err);
   });

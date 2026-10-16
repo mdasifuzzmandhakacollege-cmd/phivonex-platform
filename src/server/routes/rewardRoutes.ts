@@ -154,3 +154,83 @@ rewardRouter.post('/epochs/:id/settle', requireAdmin, async (req: AuthRequest, r
     });
   }
 });
+
+/**
+ * GET /api/rewards/admin/status (Administrative Endpoint)
+ * Returns status of reward distribution engine:
+ * - mode (AUTOMATIC or MANUAL)
+ * - nodeRewardsEnabled
+ * - activeRatePerNode
+ * - activeNodesCount
+ * - lastSettledEpoch
+ */
+rewardRouter.get('/admin/status', requireAdmin, async (_req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { getAdminRewardStatus } = await import('../services/nodeRewardService');
+    const status = await getAdminRewardStatus();
+    res.status(200).json({ success: true, ...status });
+  } catch (err: any) {
+    console.error('[Reward API] Error in GET /api/rewards/admin/status:', err);
+    res.status(500).json({ error: 'SERVER_ERROR', message: 'Failed to retrieve reward engine status.' });
+  }
+});
+
+/**
+ * PUT /api/rewards/admin/mode (Administrative Endpoint)
+ * Switches distribution mode between 'AUTOMATIC' and 'MANUAL'.
+ */
+rewardRouter.put('/admin/mode', requireAdmin, async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const admin = req.user!;
+    const { mode, reason } = req.body || {};
+    if (mode !== 'AUTOMATIC' && mode !== 'MANUAL') {
+      res.status(400).json({ error: 'INVALID_INPUT', message: 'Mode must be either AUTOMATIC or MANUAL.' });
+      return;
+    }
+
+    const { setRewardDistributionMode } = await import('../services/nodeRewardService');
+    await setRewardDistributionMode(mode, admin.id, admin.public_id, reason);
+
+    res.status(200).json({
+      success: true,
+      mode,
+      message: `Daily reward distribution mode successfully switched to ${mode}.`,
+    });
+  } catch (err: any) {
+    console.error('[Reward API] Error in PUT /api/rewards/admin/mode:', err);
+    res.status(500).json({ error: 'SERVER_ERROR', message: 'Failed to update reward distribution mode.' });
+  }
+});
+
+/**
+ * POST /api/rewards/admin/distribute-daily-now (Administrative Endpoint)
+ * Manually triggers the daily node mining reward distribution.
+ * Distributes to all active nodes, posts financial ledger credits, and sends notifications.
+ */
+rewardRouter.post('/admin/distribute-daily-now', requireAdmin, async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const admin = req.user!;
+    const { customRatePerNode } = req.body || {};
+    const { executeDailyRewardDistribution } = await import('../services/nodeRewardService');
+
+    const result = await executeDailyRewardDistribution({
+      triggeredBy: 'ADMIN_MANUAL',
+      adminId: admin.id,
+      adminPublicId: admin.public_id,
+      customRatePerNode: typeof customRatePerNode === 'number' && customRatePerNode > 0 ? customRatePerNode : undefined,
+    });
+
+    if (!result.success && result.error === 'REWARD_RATE_NOT_CONFIGURED') {
+      res.status(422).json(result);
+      return;
+    }
+
+    res.status(200).json(result);
+  } catch (err: any) {
+    console.error('[Reward API] Error in POST /api/rewards/admin/distribute-daily-now:', err);
+    res.status(500).json({
+      error: 'SERVER_ERROR',
+      message: err.message || 'Failed to execute manual reward distribution.',
+    });
+  }
+});

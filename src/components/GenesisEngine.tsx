@@ -197,7 +197,7 @@ export const GenesisEngine: React.FC<GenesisEngineProps> = ({
             </div>
             <h3 className="text-base sm:text-lg font-black font-mono text-white tracking-tight flex items-center gap-2">
               <span>{publicNodeId}</span>
-              <span className="text-xs text-[#98A2B3] font-normal">#{nodeNumber}</span>
+              <span className="text-[10px] text-[#00CFFF] font-mono font-bold bg-[#00CFFF]/10 px-2 py-0.5 rounded border border-[#00CFFF]/20">VALIDATOR NODE</span>
             </h3>
           </div>
         </div>

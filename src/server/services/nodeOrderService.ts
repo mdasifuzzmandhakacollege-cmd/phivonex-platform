@@ -285,7 +285,7 @@ async function executeReservation(
       SELECT id, node_number, public_node_id
       FROM nodes
       WHERE status = 'AVAILABLE'
-      ORDER BY node_number ASC
+      ORDER BY RANDOM()
       LIMIT 1
       FOR UPDATE
       `
@@ -662,7 +662,7 @@ export async function settleNodeOrder(
       const bonusCount = bogoOffer.bonusNodesCount || 1;
       for (let i = 0; i < bonusCount; i++) {
         const availNodeRes = await db.query<{ id: string; node_number: number; public_node_id: string }>(
-          `SELECT id, node_number, public_node_id FROM nodes WHERE status = 'AVAILABLE' ORDER BY node_number ASC LIMIT 1`
+          `SELECT id, node_number, public_node_id FROM nodes WHERE status = 'AVAILABLE' ORDER BY RANDOM() LIMIT 1`
         );
 
         if (availNodeRes.rows.length > 0) {

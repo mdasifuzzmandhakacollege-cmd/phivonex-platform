@@ -335,8 +335,8 @@ export const NodeHealthView: React.FC<NodeHealthViewProps> = ({ onNavigateTab })
                         <span className="text-xs font-mono font-bold text-white block truncate">
                           {node.publicNodeId}
                         </span>
-                        <span className="text-[10px] font-mono text-[#98A2B3] block">
-                          Node #{node.nodeNumber}
+                        <span className="text-[10px] font-mono text-[#00CFFF] block">
+                          Genesis Consensus Slot
                         </span>
                       </div>
                     </div>

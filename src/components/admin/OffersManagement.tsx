@@ -236,6 +236,7 @@ export const OffersManagement: React.FC<OffersManagementProps> = ({ adminEmail, 
       }
 
       setIsModalOpen(false);
+      window.dispatchEvent(new CustomEvent('phivonex:offers-updated'));
       await fetchOffers();
     } catch (err: any) {
       console.error('[OffersManagement] Error saving offer:', err);
@@ -276,6 +277,7 @@ export const OffersManagement: React.FC<OffersManagementProps> = ({ adminEmail, 
         );
       }
 
+      window.dispatchEvent(new CustomEvent('phivonex:offers-updated'));
       await fetchOffers();
     } catch (err: any) {
       setFeedback({ type: 'error', message: err.message || 'Could not toggle status' });
@@ -301,6 +303,7 @@ export const OffersManagement: React.FC<OffersManagementProps> = ({ adminEmail, 
       }
 
       setDeleteConfirmId(null);
+      window.dispatchEvent(new CustomEvent('phivonex:offers-updated'));
       await fetchOffers();
     } catch (err: any) {
       setFeedback({ type: 'error', message: err.message || 'Could not delete offer' });

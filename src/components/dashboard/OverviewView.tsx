@@ -26,6 +26,7 @@ import { buildPublicReferralUrl } from '../../utils/referralUrl';
 import { PhivoCoinIcon, UsdtIcon } from '../brand/CryptoIcons';
 import { TokenPriceTrendChart } from './TokenPriceTrendChart';
 import { PromotionalBannerCarousel } from './PromotionalBannerCarousel';
+import { ActiveOfferCards } from './ActiveOfferCards';
 import { Premium3DFlipCard } from './Premium3DFlipCard';
 import { useSystemConfig } from '../../context/SystemConfigContext';
 import { getTransactionUserDescription } from '../../utils/transactionDisplay';
@@ -374,6 +375,7 @@ export const OverviewView: React.FC<OverviewViewProps> = ({ user, onNavigateTab 
           0. DYNAMIC PROMOTIONAL & PROTOCOL NOTICES
          ======================================================== */}
       <PromotionalBannerCarousel onNavigateTab={navigateTo} />
+      <ActiveOfferCards onNavigateTab={navigateTo} />
 
       {/* ========================================================
           1. PREMIUM 3D FLIP OVERVIEW HERO CARD (UNTOUCHED)

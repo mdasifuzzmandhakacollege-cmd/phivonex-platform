@@ -1827,6 +1827,12 @@ async function seedEconomicConfigs(client: DatabaseClient) {
         description: 'Authoritative reward payout rate per Active Node per Epoch (USD). Unconfigured by default.',
       },
       {
+        key: 'REWARD_DISTRIBUTION_MODE',
+        value: JSON.stringify('AUTOMATIC'),
+        category: 'REWARDS',
+        description: 'Daily Mining ROI distribution mode: AUTOMATIC (scheduled) or MANUAL (admin triggered)',
+      },
+      {
         key: 'INTERNAL_COIN_PRICE_USDT',
         value: JSON.stringify({
           coinSymbol: 'PHIVO',

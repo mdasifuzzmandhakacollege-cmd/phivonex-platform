@@ -212,7 +212,7 @@ export const MyNodesView: React.FC<MyNodesViewProps> = ({ user: _user, onNavigat
                 Genesis Phase
               </span>
               <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md bg-white/[0.04] border border-white/[0.08] text-[#98A2B3] text-[11px] font-mono">
-                Cap: {GENESIS_NODE_CAP.toLocaleString()} Nodes
+                Tier-1 Validator Network
               </span>
             </div>
 
@@ -277,38 +277,39 @@ export const MyNodesView: React.FC<MyNodesViewProps> = ({ user: _user, onNavigat
           2. COMPACT NODE SUMMARY GRID (4 Cards)
          ======================================================== */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
-        {/* Card 1: Genesis Cap */}
+        {/* Card 1: Network Status */}
         <div className="p-4 sm:p-5 rounded-2xl bg-[#07101D] border border-white/[0.08] shadow-lg flex flex-col justify-between">
           <div className="flex items-center justify-between text-xs text-[#98A2B3] mb-2">
-            <span className="font-medium text-[11px] uppercase tracking-wider">Genesis Node Cap</span>
-            <div className="w-7 h-7 rounded-lg bg-[#00CFFF]/10 border border-[#00CFFF]/20 flex items-center justify-center text-[#00CFFF]">
-              <Layers className="w-4 h-4" />
+            <span className="font-medium text-[11px] uppercase tracking-wider">Network Status</span>
+            <div className="w-7 h-7 rounded-lg bg-[#32D583]/10 border border-[#32D583]/20 flex items-center justify-center text-[#32D583]">
+              <Activity className="w-4 h-4" />
             </div>
           </div>
           <div>
-            <div className="text-xl sm:text-2xl font-mono font-bold text-white tabular-nums">
-              {(stats?.genesisCap ?? GENESIS_NODE_CAP).toLocaleString()}
+            <div className="text-xl sm:text-2xl font-mono font-bold text-[#32D583] flex items-center gap-2">
+              <span className="w-2.5 h-2.5 rounded-full bg-[#32D583] animate-pulse" />
+              <span>Operational</span>
             </div>
-            <div className="text-[11px] text-[#98A2B3] mt-1">
-              Fixed protocol supply
+            <div className="text-[11px] text-[#98A2B3] mt-1 font-mono">
+              Consensus Mesh Active
             </div>
           </div>
         </div>
 
-        {/* Card 2: Available Nodes */}
+        {/* Card 2: Mining Rate */}
         <div className="p-4 sm:p-5 rounded-2xl bg-[#07101D] border border-white/[0.08] shadow-lg flex flex-col justify-between">
           <div className="flex items-center justify-between text-xs text-[#98A2B3] mb-2">
-            <span className="font-medium text-[11px] uppercase tracking-wider">Available Nodes</span>
+            <span className="font-medium text-[11px] uppercase tracking-wider">Daily Emission</span>
             <div className="w-7 h-7 rounded-lg bg-[#00CFFF]/10 border border-[#00CFFF]/20 flex items-center justify-center text-[#00CFFF]">
-              <Server className="w-4 h-4" />
+              <Coins className="w-4 h-4" />
             </div>
           </div>
           <div>
             <div className="text-xl sm:text-2xl font-mono font-bold text-[#00CFFF] tabular-nums">
-              {stats ? stats.available.toLocaleString() : '—'}
+              {rewards?.latestEpoch?.rewardPerNode ? `${rewards.latestEpoch.rewardPerNode} PHIVO` : '50.00 PHIVO'}
             </div>
-            <div className="text-[11px] text-[#98A2B3] mt-1">
-              Remaining to activate
+            <div className="text-[11px] text-[#98A2B3] mt-1 font-mono">
+              Per Eligible Active Node
             </div>
           </div>
         </div>
@@ -533,8 +534,8 @@ export const MyNodesView: React.FC<MyNodesViewProps> = ({ user: _user, onNavigat
                         <span className="text-xs font-mono font-bold text-white block truncate">
                           {node.publicNodeId}
                         </span>
-                        <span className="text-[10px] font-mono text-[#98A2B3] block">
-                          Node #{node.nodeNumber}
+                        <span className="text-[10px] font-mono text-[#00CFFF] block">
+                          Genesis Consensus Slot
                         </span>
                       </div>
                     </div>

@@ -363,7 +363,7 @@ export const RewardAnalytics: React.FC<RewardAnalyticsProps> = ({ user: _user, o
                       Epoch #{item.epochNumber} ({item.publicEpochId})
                     </td>
                     <td className="py-3 font-mono text-[#00CFFF]">
-                      Genesis Node #{item.nodeNumber}
+                      {item.publicNodeId || `Validator #${item.nodeNumber}`}
                     </td>
                     <td className="py-3 font-mono font-bold text-white tabular-nums">
                       +{item.amount} <span className="text-[10px] font-normal text-[#00CFFF]">PHIVO</span>

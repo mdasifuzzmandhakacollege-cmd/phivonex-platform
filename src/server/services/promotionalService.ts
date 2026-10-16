@@ -56,7 +56,7 @@ export async function getPromotionalOffers(adminOnly: boolean = false): Promise<
   const params: any[] = [];
 
   if (!adminOnly) {
-    query += ` WHERE status = 'ACTIVE' AND start_date <= CURRENT_TIMESTAMP AND end_date >= CURRENT_TIMESTAMP `;
+    query += ` WHERE status = 'ACTIVE' AND (start_date <= CURRENT_TIMESTAMP + INTERVAL '1 day') AND (end_date IS NULL OR end_date >= CURRENT_TIMESTAMP) `;
   }
 
   query += ` ORDER BY priority_order ASC, created_at DESC `;

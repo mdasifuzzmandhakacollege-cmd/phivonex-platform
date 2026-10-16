@@ -42,16 +42,43 @@ export const PromotionalBannerCarousel: React.FC<PromotionalBannerCarouselProps>
   const [dismissedBanners, setDismissedBanners] = useState<boolean>(false);
   const [dismissedNotice, setDismissedNotice] = useState<boolean>(false);
 
-  // Fetch active promotional banners
+  // Fetch active promotional banners & dynamic offers
   const fetchBanners = useCallback(async () => {
     try {
-      const res = await fetch('/api/promotions/banners', { credentials: 'include' });
-      if (res.ok) {
-        const data = await res.json();
+      const [bannersRes, offersRes] = await Promise.all([
+        fetch('/api/promotions/banners', { credentials: 'include' }),
+        fetch('/api/promotions/offers', { credentials: 'include' }),
+      ]);
+
+      const combined: PromotionalBannerItem[] = [];
+
+      if (bannersRes.ok) {
+        const data = await bannersRes.json();
         if (data.success && Array.isArray(data.banners)) {
-          setBanners(data.banners.filter((b: PromotionalBannerItem) => b.status === 'ACTIVE'));
+          combined.push(...data.banners.filter((b: PromotionalBannerItem) => b.status === 'ACTIVE'));
         }
       }
+
+      if (offersRes.ok) {
+        const oData = await offersRes.json();
+        if (oData.success && Array.isArray(oData.offers)) {
+          oData.offers.filter((o: any) => o.status === 'ACTIVE').forEach((o: any) => {
+            combined.push({
+              id: `offer-banner-${o.id}`,
+              content: `${o.title} — ${o.description}`,
+              imageUrl: o.bannerImage || 'https://images.unsplash.com/photo-1639762681485-074b7f938ba0?q=80&w=800&auto=format&fit=crop',
+              ctaText: o.bonusNodesCount > 0 ? `Claim Offer (+${o.bonusNodesCount} Free Node)` : 'Claim Offer Now',
+              ctaDestination: '/app/nodes/buy',
+              displayOrder: o.priorityOrder || 1,
+              status: 'ACTIVE',
+              startDate: o.startDate,
+              endDate: o.endDate,
+            });
+          });
+        }
+      }
+
+      setBanners(combined);
     } catch {
       // non-blocking
     }
@@ -59,6 +86,9 @@ export const PromotionalBannerCarousel: React.FC<PromotionalBannerCarouselProps>
 
   useEffect(() => {
     fetchBanners();
+    const handleUpdate = () => fetchBanners();
+    window.addEventListener('phivonex:offers-updated', handleUpdate);
+    return () => window.removeEventListener('phivonex:offers-updated', handleUpdate);
   }, [fetchBanners]);
 
   // Auto-rotate banners every 7 seconds

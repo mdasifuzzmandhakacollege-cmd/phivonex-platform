@@ -10,18 +10,13 @@ import { logSecurityEvent } from '../utils/securityLogger';
  */
 export function securityHeadersMiddleware(req: Request, res: Response, next: NextFunction): void {
   // Content Security Policy
-  // Preserves Google AI Studio iframe embedding in both production and development environments
-  if (process.env.NODE_ENV === 'production') {
-    res.setHeader(
-      'Content-Security-Policy',
-      "default-src 'self' https: data: blob: 'unsafe-inline' 'unsafe-eval'; frame-ancestors 'self' https://*.google.com https://*.run.app https://*.aistudio.google.com https://*.googleusercontent.com;"
-    );
-  } else {
-    res.setHeader(
-      'Content-Security-Policy',
-      "default-src 'self' http: https: data: blob: 'unsafe-inline' 'unsafe-eval' ws: wss:; frame-ancestors *;"
-    );
-  }
+  // Preserves Google AI Studio iframe embedding in production, test, and development environments
+  const isProd = process.env.NODE_ENV === 'production';
+  const frameAncestors = "frame-ancestors 'self' https://*.google.com https://*.run.app https://*.aistudio.google.com https://*.googleusercontent.com" + (isProd ? ';' : ' *;');
+  res.setHeader(
+    'Content-Security-Policy',
+    `default-src 'self' ${isProd ? 'https:' : 'http: https:'} data: blob: 'unsafe-inline' 'unsafe-eval' ws: wss:; ${frameAncestors}`
+  );
 
   // Prevent MIME type sniffing
   res.setHeader('X-Content-Type-Options', 'nosniff');

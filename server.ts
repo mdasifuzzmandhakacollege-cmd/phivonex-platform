@@ -174,9 +174,11 @@ async function startServer() {
   });
 
   // Initialize Database Schema and background schedulers asynchronously
-  getDb().then(() => {
+  getDb().then(async () => {
     console.log('[Server] Database and referral migrations initialized.');
     startMatchingScheduler();
+    const { startNodeRewardScheduler } = await import('./src/server/services/nodeRewardScheduler');
+    startNodeRewardScheduler();
   }).catch((err) => {
     console.error('[Server] Failed to initialize database on startup:', err);
   });

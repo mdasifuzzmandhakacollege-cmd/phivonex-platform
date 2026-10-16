@@ -241,6 +241,68 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onNavigate, currentPath = 
     }
   };
 
+  // Daily Mining Rewards / ROI Distribution States & Handlers
+  const [miningRewardMode, setMiningRewardMode] = useState<'AUTOMATIC' | 'MANUAL'>('AUTOMATIC');
+  const [miningRewardRate, setMiningRewardRate] = useState<number>(50);
+  const [miningRewardStatus, setMiningRewardStatus] = useState<any>(null);
+  const [togglingMiningRewardMode, setTogglingMiningRewardMode] = useState<boolean>(false);
+  const [isDistributingMiningRewards, setIsDistributingMiningRewards] = useState<boolean>(false);
+
+  const handleToggleMiningRewardMode = async () => {
+    try {
+      setTogglingMiningRewardMode(true);
+      const nextMode = miningRewardMode === 'AUTOMATIC' ? 'MANUAL' : 'AUTOMATIC';
+      const res = await fetch('/api/rewards/admin/mode', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: nextMode, reason: `Switched to ${nextMode} mode via Admin Overview` }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || 'Failed to update reward mode');
+      setMiningRewardMode(nextMode);
+      setAuditFeedback({
+        type: 'success',
+        message: `Daily Mining Reward (ROI) mode switched to ${nextMode}!`,
+      });
+      fetchAdminData();
+    } catch (err: any) {
+      setAuditFeedback({
+        type: 'error',
+        message: err.message || 'Failed to toggle reward mode',
+      });
+    } finally {
+      setTogglingMiningRewardMode(false);
+    }
+  };
+
+  const handleTriggerMiningRewards = async () => {
+    if (!window.confirm('Trigger Daily Mining Rewards distribution right now? This will disburse PHIVO to all active eligible nodes and update the ledger.')) {
+      return;
+    }
+    try {
+      setIsDistributingMiningRewards(true);
+      const res = await fetch('/api/rewards/admin/distribute-daily-now', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || data.error || 'Failed to distribute rewards');
+      setAuditFeedback({
+        type: 'success',
+        message: `Successfully sent Daily Mining Rewards! Settled Epoch #${data.epochNumber} (${data.publicEpochId}). Credited ${data.rewardsCreated} node(s) with ${data.totalRewardsDistributedUsd} PHIVO.`,
+      });
+      fetchAdminData();
+    } catch (err: any) {
+      setAuditFeedback({
+        type: 'error',
+        message: err.message || 'Failed to distribute rewards.',
+      });
+    } finally {
+      setIsDistributingMiningRewards(false);
+    }
+  };
+
   // Export system_audit_logs to CSV for compliance reporting
   const handleExportAuditLogs = async (categoryFilter?: string) => {
     try {
@@ -314,6 +376,19 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onNavigate, currentPath = 
         if (modeRes.ok) {
           const modeData = await modeRes.json();
           setAutoWithdrawalEnabled(Boolean(modeData.autoWithdrawalEnabled));
+        }
+      } catch {
+        // non-blocking
+      }
+
+      // Fetch Daily ROI / Mining Reward Mode
+      try {
+        const rewardRes = await fetch('/api/rewards/admin/status');
+        if (rewardRes.ok) {
+          const rewardData = await rewardRes.json();
+          setMiningRewardMode(rewardData.mode || 'AUTOMATIC');
+          setMiningRewardRate(rewardData.activeRatePerNode || 50);
+          setMiningRewardStatus(rewardData);
         }
       } catch {
         // non-blocking
@@ -1034,6 +1109,87 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onNavigate, currentPath = 
                       <Power className="w-4 h-4" />
                     )}
                     <span>{autoWithdrawalEnabled ? 'Switch to Manual Approval' : 'Switch to Full Automatic'}</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Daily Mining Rewards & ROI Distribution Engine Control */}
+              <div className={`p-5 rounded-2xl border transition-all ${
+                miningRewardMode === 'AUTOMATIC'
+                  ? 'bg-gradient-to-r from-[#07101D] via-[#051e2e]/40 to-[#07101D] border-[#00CFFF]/40 shadow-[#00CFFF]/10'
+                  : 'bg-gradient-to-r from-[#07101D] via-[#2d1b00]/40 to-[#07101D] border-amber-500/40 shadow-amber-500/10'
+              } shadow-xl flex flex-col md:flex-row md:items-center justify-between gap-4`}>
+                <div className="flex items-center gap-3.5">
+                  <div className={`w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0 ${
+                    miningRewardMode === 'AUTOMATIC' ? 'bg-[#00CFFF]/20 text-[#00CFFF] border border-[#00CFFF]/30' : 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
+                  }`}>
+                    <Coins className="w-6 h-6 text-amber-400" />
+                  </div>
+                  <div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h3 className="text-base font-bold text-white">Daily Mining Rewards &amp; ROI Distribution</h3>
+                      <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold uppercase tracking-wider border ${
+                        miningRewardMode === 'AUTOMATIC'
+                          ? 'bg-[#00CFFF]/20 text-[#00CFFF] border-[#00CFFF]/40'
+                          : 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+                      }`}>
+                        {miningRewardMode === 'AUTOMATIC' ? '🟢 AUTOMATIC MODE (Scheduled)' : '⏸️ MANUAL MODE (Admin Dispatch)'}
+                      </span>
+                      <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-white/[0.04] text-slate-300 border border-white/[0.08]">
+                        Rate: {miningRewardRate} PHIVO / Node
+                      </span>
+                    </div>
+                    <p className="text-xs text-[#98A2B3] mt-1 max-w-2xl leading-relaxed">
+                      {miningRewardMode === 'AUTOMATIC' ? (
+                        <span>
+                          <strong className="text-[#00CFFF]">Automatic Mode Active:</strong> Daily block mining rewards (ROI) are distributed automatically every 24 hours at the scheduled daily time.
+                        </span>
+                      ) : (
+                        <span>
+                          <strong className="text-amber-400">Manual Mode Active:</strong> Automatic daily distribution is paused. Rewards will ONLY be disbursed when the administrator clicks "Send Mining Rewards Now" below.
+                        </span>
+                      )}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+                  <button
+                    onClick={handleTriggerMiningRewards}
+                    disabled={isDistributingMiningRewards}
+                    className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-amber-500 to-[#F79009] hover:brightness-110 text-[#05070B] font-extrabold text-xs flex items-center gap-2 transition-all cursor-pointer shadow-lg shadow-amber-500/20 disabled:opacity-50 whitespace-nowrap"
+                  >
+                    {isDistributingMiningRewards ? (
+                      <Loader2 className="w-4 h-4 animate-spin text-[#05070B]" />
+                    ) : (
+                      <Zap className="w-4 h-4 fill-[#05070B]" />
+                    )}
+                    <span>{isDistributingMiningRewards ? 'Sending Rewards...' : 'Send Mining Rewards Now (Manual Dispatch)'}</span>
+                  </button>
+
+                  <button
+                    onClick={handleToggleMiningRewardMode}
+                    disabled={togglingMiningRewardMode}
+                    className={`px-3.5 py-2.5 rounded-xl font-bold text-xs flex items-center gap-2 transition-all cursor-pointer shadow-lg active:scale-95 whitespace-nowrap ${
+                      miningRewardMode === 'AUTOMATIC'
+                        ? 'bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40'
+                        : 'bg-[#00CFFF]/20 hover:bg-[#00CFFF]/30 text-[#00CFFF] border border-[#00CFFF]/40'
+                    }`}
+                  >
+                    {togglingMiningRewardMode ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <Power className="w-4 h-4" />
+                    )}
+                    <span>{miningRewardMode === 'AUTOMATIC' ? 'Switch to Manual Mode' : 'Switch to Automatic Mode'}</span>
+                  </button>
+
+                  <button
+                    onClick={() => setActiveTab('economics')}
+                    className="p-2.5 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.08] text-slate-300 hover:text-white transition-colors cursor-pointer"
+                    title="Open Full Economic Controls"
+                  >
+                    <ArrowUpRight className="w-4 h-4 text-[#00CFFF]" />
                   </button>
                 </div>
               </div>

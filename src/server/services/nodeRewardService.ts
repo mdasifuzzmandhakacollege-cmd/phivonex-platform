@@ -803,3 +803,158 @@ export async function getNodeRewardStatsForUser(userId: string): Promise<Record<
 
   return stats;
 }
+
+/**
+ * Returns current daily reward distribution mode: 'AUTOMATIC' or 'MANUAL'
+ */
+export async function getRewardDistributionMode(): Promise<'AUTOMATIC' | 'MANUAL'> {
+  try {
+    const cfg = await getEconomicConfigByKey('REWARD_DISTRIBUTION_MODE');
+    if (cfg && cfg.status === 'ACTIVE') {
+      const val = typeof cfg.configValue === 'string' ? cfg.configValue.toUpperCase().replace(/"/g, '') : cfg.configValue;
+      if (val === 'MANUAL') return 'MANUAL';
+      if (val === 'AUTOMATIC') return 'AUTOMATIC';
+    }
+  } catch (err) {
+    console.warn('[NodeReward] Error reading REWARD_DISTRIBUTION_MODE config:', err);
+  }
+  return 'AUTOMATIC'; // default is AUTOMATIC
+}
+
+/**
+ * Updates daily reward distribution mode ('AUTOMATIC' or 'MANUAL')
+ */
+export async function setRewardDistributionMode(
+  mode: 'AUTOMATIC' | 'MANUAL',
+  adminId?: string,
+  adminPublicId?: string,
+  reason?: string
+): Promise<void> {
+  const { updateEconomicConfig } = await import('./economicService');
+  await updateEconomicConfig({
+    adminUserId: adminId || null,
+    adminPublicId: adminPublicId || 'ADMIN',
+    configKey: 'REWARD_DISTRIBUTION_MODE',
+    configValue: mode,
+    status: 'ACTIVE',
+    reason: reason || `Set reward distribution mode to ${mode}`,
+  });
+}
+
+/**
+ * Executes a full daily reward distribution cycle.
+ * Can be called automatically by scheduler or manually triggered by administrator.
+ */
+export async function executeDailyRewardDistribution(options?: {
+  triggeredBy?: 'AUTOMATIC_SCHEDULER' | 'ADMIN_MANUAL';
+  adminPublicId?: string;
+  adminId?: string;
+  customRatePerNode?: number;
+}): Promise<EpochSettlementResult> {
+  const rewardsEnabled = await isNodeRewardsEnabled();
+  if (!rewardsEnabled) {
+    return {
+      success: false,
+      error: 'NODE_REWARDS_DISABLED',
+      message: 'Daily node reward distribution is currently paused by system configuration.',
+      epochId: '',
+      publicEpochId: '',
+      epochNumber: 0,
+      rewardPerNode: 0,
+      eligibleNodesCount: 0,
+      rewardsCreated: 0,
+      totalRewardsDistributedUsd: 0,
+    };
+  }
+
+  // 1. Get or create current open epoch
+  const epoch = await getOrCreateCurrentOpenEpoch(options?.customRatePerNode);
+
+  // 2. Close and settle epoch
+  const result = await closeAndSettleEpoch(epoch.id, {
+    configuredRewardPerNode: options?.customRatePerNode,
+  });
+
+  return result;
+}
+
+/**
+ * Comprehensive admin telemetry on rewards distribution state
+ */
+export async function getAdminRewardStatus(): Promise<{
+  mode: 'AUTOMATIC' | 'MANUAL';
+  nodeRewardsEnabled: boolean;
+  activeRatePerNode: number | null;
+  activeNodesCount: number;
+  totalAccruedSystem: number;
+  totalClaimedSystem: number;
+  totalEpochsCount: number;
+  lastSettledEpoch: {
+    publicEpochId: string;
+    epochNumber: number;
+    rewardPerNode: number | null;
+    settledAt: string | null;
+  } | null;
+}> {
+  const db = await getDb();
+  const mode = await getRewardDistributionMode();
+  const nodeRewardsEnabled = await isNodeRewardsEnabled();
+  const activeRatePerNode = await getNodeRewardRatePerEpoch(db);
+
+  // Active nodes count
+  const activeNodesRes = await db.query<{ count: string | number }>(
+    `SELECT COUNT(*)::int AS count FROM nodes WHERE (status = 'ACTIVE' OR status = 'EMITTING') AND owner_user_id IS NOT NULL`
+  );
+  const activeNodesCount = Number(activeNodesRes.rows[0]?.count || 0);
+
+  // System totals
+  const totalsRes = await db.query<{
+    total_accrued: string | number;
+    total_claimed: string | number;
+  }>(
+    `
+    SELECT 
+      COALESCE(SUM(CASE WHEN status = 'ACCRUED' THEN amount ELSE 0 END), 0) AS total_accrued,
+      COALESCE(SUM(CASE WHEN status = 'CLAIMED' THEN amount ELSE 0 END), 0) AS total_claimed
+    FROM node_rewards
+    WHERE status != 'REVERSED'
+    `
+  );
+  const totalAccruedSystem = Number(totalsRes.rows[0]?.total_accrued || 0);
+  const totalClaimedSystem = Number(totalsRes.rows[0]?.total_claimed || 0);
+
+  // Last settled epoch
+  const lastEpochRes = await db.query<any>(
+    `
+    SELECT public_epoch_id, epoch_number, reward_per_node, settled_at
+    FROM reward_epochs
+    WHERE status = 'COMPLETED'
+    ORDER BY epoch_number DESC
+    LIMIT 1
+    `
+  );
+  const lastEpoch = lastEpochRes.rows[0]
+    ? {
+        publicEpochId: lastEpochRes.rows[0].public_epoch_id,
+        epochNumber: Number(lastEpochRes.rows[0].epoch_number),
+        rewardPerNode: lastEpochRes.rows[0].reward_per_node !== null ? Number(lastEpochRes.rows[0].reward_per_node) : null,
+        settledAt: lastEpochRes.rows[0].settled_at ? new Date(lastEpochRes.rows[0].settled_at).toISOString() : null,
+      }
+    : null;
+
+  const countEpochsRes = await db.query<{ count: string | number }>(
+    `SELECT COUNT(*)::int AS count FROM reward_epochs`
+  );
+  const totalEpochsCount = Number(countEpochsRes.rows[0]?.count || 0);
+
+  return {
+    mode,
+    nodeRewardsEnabled,
+    activeRatePerNode,
+    activeNodesCount,
+    totalAccruedSystem,
+    totalClaimedSystem,
+    totalEpochsCount,
+    lastSettledEpoch: lastEpoch,
+  };
+}
